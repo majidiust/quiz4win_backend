@@ -1,0 +1,180 @@
+/**
+ * Auth Edge Function — Quiz4Win
+ *
+ * Handles all authentication routes for the customer app:
+ *   POST /auth/signup            — Register new user (API #1)
+ *   POST /auth/signin            — Email + password sign in (API #2)
+ *   POST /auth/token             — Refresh access token (API #3)
+ *   POST /auth/signout           — Revoke current session (API #4)
+ *   POST /auth/forgot-password   — Send OTP email (API #5)
+ *   POST /auth/verify-otp        — Verify password-reset OTP (API #6)
+ *   POST /auth/update-password   — Set new password post-OTP (API #7)
+ *
+ * Rule compliance: R-01 (no secrets in code), R-03 (JWT validated before writes)
+ */
+
+import { corsHeaders, handleCors } from "../_shared/cors.ts";
+import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
+import { validateJWT } from "../_shared/auth.ts";
+import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return handleCors();
+
+  const url = new URL(req.url);
+  const path = url.pathname.replace(/^\/auth/, "").replace(/^\//, "");
+
+  try {
+    // ── POST /auth/signup ──────────────────────────────────────────────────
+    if (path === "signup" && req.method === "POST") {
+      const { name, email, password, referral_code } = await req.json();
+      if (!email || !password || !name) {
+        return errorResponse("Missing required fields: name, email, password", 400);
+      }
+
+      const supabase = getAnonClient(req);
+
+      // Validate referral code if provided
+      if (referral_code) {
+        const admin = getAdminClient();
+        const { data: rc } = await admin
+          .from("referral_codes")
+          .select("code, is_active, expires_at, max_uses, use_count")
+          .eq("code", referral_code)
+          .single();
+        if (!rc) return errorResponse("invalid_referral", 400);
+        if (!rc.is_active) return errorResponse("invalid_referral", 400);
+        if (rc.expires_at && new Date(rc.expires_at) < new Date()) {
+          return errorResponse("invalid_referral", 400);
+        }
+        if (rc.max_uses !== null && rc.use_count >= rc.max_uses) {
+          return errorResponse("invalid_referral", 400);
+        }
+      }
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: name, referral_code: referral_code ?? null } },
+      });
+      if (error) {
+        if (error.message.toLowerCase().includes("already registered")) {
+          return errorResponse("email_taken", 409);
+        }
+        if (error.message.toLowerCase().includes("password")) {
+          return errorResponse("weak_password", 400);
+        }
+        return errorResponse(error.message, 400);
+      }
+      return successResponse({ user: data.user, session: data.session }, 201);
+    }
+
+    // ── POST /auth/signin ──────────────────────────────────────────────────
+    if (path === "signin" && req.method === "POST") {
+      const { email, password } = await req.json();
+      if (!email || !password) return errorResponse("Missing email or password", 400);
+
+      const supabase = getAnonClient(req);
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        if (error.message.toLowerCase().includes("invalid")) {
+          return errorResponse("invalid_credentials", 401);
+        }
+        return errorResponse(error.message, 401);
+      }
+
+      // Check if account is suspended/banned
+      const admin = getAdminClient();
+      const { data: profile } = await admin
+        .from("profiles")
+        .select("status")
+        .eq("id", data.user.id)
+        .single();
+      if (profile?.status === "suspended" || profile?.status === "banned") {
+        await supabase.auth.signOut();
+        return errorResponse("account_suspended", 403);
+      }
+
+      return successResponse({
+        access_token: data.session?.access_token,
+        refresh_token: data.session?.refresh_token,
+        expires_in: data.session?.expires_in ?? 3600,
+      });
+    }
+
+    // ── POST /auth/token (refresh) ─────────────────────────────────────────
+    if (path === "token" && req.method === "POST") {
+      const { grant_type, refresh_token } = await req.json();
+      if (grant_type !== "refresh_token" || !refresh_token) {
+        return errorResponse("grant_type must be refresh_token and refresh_token is required", 400);
+      }
+      const supabase = getAnonClient(req);
+      const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+      if (error) {
+        const code = error.message.toLowerCase().includes("expired") ? "token_expired" : "token_revoked";
+        return errorResponse(code, 401);
+      }
+      return successResponse({
+        access_token: data.session?.access_token,
+        refresh_token: data.session?.refresh_token,
+        expires_in: data.session?.expires_in ?? 3600,
+      });
+    }
+
+    // ── POST /auth/signout ─────────────────────────────────────────────────
+    if (path === "signout" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const supabase = getAnonClient(req);
+      await supabase.auth.signOut();
+      return successResponse({ message: "Signed out successfully" });
+    }
+
+    // ── POST /auth/forgot-password ─────────────────────────────────────────
+    if (path === "forgot-password" && req.method === "POST") {
+      const { email } = await req.json();
+      if (!email) return errorResponse("email is required", 400);
+      const supabase = getAnonClient(req);
+      // Always returns 200 to prevent email enumeration (sheet note)
+      await supabase.auth.resetPasswordForEmail(email);
+      return successResponse({ message: "OTP sent if account exists" });
+    }
+
+    // ── POST /auth/verify-otp ──────────────────────────────────────────────
+    if (path === "verify-otp" && req.method === "POST") {
+      const { email, token, type } = await req.json();
+      if (!email || !token || type !== "recovery") {
+        return errorResponse("email, token, and type=recovery are required", 400);
+      }
+      const supabase = getAnonClient(req);
+      const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "recovery" });
+      if (error) {
+        const code = error.message.toLowerCase().includes("expired") ? "otp_expired" : "otp_invalid";
+        return errorResponse(code, error.message.includes("expired") ? 401 : 400);
+      }
+      return successResponse({
+        access_token: data.session?.access_token,
+        refresh_token: data.session?.refresh_token,
+      });
+    }
+
+    // ── POST /auth/update-password ─────────────────────────────────────────
+    if (path === "update-password" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { new_password } = await req.json();
+      if (!new_password || new_password.length < 8) {
+        return errorResponse("weak_password", 400);
+      }
+      const supabase = getAnonClient(req);
+      const { error } = await supabase.auth.updateUser({ password: new_password });
+      if (error) return errorResponse(error.message.includes("password") ? "weak_password" : error.message, 400);
+      return successResponse({ message: "Password updated" });
+    }
+
+    return errorResponse("Not found", 404);
+  } catch (err) {
+    console.error("[auth] unhandled error:", err);
+    return errorResponse("Internal server error", 500);
+  }
+});
