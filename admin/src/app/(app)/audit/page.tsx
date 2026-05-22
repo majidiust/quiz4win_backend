@@ -1,0 +1,89 @@
+import { History } from "lucide-react";
+import { Card } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DataTablePagination } from "@/components/data-table-pagination";
+import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/empty-state";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { requireAdmin } from "@/lib/auth";
+import { formatRelative } from "@/lib/utils";
+
+export const metadata = { title: "Audit Log" };
+const PAGE_SIZE = 50;
+interface SearchParams { entity_type?: string; action?: string; page?: string }
+
+export default async function AuditLogPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  await requireAdmin(["super_admin"]);
+  const sp = await searchParams;
+  const page = Math.max(1, Number.parseInt(sp.page ?? "1", 10));
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
+
+  const db = createSupabaseAdminClient();
+  let q = db
+    .from("admin_audit_log")
+    .select(
+      "id, action, entity_type, entity_id, ip_address, created_at, admin_id, admin_users!admin_audit_log_admin_id_fkey(name, email)",
+      { count: "exact" },
+    )
+    .order("created_at", { ascending: false })
+    .range(from, to);
+  if (sp.entity_type) q = q.eq("entity_type", sp.entity_type);
+  if (sp.action) q = q.eq("action", sp.action);
+
+  const { data, count, error } = await q;
+  if (error) throw error;
+
+  return (
+    <>
+      <PageHeader title="Audit Log" description="Append-only record of every admin action." />
+
+      <Card className="overflow-hidden">
+        {data && data.length > 0 ? (
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Admin</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead>Entity</TableHead>
+                  <TableHead>IP</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.map((e) => {
+                  const a = (e.admin_users as unknown as { name?: string; email?: string } | null) ?? null;
+                  return (
+                    <TableRow key={e.id}>
+                      <TableCell className="text-xs text-muted-foreground">{formatRelative(e.created_at)}</TableCell>
+                      <TableCell>
+                        <div className="text-sm font-medium">{a?.name ?? "—"}</div>
+                        <div className="text-xs text-muted-foreground">{a?.email}</div>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{e.action}</TableCell>
+                      <TableCell className="text-xs">
+                        <span className="capitalize">{e.entity_type ?? "—"}</span>
+                        {e.entity_id ? <span className="ml-1 text-muted-foreground">#{e.entity_id.slice(0, 8)}</span> : null}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{e.ip_address ?? "—"}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <DataTablePagination
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={count ?? 0}
+              basePath="/audit"
+              searchParams={{ entity_type: sp.entity_type, action: sp.action }}
+            />
+          </>
+        ) : (
+          <EmptyState icon={History} title="No audit entries match these filters" />
+        )}
+      </Card>
+    </>
+  );
+}
