@@ -1,0 +1,74 @@
+/**
+ * Admin Audit Log Edge Function — Quiz4Win
+ *
+ * GET /admin/audit-log — Immutable admin audit log (API #152)
+ *
+ * Rule compliance: R-01, R-03, R-05 (append-only), super_admin only
+ */
+
+import { handleCors } from "../_shared/cors.ts";
+import { errorResponse, successResponse } from "../_shared/errors.ts";
+import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
+import { getAdminClient } from "../_shared/supabase.ts";
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return handleCors();
+
+  const url = new URL(req.url);
+  const path = url.pathname.replace(/^\/admin\/audit-log\/?/, "");
+
+  const { user, error: authErr } = await validateJWT(req);
+  if (authErr || !user) return errorResponse("unauthorized", 401);
+  // Audit log is super_admin only to prevent tampering detection avoidance
+  const { error: adminErr } = await requireAdminRole(user.id, ["super_admin"]);
+  if (adminErr) return errorResponse(adminErr, 403);
+
+  const admin = getAdminClient();
+
+  try {
+    if (!path && req.method === "GET") {
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
+      const limit = Math.min(200, parseInt(url.searchParams.get("limit") ?? "50"));
+      const adminId = url.searchParams.get("admin_id");
+      const action = url.searchParams.get("action");
+      const targetType = url.searchParams.get("target_type");
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      const offset = (page - 1) * limit;
+
+      let query = admin
+        .from("admin_audit_log")
+        .select(
+          "id, admin_id, action, target_type, target_id, details, created_at, admin_users!admin_id(name, email, role)",
+          { count: "exact" },
+        )
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (adminId) query = query.eq("admin_id", adminId);
+      if (action) query = query.ilike("action", `%${action}%`);
+      if (targetType) query = query.eq("target_type", targetType);
+      if (from) query = query.gte("created_at", from);
+      if (to) query = query.lte("created_at", to);
+
+      const { data, error, count } = await query;
+      if (error) return errorResponse("Failed to fetch audit log", 500);
+
+      return successResponse({
+        audit_log: data ?? [],
+        pagination: {
+          page,
+          limit,
+          total: count ?? 0,
+          total_pages: Math.ceil((count ?? 0) / limit),
+        },
+        note: "Audit log is append-only and immutable (R-05)",
+      });
+    }
+
+    return errorResponse("Not found", 404);
+  } catch (err) {
+    console.error("[admin-audit] unhandled error:", err);
+    return errorResponse("Internal server error", 500);
+  }
+});
