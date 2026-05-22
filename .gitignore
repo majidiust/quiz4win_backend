@@ -1,0 +1,50 @@
+# =============================================================================
+# Quiz4Win Backend — .gitignore
+# =============================================================================
+
+# ─── Secrets & credentials (R-01 — NEVER commit these) ───────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/tmp/
+
+# Temporary agent scripts (contain service-account keys — delete after use)
+.tmp_*.py
+.tmp_*.txt
+.tmp_*.json
+
+# ─── Supabase ────────────────────────────────────────────────────────────────
+supabase/.temp/
+supabase/functions/_shared/.cache/
+
+# ─── Deno ────────────────────────────────────────────────────────────────────
+.deno/
+deno.lock
+
+# ─── Node / npm (admin panel tooling) ────────────────────────────────────────
+node_modules/
+.npm/
+dist/
+.next/
+out/
+
+# ─── macOS ───────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ─── IDEs ────────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
