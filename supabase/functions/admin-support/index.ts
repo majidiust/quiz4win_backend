@@ -7,6 +7,7 @@
  * PATCH /admin/support/tickets/:id/assign  — Assign (API #126)
  * PATCH /admin/support/tickets/:id/status  — Update status (API #127)
  * GET   /admin/support/stats               — Ticket stats by status/category (row 148)
+ * GET   /admin/support/tickets/export      — Tickets CSV (row 151)
  *
  * Rule compliance: R-01, R-03
  */
@@ -15,6 +16,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -33,6 +35,39 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/support/tickets/export — CSV (row 151)
+    if (ticketId === "export" && !action && req.method === "GET") {
+      const status = url.searchParams.get("status");
+      const category = url.searchParams.get("category");
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      let q = admin.from("support_tickets").select("id, ticket_number, subject, category, status, priority, user_id, assigned_to, created_at, updated_at, profiles!user_id(name, email)").order("created_at", { ascending: false }).limit(50000);
+      if (status) q = q.eq("status", status);
+      if (category) q = q.eq("category", category);
+      if (from) q = q.gte("created_at", from);
+      if (to) q = q.lte("created_at", to);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to export tickets", 500);
+      type Row = { id: string; ticket_number: string; subject: string; category: string; status: string; priority: string | null; user_id: string; assigned_to: string | null; created_at: string; updated_at: string; profiles: { name: string; email: string } | null };
+      const rows = (data ?? []) as unknown as Row[];
+      const csv = toCsv(rows, [
+        { header: "ticket_id", value: (r) => r.id },
+        { header: "ticket_number", value: (r) => r.ticket_number },
+        { header: "subject", value: (r) => r.subject },
+        { header: "category", value: (r) => r.category },
+        { header: "status", value: (r) => r.status },
+        { header: "priority", value: (r) => r.priority },
+        { header: "user_id", value: (r) => r.user_id },
+        { header: "name", value: (r) => r.profiles?.name ?? null },
+        { header: "email", value: (r) => r.profiles?.email ?? null },
+        { header: "assigned_to", value: (r) => r.assigned_to },
+        { header: "created_at", value: (r) => r.created_at },
+        { header: "updated_at", value: (r) => r.updated_at },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "support_tickets_exported", target_type: "support_tickets", details: { count: rows.length, filters: { status, category, from, to } }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `support-tickets-${todayStamp()}.csv`);
+    }
+
     // GET /admin/support/stats
     if (isStats && req.method === "GET") {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();

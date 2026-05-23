@@ -10,6 +10,7 @@
  * POST  /admin/users/:id/notify               — Send notification (API #78)
  * GET   /admin/users/:id/kyc                  — KYC documents (API #79)
  * POST  /admin/users/:id/kyc/review           — Review KYC (API #80)
+ * GET   /admin/users/export                    — Bulk user export CSV (row 106)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -18,6 +19,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -36,6 +38,35 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/users/export — CSV (row 106)
+    if (userId === "export" && !action && req.method === "GET") {
+      const status = url.searchParams.get("status");
+      const kyc = url.searchParams.get("kyc_status");
+      const search = url.searchParams.get("q");
+      let q = admin
+        .from("profiles")
+        .select("id, name, email, nationality, status, kyc_status, wallet_balance, created_at")
+        .order("created_at", { ascending: false })
+        .limit(10000);
+      if (status) q = q.eq("status", status);
+      if (kyc) q = q.eq("kyc_status", kyc);
+      if (search) q = q.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to export users", 500);
+      const csv = toCsv(data ?? [], [
+        { header: "id", value: (r) => r.id },
+        { header: "name", value: (r) => r.name },
+        { header: "email", value: (r) => r.email },
+        { header: "nationality", value: (r) => r.nationality },
+        { header: "status", value: (r) => r.status },
+        { header: "kyc_status", value: (r) => r.kyc_status },
+        { header: "wallet_balance_cents", value: (r) => r.wallet_balance ?? 0 },
+        { header: "created_at", value: (r) => r.created_at },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: adminUserAuth.id, action: "users_exported", target_type: "users", details: { count: data?.length ?? 0, filters: { status, kyc, search } }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `users-${todayStamp()}.csv`);
+    }
+
     // GET /admin/users
     if (!userId && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));

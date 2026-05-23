@@ -8,6 +8,7 @@
  * PATCH  /admin/questions/:id             — Update question (API #97)
  * DELETE /admin/questions/:id             — Soft-delete (API #98)
  * POST   /admin/questions/bulk-import     — Bulk import (API #99)
+ * GET    /admin/questions/export          — Bulk export CSV (row 143)
  *
  * Rule compliance: R-01, R-03
  */
@@ -16,6 +17,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -32,6 +34,32 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/questions/export — CSV (row 143)
+    if (questionId === "export" && req.method === "GET") {
+      const category = url.searchParams.get("category");
+      const difficulty = url.searchParams.get("difficulty");
+      let q = admin.from("questions").select("id, text, options, correct_answer, category, difficulty, time_limit_sec, is_active, created_at").eq("is_deleted", false).order("created_at", { ascending: false }).limit(50000);
+      if (category) q = q.eq("category", category);
+      if (difficulty) q = q.eq("difficulty", difficulty);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to export questions", 500);
+      type Row = { id: string; text: string; options: unknown; correct_answer: unknown; category: string; difficulty: string; time_limit_sec: number; is_active: boolean; created_at: string };
+      const rows = (data ?? []) as Row[];
+      const csv = toCsv(rows, [
+        { header: "id", value: (r) => r.id },
+        { header: "text", value: (r) => r.text },
+        { header: "options", value: (r) => JSON.stringify(r.options) },
+        { header: "correct_answer", value: (r) => typeof r.correct_answer === "string" ? r.correct_answer : JSON.stringify(r.correct_answer) },
+        { header: "category", value: (r) => r.category },
+        { header: "difficulty", value: (r) => r.difficulty },
+        { header: "time_limit_sec", value: (r) => r.time_limit_sec },
+        { header: "is_active", value: (r) => r.is_active },
+        { header: "created_at", value: (r) => r.created_at },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "questions_exported", target_type: "questions", details: { count: rows.length, filters: { category, difficulty } }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `questions-${todayStamp()}.csv`);
+    }
+
     // GET /admin/questions/categories
     if (questionId === "categories" && req.method === "GET") {
       const { data, error } = await admin.from("questions").select("category").not("category", "is", null).order("category");

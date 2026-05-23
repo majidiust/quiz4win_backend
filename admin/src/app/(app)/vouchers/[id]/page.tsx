@@ -11,6 +11,7 @@ import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatNumber, formatRelative } from "@/lib/utils";
 import { ToggleStatusButton, CancelVoucherButton, IssueVoucherButton } from "./voucher-actions";
 import { VoucherEditForm } from "./voucher-edit-form";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Voucher detail" };
 
@@ -40,6 +41,7 @@ export default async function VoucherDetailPage({ params }: { params: Promise<{ 
             <Button asChild variant="outline" size="sm">
               <Link href="/vouchers"><ArrowLeft className="size-4" /> All vouchers</Link>
             </Button>
+            <ExportButton href={`/api/exports/vouchers/${id}`} label="Export redemptions" />
             <ToggleStatusButton voucherId={id} currentStatus={voucher.status} />
             <IssueVoucherButton voucherId={id} currentStatus={voucher.status} />
             <CancelVoucherButton voucherId={id} currentStatus={voucher.status} />

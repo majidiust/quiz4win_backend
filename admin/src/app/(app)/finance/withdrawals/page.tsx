@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatMoneyDecimal, formatNumber, formatRelative } from "@/lib/utils";
+import { ExportButton } from "@/components/export-button";
 
 function formatDuration(sec: number): string {
   if (!sec) return "—";
@@ -61,7 +62,11 @@ export default async function WithdrawalsPage({ searchParams }: { searchParams: 
 
   return (
     <>
-      <PageHeader title="Withdrawals" description="Player cash-outs awaiting review, processing, or settled." />
+      <PageHeader
+        title="Withdrawals"
+        description="Player cash-outs awaiting review, processing, or settled."
+        actions={<ExportButton href="/api/exports/finance/withdrawals" />}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Pending" value={formatNumber(pendingC.count ?? 0)} icon={Wallet} hint="awaiting review" />

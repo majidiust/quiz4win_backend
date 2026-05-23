@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { formatMoneyDecimal, formatRelative, initials } from "@/lib/utils";
 import { requireAdmin } from "@/lib/auth";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Users" };
 
@@ -47,7 +48,11 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <PageHeader title="Users" description="All registered players and their account state." />
+      <PageHeader
+        title="Users"
+        description="All registered players and their account state."
+        actions={<ExportButton href="/api/exports/users" />}
+      />
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">

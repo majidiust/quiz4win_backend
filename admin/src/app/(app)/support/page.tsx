@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatNumber, formatRelative } from "@/lib/utils";
+import { ExportButton } from "@/components/export-button";
 
 function formatDuration(sec: number): string {
   if (!sec) return "—";
@@ -60,7 +61,11 @@ export default async function SupportPage({ searchParams }: { searchParams: Prom
 
   return (
     <>
-      <PageHeader title="Support Tickets" description="Player conversations awaiting response." />
+      <PageHeader
+        title="Support Tickets"
+        description="Player conversations awaiting response."
+        actions={<ExportButton href="/api/exports/support" />}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Open" value={formatNumber(openC.count ?? 0)} icon={Inbox} hint="awaiting first response" />

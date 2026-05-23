@@ -11,6 +11,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatMoneyDecimal, formatNumber, formatRelative } from "@/lib/utils";
 import { AmlReview } from "./aml-review";
+import { ExportButton } from "@/components/export-button";
 
 function formatDuration(sec: number): string {
   if (!sec) return "—";
@@ -60,7 +61,11 @@ export default async function AmlPage({ searchParams }: { searchParams: Promise<
 
   return (
     <>
-      <PageHeader title="AML Flags" description="High-risk patterns automatically detected on player accounts." />
+      <PageHeader
+        title="AML Flags"
+        description="High-risk patterns automatically detected on player accounts."
+        actions={<ExportButton href="/api/exports/finance/aml" />}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Open" value={formatNumber(openC.count ?? 0)} icon={AlertOctagon} hint="awaiting review" />

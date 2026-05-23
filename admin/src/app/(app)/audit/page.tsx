@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatNumber, formatRelative } from "@/lib/utils";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Audit Log" };
 const PAGE_SIZE = 50;
@@ -50,7 +51,11 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
 
   return (
     <>
-      <PageHeader title="Audit Log" description="Append-only record of every admin action." />
+      <PageHeader
+        title="Audit Log"
+        description="Append-only record of every admin action."
+        actions={<ExportButton href="/api/exports/audit" />}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total events" value={formatNumber(totalC.count ?? 0)} icon={History} hint="all time" />

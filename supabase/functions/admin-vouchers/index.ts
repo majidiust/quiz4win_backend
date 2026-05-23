@@ -13,6 +13,7 @@
  * POST   /admin/shows/:show_id/announce-voucher            — Announce (API #168)
  * DELETE /admin/shows/:show_id/announce-voucher/:ann_id    — Cancel announcement (API #169)
  * POST   /admin/users/:user_id/issue-voucher               — Issue to user (API #170)
+ * GET    /admin/vouchers/:id/redemptions/export            — Redemptions CSV (row 156)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -21,6 +22,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -151,6 +153,30 @@ Deno.serve(async (req: Request) => {
       const redemptions = redemptionsRes.data ?? [];
       const totalValue = redemptions.reduce((s: number, r: { reward_amount: number }) => s + (r.reward_amount ?? 0), 0);
       return successResponse({ voucher: vRes.data, stats: { total_redemptions: redemptions.length, total_value_distributed_cents: totalValue } });
+    }
+
+    // GET /admin/vouchers/:id/redemptions/export — CSV (row 156)
+    const redemptionsExportMatch = rawPath.match(/\/admin\/vouchers\/([^/]+)\/redemptions\/export$/);
+    if (redemptionsExportMatch && req.method === "GET") {
+      const vId = redemptionsExportMatch[1];
+      const { data, error } = await admin.from("voucher_redemptions").select("id, voucher_id, user_id, redeemed_at, reward_type, reward_amount, issued_by_admin, note, profiles!user_id(name, email)").eq("voucher_id", vId).order("redeemed_at", { ascending: false }).limit(50000);
+      if (error) return errorResponse("Failed to export redemptions", 500);
+      type Row = { id: string; voucher_id: string; user_id: string; redeemed_at: string; reward_type: string; reward_amount: number; issued_by_admin: string | null; note: string | null; profiles: { name: string; email: string } | null };
+      const rows = (data ?? []) as unknown as Row[];
+      const csv = toCsv(rows, [
+        { header: "redemption_id", value: (r) => r.id },
+        { header: "voucher_id", value: (r) => r.voucher_id },
+        { header: "user_id", value: (r) => r.user_id },
+        { header: "name", value: (r) => r.profiles?.name ?? null },
+        { header: "email", value: (r) => r.profiles?.email ?? null },
+        { header: "reward_type", value: (r) => r.reward_type },
+        { header: "reward_amount_cents", value: (r) => r.reward_amount },
+        { header: "redeemed_at", value: (r) => r.redeemed_at },
+        { header: "issued_by_admin", value: (r) => r.issued_by_admin },
+        { header: "note", value: (r) => r.note },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "voucher_redemptions_exported", target_type: "voucher", target_id: vId, details: { count: rows.length }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `voucher-${vId}-redemptions-${todayStamp()}.csv`);
     }
 
     // GET /admin/vouchers/:id/redemptions

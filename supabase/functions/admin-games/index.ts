@@ -11,6 +11,7 @@
  * POST   /admin/games/:id/next-question        — Push next question (API #90)
  * GET    /admin/games/:id/participants         — Participants (API #91)
  * DELETE /admin/games/:id/participants/:uid    — Remove participant (API #92)
+ * GET    /admin/games/:id/export               — Export game results CSV (row 125)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -19,6 +20,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -131,6 +133,26 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await admin.from("game_participants").select("*, profiles!user_id(name, email, avatar_url)").eq("game_id", gameId).order("score", { ascending: false });
       if (error) return errorResponse("Failed to fetch participants", 500);
       return successResponse({ participants: data ?? [] });
+    }
+
+    // GET /admin/games/:id/export — CSV (row 125)
+    if (gameId && action === "export" && req.method === "GET") {
+      const { data, error } = await admin.from("game_participants").select("user_id, score, rank, prize_amount, prize_credited, joined_at, profiles!user_id(name, email)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false });
+      if (error) return errorResponse("Failed to export game results", 500);
+      type Row = { user_id: string; score: number | null; rank: number | null; prize_amount: number | null; prize_credited: boolean | null; joined_at: string; profiles: { name: string; email: string } | null };
+      const rows = (data ?? []) as unknown as Row[];
+      const csv = toCsv(rows, [
+        { header: "user_id", value: (r) => r.user_id },
+        { header: "name", value: (r) => r.profiles?.name ?? null },
+        { header: "email", value: (r) => r.profiles?.email ?? null },
+        { header: "rank", value: (r) => r.rank },
+        { header: "score", value: (r) => r.score },
+        { header: "prize_amount_cents", value: (r) => r.prize_amount },
+        { header: "prize_credited", value: (r) => r.prize_credited },
+        { header: "joined_at", value: (r) => r.joined_at },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_results_exported", target_type: "game", target_id: gameId, details: { count: rows.length }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `game-${gameId}-results-${todayStamp()}.csv`);
     }
 
     // DELETE /admin/games/:id/participants/:uid

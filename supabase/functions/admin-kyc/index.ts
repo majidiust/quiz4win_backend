@@ -3,6 +3,7 @@
  *
  * GET /admin/kyc/pending — List pending KYC submissions (API #81)
  * GET /admin/kyc/stats   — Queue stats: pending/verified/rejected counts, avg review time, rejection rate (row 112)
+ * GET /admin/kyc/export  — CSV export for compliance reporting (row 113)
  *
  * Rule compliance: R-01, R-03, admin-only
  */
@@ -11,6 +12,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -53,6 +55,41 @@ Deno.serve(async (req: Request) => {
           total_pages: Math.ceil((count ?? 0) / limit),
         },
       });
+    }
+
+    // GET /admin/kyc/export — CSV (row 113)
+    if (path === "export" && req.method === "GET") {
+      const status = url.searchParams.get("status");
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      let q = admin
+        .from("kyc_requests")
+        .select("id, user_id, document_type, status, rejection_reason, submitted_at, reviewed_at, reviewed_by, profiles!user_id(name, email, nationality, date_of_birth)")
+        .order("submitted_at", { ascending: false })
+        .limit(10000);
+      if (status) q = q.eq("status", status);
+      if (from) q = q.gte("submitted_at", from);
+      if (to) q = q.lte("submitted_at", to);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to export KYC", 500);
+      type Row = { id: string; user_id: string; document_type: string; status: string; rejection_reason: string | null; submitted_at: string; reviewed_at: string | null; reviewed_by: string | null; profiles: { name: string; email: string; nationality: string | null; date_of_birth: string | null } | null };
+      const rows = (data ?? []) as unknown as Row[];
+      const csv = toCsv(rows, [
+        { header: "kyc_id", value: (r) => r.id },
+        { header: "user_id", value: (r) => r.user_id },
+        { header: "name", value: (r) => r.profiles?.name ?? null },
+        { header: "email", value: (r) => r.profiles?.email ?? null },
+        { header: "nationality", value: (r) => r.profiles?.nationality ?? null },
+        { header: "date_of_birth", value: (r) => r.profiles?.date_of_birth ?? null },
+        { header: "document_type", value: (r) => r.document_type },
+        { header: "status", value: (r) => r.status },
+        { header: "submitted_at", value: (r) => r.submitted_at },
+        { header: "reviewed_at", value: (r) => r.reviewed_at },
+        { header: "reviewed_by", value: (r) => r.reviewed_by },
+        { header: "rejection_reason", value: (r) => r.rejection_reason },
+      ]);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "kyc_exported", target_type: "kyc", details: { count: rows.length, filters: { status, from, to } }, created_at: new Date().toISOString() });
+      return csvResponse(csv, `kyc-${todayStamp()}.csv`);
     }
 
     // GET /admin/kyc/stats

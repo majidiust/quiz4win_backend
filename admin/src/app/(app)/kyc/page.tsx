@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatNumber, formatRelative } from "@/lib/utils";
+import { ExportButton } from "@/components/export-button";
 
 function formatDuration(sec: number): string {
   if (!sec) return "—";
@@ -65,7 +66,11 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
 
   return (
     <>
-      <PageHeader title="KYC Queue" description="Identity verification submissions awaiting decision." />
+      <PageHeader
+        title="KYC Queue"
+        description="Identity verification submissions awaiting decision."
+        actions={<ExportButton href="/api/exports/kyc" />}
+      />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Pending" value={formatNumber(pendingC.count ?? 0)} icon={ShieldCheck} hint="awaiting review" />

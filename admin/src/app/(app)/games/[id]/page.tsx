@@ -10,6 +10,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, formatNumber } from "@/lib/utils";
 import { GameLifecycleActions, RemoveParticipantButton } from "./game-actions";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Game detail" };
 
@@ -41,6 +42,7 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
             <Button asChild variant="outline" size="sm">
               <Link href="/games"><ArrowLeft className="size-4" /> All games</Link>
             </Button>
+            <ExportButton href={`/api/exports/games/${game.id}`} label="Export results" />
             <GameLifecycleActions gameId={game.id} status={game.status} />
           </div>
         }

@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatMoneyDecimal, formatRelative } from "@/lib/utils";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Transactions" };
 
@@ -42,7 +43,11 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
 
   return (
     <>
-      <PageHeader title="Transactions" description="Append-only ledger of every monetary movement." />
+      <PageHeader
+        title="Transactions"
+        description="Append-only ledger of every monetary movement."
+        actions={<ExportButton href="/api/exports/finance/transactions" />}
+      />
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Link

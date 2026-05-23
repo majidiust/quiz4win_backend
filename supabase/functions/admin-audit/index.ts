@@ -1,8 +1,9 @@
 /**
  * Admin Audit Log Edge Function — Quiz4Win
  *
- * GET /admin/audit-log       — Immutable admin audit log (API #152)
- * GET /admin/audit-log/stats — Most active admins, top actions, last-24h count (row 172)
+ * GET /admin/audit-log        — Immutable admin audit log (API #152)
+ * GET /admin/audit-log/stats  — Most active admins, top actions, last-24h count (row 172)
+ * GET /admin/audit-log/export — CSV export (row 171)
  *
  * Rule compliance: R-01, R-03, R-05 (append-only), super_admin only
  */
@@ -11,6 +12,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -27,6 +29,39 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/audit-log/export — CSV (row 171)
+    if (path === "export" && req.method === "GET") {
+      const adminId = url.searchParams.get("admin_id");
+      const actionFilter = url.searchParams.get("action");
+      const targetType = url.searchParams.get("target_type");
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      let q = admin.from("admin_audit_log").select("id, admin_id, action, target_type, target_id, details, created_at, admin_users!admin_id(name, email, role)").order("created_at", { ascending: false }).limit(50000);
+      if (adminId) q = q.eq("admin_id", adminId);
+      if (actionFilter) q = q.ilike("action", `%${actionFilter}%`);
+      if (targetType) q = q.eq("target_type", targetType);
+      if (from) q = q.gte("created_at", from);
+      if (to) q = q.lte("created_at", to);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to export audit log", 500);
+      type Row = { id: string; admin_id: string; action: string; target_type: string | null; target_id: string | null; details: unknown; created_at: string; admin_users: { name: string; email: string; role: string } | null };
+      const rows = (data ?? []) as unknown as Row[];
+      const csv = toCsv(rows, [
+        { header: "event_id", value: (r) => r.id },
+        { header: "admin_id", value: (r) => r.admin_id },
+        { header: "admin_name", value: (r) => r.admin_users?.name ?? null },
+        { header: "admin_email", value: (r) => r.admin_users?.email ?? null },
+        { header: "admin_role", value: (r) => r.admin_users?.role ?? null },
+        { header: "action", value: (r) => r.action },
+        { header: "target_type", value: (r) => r.target_type },
+        { header: "target_id", value: (r) => r.target_id },
+        { header: "details", value: (r) => r.details ? JSON.stringify(r.details) : null },
+        { header: "created_at", value: (r) => r.created_at },
+      ]);
+      // Note: do NOT audit the audit-log export itself (would create infinite-growth audit trail of audits)
+      return csvResponse(csv, `audit-log-${todayStamp()}.csv`);
+    }
+
     // GET /admin/audit-log/stats
     if (path === "stats" && req.method === "GET") {
       const day = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();

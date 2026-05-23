@@ -11,6 +11,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatNumber } from "@/lib/utils";
 import { CreateQuestionDialog, BulkImportDialog } from "./create-question-dialog";
+import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Questions" };
 const PAGE_SIZE = 25;
@@ -56,6 +57,7 @@ export default async function QuestionsPage({ searchParams }: { searchParams: Pr
         description="Question bank powering all quiz games."
         actions={
           <div className="flex items-center gap-2">
+            <ExportButton href="/api/exports/questions" />
             <BulkImportDialog />
             <CreateQuestionDialog />
           </div>
