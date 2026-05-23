@@ -214,6 +214,12 @@ export async function revokeAllSessions(input: z.infer<typeof DeleteSchema>): Pr
 
 const LinkSchema = z.object({ id: z.string().uuid(), type: z.enum(["recovery", "magiclink"]) });
 
+/** Base URL of this admin panel, used to build per-link redirect URLs. */
+function adminUrl() {
+  const base = process.env.NEXT_PUBLIC_ADMIN_URL ?? "";
+  return base.replace(/\/$/, ""); // strip trailing slash
+}
+
 export async function sendAuthLink(input: z.infer<typeof LinkSchema>): Promise<ActionResult> {
   const admin = await requireAdmin(["super_admin", "admin", "support"]);
   const parsed = LinkSchema.safeParse(input);
@@ -223,7 +229,17 @@ export async function sendAuthLink(input: z.infer<typeof LinkSchema>): Promise<A
   const { data: target } = await db.auth.admin.getUserById(parsed.data.id);
   if (!target.user?.email) return { ok: false, message: "User has no email" };
 
-  const { error } = await db.auth.admin.generateLink({ type: parsed.data.type, email: target.user.email });
+  // Point each link type to the appropriate handler in this panel.
+  const redirectTo =
+    parsed.data.type === "recovery"
+      ? `${adminUrl()}/auth/reset-password`
+      : `${adminUrl()}/login`;
+
+  const { error } = await db.auth.admin.generateLink({
+    type: parsed.data.type,
+    email: target.user.email,
+    options: { redirectTo },
+  });
   if (error) return { ok: false, message: error.message };
 
   await audit(admin.id, `auth_user_${parsed.data.type}_sent`, parsed.data.id, { email: target.user.email });
@@ -240,7 +256,9 @@ export async function inviteUserByEmail(input: z.infer<typeof InviteSchema>): Pr
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input" };
 
   const db = createSupabaseAdminClient();
-  const { data, error } = await db.auth.admin.inviteUserByEmail(parsed.data.email);
+  const { data, error } = await db.auth.admin.inviteUserByEmail(parsed.data.email, {
+    redirectTo: `${adminUrl()}/auth/reset-password`,
+  });
   if (error || !data.user) return { ok: false, message: error?.message ?? "Failed to invite user" };
 
   await audit(admin.id, "auth_user_invited", data.user.id, { email: parsed.data.email });
