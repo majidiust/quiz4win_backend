@@ -18,6 +18,7 @@ import {
   History,
   UserCog,
   Video,
+  LineChart,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -37,7 +38,10 @@ export interface NavSection {
 export const navSections: NavSection[] = [
   {
     title: "Overview",
-    items: [{ title: "Dashboard", href: "/dashboard", icon: LayoutDashboard }],
+    items: [
+      { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      { title: "Analytics", href: "/analytics/revenue", icon: LineChart, roles: ["super_admin", "admin", "finance"] },
+    ],
   },
   {
     title: "Players",
