@@ -12,6 +12,11 @@
  * GET    /admin/games/:id/participants         — Participants (API #91)
  * DELETE /admin/games/:id/participants/:uid    — Remove participant (API #92)
  * GET    /admin/games/:id/export               — Export game results CSV (row 125)
+ * POST   /admin/games/:id/pause                — Pause game (row 121)
+ * POST   /admin/games/:id/resume               — Resume paused game (row 122)
+ * POST   /admin/games/:id/duplicate            — Duplicate game (row 123)
+ * GET    /admin/games/:id/result               — Final rankings + prize breakdown (row 124)
+ * POST   /admin/games/:id/questions            — Assign question set (row 127)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -119,6 +124,92 @@ Deno.serve(async (req: Request) => {
       // TODO: trigger prize distribution via DB function
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_ended", target_type: "game", target_id: gameId, created_at: new Date().toISOString() });
       return successResponse({ message: "Game ended" });
+    }
+
+    // POST /admin/games/:id/pause — freeze countdown (row 121)
+    if (gameId && action === "pause" && req.method === "POST") {
+      const { data: game } = await admin.from("games").select("status").eq("id", gameId).single();
+      if (!game) return errorResponse("game_not_found", 404);
+      if (game.status !== "live") return errorResponse("Only live games can be paused", 400);
+      await admin.from("games").update({ status: "paused", paused_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", gameId);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_paused", target_type: "game", target_id: gameId, created_at: new Date().toISOString() });
+      return successResponse({ message: "Game paused" });
+    }
+
+    // POST /admin/games/:id/resume (row 122)
+    if (gameId && action === "resume" && req.method === "POST") {
+      const { data: game } = await admin.from("games").select("status").eq("id", gameId).single();
+      if (!game) return errorResponse("game_not_found", 404);
+      if (game.status !== "paused") return errorResponse("Only paused games can be resumed", 400);
+      await admin.from("games").update({ status: "live", paused_at: null, updated_at: new Date().toISOString() }).eq("id", gameId);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_resumed", target_type: "game", target_id: gameId, created_at: new Date().toISOString() });
+      return successResponse({ message: "Game resumed" });
+    }
+
+    // POST /admin/games/:id/duplicate — clone settings for new game (row 123)
+    if (gameId && action === "duplicate" && req.method === "POST") {
+      const { data: src, error } = await admin.from("games").select("*").eq("id", gameId).single();
+      if (error || !src) return errorResponse("game_not_found", 404);
+      const overrides = await req.json().catch(() => ({}));
+
+      const clone: Record<string, unknown> = { ...src };
+      // Strip auto-managed fields
+      for (const k of ["id", "created_at", "updated_at", "started_at", "ended_at", "paused_at", "status", "participant_count", "livekit_room_name", "livekit_egress_id", "stream_url", "cancelled_reason"]) delete clone[k];
+      Object.assign(clone, overrides);
+      clone.status = "upcoming";
+      clone.created_by = user.id;
+      clone.created_at = new Date().toISOString();
+      clone.title = (overrides.title as string) ?? `${src.title} (copy)`;
+
+      const { data: created, error: insErr } = await admin.from("games").insert(clone).select("*").single();
+      if (insErr) return errorResponse(sanitizeError(insErr), 400);
+
+      // Copy game_questions if requested
+      if (overrides.copy_questions !== false) {
+        const { data: qs } = await admin.from("game_questions").select("question_id, question_index, time_limit_sec").eq("game_id", gameId);
+        if (qs && qs.length) {
+          await admin.from("game_questions").insert(qs.map((q: { question_id: string; question_index: number; time_limit_sec: number | null }) => ({ game_id: created.id, ...q })));
+        }
+      }
+
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_duplicated", target_type: "game", target_id: created.id, details: { source_id: gameId }, created_at: new Date().toISOString() });
+      return successResponse({ game: created }, 201);
+    }
+
+    // GET /admin/games/:id/result — final rankings + prize breakdown (row 124)
+    if (gameId && action === "result" && req.method === "GET") {
+      const [gameRes, partsRes, answersRes] = await Promise.all([
+        admin.from("games").select("id, title, mode, status, entry_fee, prize_pool, prize_breakdown, participant_count, started_at, ended_at").eq("id", gameId).single(),
+        admin.from("game_participants").select("user_id, score, rank, correct_answers, wrong_answers, prize_amount, prize_credited, profiles!user_id(name, email, avatar_url)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false }),
+        admin.from("game_questions").select("question_id, question_index, asked_at, questions(text, category, difficulty)").eq("game_id", gameId).order("question_index", { ascending: true }),
+      ]);
+      if (!gameRes.data) return errorResponse("game_not_found", 404);
+      const participants = (partsRes.data ?? []) as Array<{ prize_amount: number | null }>;
+      const totalPrizesPaid = participants.reduce((s, p) => s + (p.prize_amount ?? 0), 0);
+      return successResponse({
+        game: gameRes.data,
+        rankings: partsRes.data ?? [],
+        questions: answersRes.data ?? [],
+        summary: { total_prizes_paid_cents: totalPrizesPaid, prize_pool_cents: gameRes.data.prize_pool ?? 0 },
+      });
+    }
+
+    // POST /admin/games/:id/questions — assign question set (row 127)
+    if (gameId && action === "questions" && req.method === "POST") {
+      const { question_ids, replace = true } = await req.json();
+      if (!Array.isArray(question_ids) || question_ids.length === 0) return errorResponse("question_ids array is required", 400);
+
+      const { data: game } = await admin.from("games").select("status, time_per_question").eq("id", gameId).single();
+      if (!game) return errorResponse("game_not_found", 404);
+      if (!["upcoming", "open"].includes(game.status)) return errorResponse("Cannot assign questions after game started", 400);
+
+      if (replace) await admin.from("game_questions").delete().eq("game_id", gameId);
+      const rows = (question_ids as string[]).map((qid, i) => ({ game_id: gameId, question_id: qid, question_index: i, time_limit_sec: game.time_per_question ?? 15 }));
+      const { error } = await admin.from("game_questions").insert(rows);
+      if (error) return errorResponse(sanitizeError(error), 400);
+      await admin.from("games").update({ questions_count: question_ids.length, updated_at: new Date().toISOString() }).eq("id", gameId);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_questions_assigned", target_type: "game", target_id: gameId, details: { count: question_ids.length, replace }, created_at: new Date().toISOString() });
+      return successResponse({ message: `Assigned ${question_ids.length} questions`, count: question_ids.length });
     }
 
     // POST /admin/games/:id/next-question

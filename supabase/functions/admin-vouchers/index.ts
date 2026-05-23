@@ -14,6 +14,7 @@
  * DELETE /admin/shows/:show_id/announce-voucher/:ann_id    — Cancel announcement (API #169)
  * POST   /admin/users/:user_id/issue-voucher               — Issue to user (API #170)
  * GET    /admin/vouchers/:id/redemptions/export            — Redemptions CSV (row 156)
+ * GET    /admin/vouchers/validate?code=XXX                — Admin preview voucher (row 154)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -83,6 +84,17 @@ Deno.serve(async (req: Request) => {
 
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "voucher_issued_to_user", target_type: "user", target_id: targetUserId, details: { voucher_id, note }, created_at: new Date().toISOString() });
       return successResponse({ message: "Voucher issued to user" }, 201);
+    }
+
+    // GET /admin/vouchers/validate?code=XXX — admin preview (row 154)
+    if (rawPath.match(/\/admin\/vouchers\/validate/) && req.method === "GET") {
+      const code = url.searchParams.get("code");
+      if (!code) return errorResponse("code query param is required", 400);
+      const { data, error } = await admin.from("vouchers").select("id, code, name, status, reward_type, reward_amount, redemption_count, max_redemptions, valid_from, valid_until, require_kyc, require_game_entry, created_at").eq("code", code.toUpperCase()).maybeSingle();
+      if (error || !data) return errorResponse("voucher_not_found", 404);
+      const isExpired = data.valid_until ? new Date(data.valid_until) < new Date() : false;
+      const isExhausted = data.max_redemptions ? (data.redemption_count ?? 0) >= data.max_redemptions : false;
+      return successResponse({ voucher: data, preview: { is_valid: data.status === "active" && !isExpired && !isExhausted, is_expired: isExpired, is_exhausted: isExhausted } });
     }
 
     // Admin voucher CRUD — /admin/vouchers[/:id[/action]]

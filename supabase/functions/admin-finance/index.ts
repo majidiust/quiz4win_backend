@@ -14,6 +14,7 @@
  * GET  /admin/finance/withdrawals/export       — Withdrawals CSV (row 116)
  * GET  /admin/finance/transactions/export      — Transactions CSV (row 117)
  * GET  /admin/finance/aml-flags/export         — AML CSV (row 120)
+ * POST /admin/finance/withdrawals/bulk-approve  — Bulk approve withdrawals (row 115)
  *
  * Rule compliance: R-01, R-02, R-03, R-05 (append-only), R-08
  */
@@ -41,6 +42,27 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // POST /admin/finance/withdrawals/bulk-approve — batch approve (row 115)
+    if (resource === "withdrawals" && resourceId === "bulk-approve" && req.method === "POST") {
+      const { withdrawal_ids } = await req.json();
+      if (!Array.isArray(withdrawal_ids) || withdrawal_ids.length === 0) return errorResponse("withdrawal_ids array is required", 400);
+      if (withdrawal_ids.length > 100) return errorResponse("Maximum 100 withdrawals per batch", 400);
+
+      // Pre-check that all are still pending and have KYC verified (R-08)
+      const { data: rows } = await admin.from("withdrawals").select("id, user_id, status, profiles!user_id(kyc_status)").in("id", withdrawal_ids);
+      type R = { id: string; user_id: string; status: string; profiles: { kyc_status: string } | null };
+      const list = (rows ?? []) as unknown as R[];
+      const eligible = list.filter((r) => r.status === "pending" && r.profiles?.kyc_status === "verified").map((r) => r.id);
+      const skipped = list.filter((r) => !eligible.includes(r.id)).map((r) => ({ id: r.id, reason: r.profiles?.kyc_status !== "verified" ? "kyc_not_verified" : `status:${r.status}` }));
+
+      if (eligible.length === 0) return successResponse({ approved: 0, skipped, message: "No eligible withdrawals" });
+
+      await admin.from("withdrawals").update({ status: "approved", processed_by: user.id, processed_at: new Date().toISOString() }).in("id", eligible);
+      const auditRows = eligible.map((id) => ({ admin_id: user.id, action: "withdrawal_approved", target_type: "withdrawal", target_id: id, details: { batch: true }, created_at: new Date().toISOString() }));
+      await admin.from("admin_audit_log").insert(auditRows);
+      return successResponse({ approved: eligible.length, skipped, message: `${eligible.length} withdrawal(s) approved` });
+    }
+
     // GET /admin/finance/transactions/export — CSV (row 117)
     if (resource === "transactions" && resourceId === "export" && req.method === "GET") {
       const type = url.searchParams.get("type");

@@ -9,6 +9,9 @@
  * DELETE /admin/questions/:id             — Soft-delete (API #98)
  * POST   /admin/questions/bulk-import     — Bulk import (API #99)
  * GET    /admin/questions/export          — Bulk export CSV (row 143)
+ * POST   /admin/questions/categories      — Create category (row 145)
+ * GET    /admin/questions/:id/usage       — Usage history (row 146)
+ * POST   /admin/questions/:id/restore     — Restore soft-deleted (row 147)
  *
  * Rule compliance: R-01, R-03
  */
@@ -60,12 +63,43 @@ Deno.serve(async (req: Request) => {
       return csvResponse(csv, `questions-${todayStamp()}.csv`);
     }
 
-    // GET /admin/questions/categories
+    // GET /admin/questions/categories — list distinct categories with counts (row 144)
     if (questionId === "categories" && req.method === "GET") {
-      const { data, error } = await admin.from("questions").select("category").not("category", "is", null).order("category");
+      const { data, error } = await admin.from("questions").select("category").not("category", "is", null);
       if (error) return errorResponse("Failed to fetch categories", 500);
-      const categories = [...new Set((data ?? []).map((r: { category: string }) => r.category))].sort();
+      const counts: Record<string, number> = {};
+      for (const r of (data ?? []) as Array<{ category: string }>) counts[r.category] = (counts[r.category] ?? 0) + 1;
+      const categories = Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name));
       return successResponse({ categories });
+    }
+
+    // POST /admin/questions/categories — create a category (row 145)
+    if (questionId === "categories" && req.method === "POST") {
+      const { name, description } = await req.json();
+      if (!name) return errorResponse("name is required", 400);
+      // Categories are inferred from questions; track explicit categories in app_config under key "question_categories"
+      const { data: existing } = await admin.from("app_config").select("value").eq("key", "question_categories").maybeSingle();
+      const list: Array<{ name: string; description?: string }> = existing?.value ? JSON.parse(existing.value) : [];
+      if (list.find((c) => c.name === name)) return errorResponse("Category already exists", 409);
+      list.push({ name, description });
+      await admin.from("app_config").upsert({ key: "question_categories", value: JSON.stringify(list), updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "question_category_created", target_type: "question_category", details: { name }, created_at: new Date().toISOString() });
+      return successResponse({ category: { name, description } }, 201);
+    }
+
+    // GET /admin/questions/:id/usage — which games used this question (row 146)
+    if (questionId && parts[1] === "usage" && req.method === "GET") {
+      const { data, error } = await admin.from("game_questions").select("game_id, question_index, asked_at, games(id, title, mode, status, started_at, ended_at)").eq("question_id", questionId).order("asked_at", { ascending: false }).limit(500);
+      if (error) return errorResponse("Failed to fetch usage history", 500);
+      return successResponse({ usage: data ?? [] });
+    }
+
+    // POST /admin/questions/:id/restore — restore soft-deleted (row 147)
+    if (questionId && parts[1] === "restore" && req.method === "POST") {
+      const { data, error } = await admin.from("questions").update({ is_deleted: false, updated_at: new Date().toISOString() }).eq("id", questionId).select("id, is_deleted").single();
+      if (error || !data) return errorResponse("question_not_found", 404);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "question_restored", target_type: "question", target_id: questionId, created_at: new Date().toISOString() });
+      return successResponse({ message: "Question restored", question: data });
     }
 
     // POST /admin/questions/bulk-import

@@ -8,6 +8,7 @@
  * PATCH /admin/support/tickets/:id/status  — Update status (API #127)
  * GET   /admin/support/stats               — Ticket stats by status/category (row 148)
  * GET   /admin/support/tickets/export      — Tickets CSV (row 151)
+ * POST  /admin/support/tickets/bulk-assign  — Bulk assign tickets (row 150)
  *
  * Rule compliance: R-01, R-03
  */
@@ -35,6 +36,21 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // POST /admin/support/tickets/bulk-assign — bulk assign (row 150)
+    if (ticketId === "bulk-assign" && !action && req.method === "POST") {
+      const { ticket_ids, admin_id } = await req.json();
+      if (!Array.isArray(ticket_ids) || ticket_ids.length === 0) return errorResponse("ticket_ids array is required", 400);
+      if (!admin_id) return errorResponse("admin_id is required", 400);
+      if (ticket_ids.length > 200) return errorResponse("Maximum 200 tickets per batch", 400);
+
+      const { error } = await admin.from("support_tickets").update({ assigned_to: admin_id, updated_at: new Date().toISOString() }).in("id", ticket_ids);
+      if (error) return errorResponse(sanitizeError(error), 500);
+
+      const auditRows = ticket_ids.map((id: string) => ({ admin_id: user.id, action: "support_ticket_assigned", target_type: "support_ticket", target_id: id, details: { assigned_to: admin_id, batch: true }, created_at: new Date().toISOString() }));
+      await admin.from("admin_audit_log").insert(auditRows);
+      return successResponse({ assigned: ticket_ids.length, message: `${ticket_ids.length} ticket(s) assigned` });
+    }
+
     // GET /admin/support/tickets/export — CSV (row 151)
     if (ticketId === "export" && !action && req.method === "GET") {
       const status = url.searchParams.get("status");

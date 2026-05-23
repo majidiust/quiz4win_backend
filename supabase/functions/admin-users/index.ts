@@ -11,6 +11,11 @@
  * GET   /admin/users/:id/kyc                  — KYC documents (API #79)
  * POST  /admin/users/:id/kyc/review           — Review KYC (API #80)
  * GET   /admin/users/export                    — Bulk user export CSV (row 106)
+ * GET   /admin/users?aml_flagged=true          — AML-flagged users filter (row 107)
+ * GET   /admin/users/:id/referral-tree         — Who referred whom (row 108)
+ * GET   /admin/users/:id/sessions              — Session history (row 109)
+ * POST  /admin/users/:id/force-logout          — Reset sessions (row 110)
+ * GET   /admin/users/:id/vouchers              — Voucher redemption history (row 111)
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -76,6 +81,8 @@ Deno.serve(async (req: Request) => {
       const kyc = url.searchParams.get("kyc_status");
       const offset = (page - 1) * limit;
 
+      const amlFlagged = url.searchParams.get("aml_flagged");
+
       let query = admin
         .from("profiles")
         .select("id, name, email, status, kyc_status, wallet_balance, created_at", { count: "exact" })
@@ -85,6 +92,13 @@ Deno.serve(async (req: Request) => {
       if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
       if (status) query = query.eq("status", status);
       if (kyc) query = query.eq("kyc_status", kyc);
+      if (amlFlagged === "true") {
+        // Semi-join: users that have at least one open AML flag
+        const { data: flaggedIds } = await admin.from("aml_flags").select("user_id").eq("status", "flagged");
+        const ids = [...new Set((flaggedIds ?? []).map((f: { user_id: string }) => f.user_id))];
+        if (ids.length === 0) return successResponse({ users: [], pagination: { page, limit, total: 0, total_pages: 0 } });
+        query = query.in("id", ids);
+      }
 
       const { data, error, count } = await query;
       if (error) return errorResponse("Failed to list users", 500);
@@ -181,6 +195,47 @@ Deno.serve(async (req: Request) => {
       await admin.from("admin_audit_log").insert({ admin_id: adminUserAuth.id, action: `kyc_${decision}d`, target_type: "user", target_id: userId, details: { rejection_reason }, created_at: new Date().toISOString() });
 
       return successResponse({ message: `KYC ${decision}d`, kyc_status: decision === "approve" ? "verified" : "rejected" });
+    }
+
+    // GET /admin/users/:id/referral-tree (row 108)
+    if (userId && action === "referral-tree" && req.method === "GET") {
+      // Direct referrals made by this user
+      const { data: madeReferrals } = await admin.from("referral_uses").select("referred_user_id, used_at, bonus_paid, bonus_amount, profiles!referred_user_id(name, email)").eq("referrer_id", userId).order("used_at", { ascending: false });
+      // Who referred this user
+      const { data: referredBy } = await admin.from("referral_uses").select("referrer_id, used_at, profiles!referrer_id(name, email)").eq("referred_user_id", userId).maybeSingle();
+      return successResponse({ referred_by: referredBy ?? null, made_referrals: madeReferrals ?? [] });
+    }
+
+    // GET /admin/users/:id/sessions (row 109)
+    if (userId && action === "sessions" && req.method === "GET") {
+      // Query auth.sessions via admin API
+      try {
+        const sessions = await admin.auth.admin.listSessions(userId);
+        return successResponse({ sessions: sessions.data?.sessions ?? [] });
+      } catch (_e) {
+        // Fallback: audit log entries for logins
+        const { data, error } = await admin.from("admin_audit_log").select("id, action, details, created_at").eq("action", "user_login").eq("target_id", userId).order("created_at", { ascending: false }).limit(100);
+        if (error) return errorResponse("Failed to fetch sessions", 500);
+        return successResponse({ sessions: data ?? [], note: "Login audit log (full session data requires Supabase Auth admin)" });
+      }
+    }
+
+    // POST /admin/users/:id/force-logout (row 110)
+    if (userId && action === "force-logout" && req.method === "POST") {
+      try {
+        await admin.auth.admin.signOut(userId, "global");
+      } catch (e) {
+        console.error("[admin-users] force-logout signOut error:", e);
+      }
+      await admin.from("admin_audit_log").insert({ admin_id: adminUserAuth.id, action: "user_force_logout", target_type: "user", target_id: userId, created_at: new Date().toISOString() });
+      return successResponse({ message: "All user sessions revoked" });
+    }
+
+    // GET /admin/users/:id/vouchers (row 111)
+    if (userId && action === "vouchers" && req.method === "GET") {
+      const { data, error } = await admin.from("voucher_redemptions").select("id, voucher_id, redeemed_at, reward_type, reward_amount, note, vouchers!voucher_id(code, name)").eq("user_id", userId).order("redeemed_at", { ascending: false }).limit(200);
+      if (error) return errorResponse("Failed to fetch voucher history", 500);
+      return successResponse({ vouchers: data ?? [] });
     }
 
     return errorResponse("Not found", 404);

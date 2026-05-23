@@ -5,7 +5,12 @@
  * PATCH /admin/config                   — Update config values (API #147)
  * POST  /admin/config/maintenance       — Toggle maintenance mode (API #148)
  * POST  /admin/config/tos               — Publish new ToS version (API #149)
+ * GET   /admin/config/tos               — List ToS versions (row 163)
+ * GET   /admin/config/tos/:version      — Get ToS version detail (row 164)
  * POST  /admin/config/help-articles     — Manage help articles (API #150)
+ * GET   /admin/config/help-articles     — List help articles (row 153)
+ * DELETE /admin/config/help-articles/:id — Delete help article (row 166)
+ * GET   /admin/config/history           — Config change history (row 162)
  *
  * Rule compliance: R-01, R-03, super_admin only for sensitive actions
  */
@@ -20,6 +25,7 @@ Deno.serve(async (req: Request) => {
 
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/admin\/config\/?/, "");
+  const pathParts = path.split("/").filter(Boolean);
 
   const { user, error: authErr } = await validateJWT(req);
   if (authErr || !user) return errorResponse("unauthorized", 401);
@@ -71,6 +77,34 @@ Deno.serve(async (req: Request) => {
       return successResponse({ message: `Maintenance mode ${enabled ? "enabled" : "disabled"}` });
     }
 
+    // GET /admin/config/history — config change history (row 162)
+    if (path === "history" && req.method === "GET") {
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
+      const limit = Math.min(200, parseInt(url.searchParams.get("limit") ?? "50"));
+      const offset = (page - 1) * limit;
+      const { data, error, count } = await admin.from("admin_audit_log").select("id, admin_id, action, target_type, details, created_at, admin_users!admin_id(name, email)", { count: "exact" }).in("action", ["config_updated", "maintenance_enabled", "maintenance_disabled", "tos_published", "help_article_created", "help_article_updated", "help_article_deleted"]).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+      if (error) return errorResponse("Failed to fetch config history", 500);
+      return successResponse({ history: data ?? [], pagination: { page, limit, total: count ?? 0 } });
+    }
+
+    // GET /admin/config/tos — list all ToS versions (row 163)
+    if (pathParts[0] === "tos" && !pathParts[1] && req.method === "GET") {
+      const type = url.searchParams.get("type"); // tos | privacy
+      let q = admin.from("tos_versions").select("version, type, effective_date, require_re_acceptance, published_by, created_at, admin_users!published_by(name, email)").order("created_at", { ascending: false });
+      if (type) q = q.eq("type", type);
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to list ToS versions", 500);
+      return successResponse({ versions: data ?? [] });
+    }
+
+    // GET /admin/config/tos/:version — ToS version detail (row 164)
+    if (pathParts[0] === "tos" && pathParts[1] && req.method === "GET") {
+      const type = url.searchParams.get("type") ?? "tos";
+      const { data, error } = await admin.from("tos_versions").select("*, admin_users!published_by(name, email)").eq("version", pathParts[1]).eq("type", type).single();
+      if (error || !data) return errorResponse("tos_version_not_found", 404);
+      return successResponse({ version: data });
+    }
+
     // POST /admin/config/tos — publish new ToS version
     if (path === "tos" && req.method === "POST") {
       const { version, content, effective_date } = await req.json();
@@ -84,6 +118,28 @@ Deno.serve(async (req: Request) => {
 
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "tos_published", target_type: "tos_version", target_id: data.id, details: { version }, created_at: new Date().toISOString() });
       return successResponse({ tos: data }, 201);
+    }
+
+    // GET /admin/config/help-articles — list (row 153)
+    if (pathParts[0] === "help-articles" && !pathParts[1] && req.method === "GET") {
+      const category = url.searchParams.get("category");
+      const language = url.searchParams.get("language");
+      const published = url.searchParams.get("published");
+      let q = admin.from("help_articles").select("id, title, category, language, is_published, sort_order, created_at, updated_at").order("sort_order", { ascending: true });
+      if (category) q = q.eq("category", category);
+      if (language) q = q.eq("language", language);
+      if (published !== null) q = q.eq("is_published", published === "true");
+      const { data, error } = await q;
+      if (error) return errorResponse("Failed to list help articles", 500);
+      return successResponse({ articles: data ?? [] });
+    }
+
+    // DELETE /admin/config/help-articles/:id — delete help article (row 166)
+    if (pathParts[0] === "help-articles" && pathParts[1] && req.method === "DELETE") {
+      const { error } = await admin.from("help_articles").delete().eq("id", pathParts[1]);
+      if (error) return errorResponse(sanitizeError(error), 500);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "help_article_deleted", target_type: "help_article", target_id: pathParts[1], created_at: new Date().toISOString() });
+      return successResponse({ message: "Help article deleted" });
     }
 
     // POST /admin/config/help-articles — create or update help article

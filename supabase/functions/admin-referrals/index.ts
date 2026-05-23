@@ -5,6 +5,7 @@
  * POST   /admin/referrals/promo         — Create promo code (API #133)
  * DELETE /admin/referrals/promo/:code   — Deactivate promo code (API #134)
  * GET    /admin/referrals/stats         — Program analytics (rows 102/161)
+ * GET    /admin/referrals/:code         — Referral code detail (row 160)
  *
  * Rule compliance: R-01, R-03
  */
@@ -117,6 +118,15 @@ Deno.serve(async (req: Request) => {
       if (error || !data) return errorResponse("Promo code not found", 404);
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "promo_code_deactivated", target_type: "referral_code", details: { code }, created_at: new Date().toISOString() });
       return successResponse({ message: `Promo code ${code} deactivated` });
+    }
+
+    // GET /admin/referrals/:code — code detail (row 160)
+    if (resource && resource !== "promo" && resource !== "stats" && !code && req.method === "GET") {
+      const { data: codeRow, error } = await admin.from("referral_codes").select("*, profiles!user_id(name, email)").eq("code", resource.toUpperCase()).single();
+      if (error || !codeRow) return errorResponse("referral_code_not_found", 404);
+      const { data: uses } = await admin.from("referral_uses").select("id, referred_user_id, used_at, bonus_paid, bonus_amount, profiles!referred_user_id(name, email)").eq("code", codeRow.code).order("used_at", { ascending: false }).limit(200);
+      const totalBonus = (uses ?? []).reduce((s: number, u: { bonus_amount: number | null }) => s + (u.bonus_amount ?? 0), 0);
+      return successResponse({ referral_code: codeRow, uses: uses ?? [], total_bonus_paid_cents: totalBonus });
     }
 
     return errorResponse("Not found", 404);

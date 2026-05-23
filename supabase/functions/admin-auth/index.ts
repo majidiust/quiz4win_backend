@@ -8,6 +8,9 @@
  * GET   /admin/auth/admins                  — List admin users (API #62)
  * POST  /admin/auth/admins                  — Create admin user (API #63)
  * PATCH /admin/auth/admins/:admin_id        — Update admin user (API #64)
+ * GET   /admin/auth/admins/:admin_id        — Admin detail (row 167)
+ * POST  /admin/auth/admins/:admin_id/reset-mfa       — Reset MFA (row 168)
+ * POST  /admin/auth/admins/:admin_id/revoke-sessions — Force logout (row 169)
  *
  * Rule compliance: R-01, R-03, R-04
  */
@@ -114,6 +117,61 @@ Deno.serve(async (req: Request) => {
       if (insertErr) return errorResponse(sanitizeError(insertErr), 500);
 
       return successResponse({ admin: newAdmin }, 201);
+    }
+
+    const subAction = parts[2] ?? null;
+
+    // GET /admin/auth/admins/:admin_id — detail (row 167)
+    if (resource === "admins" && resourceId && !subAction && req.method === "GET") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id, ["super_admin"]);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      const [profileRes, auditRes] = await Promise.all([
+        admin.from("admin_users").select("id, name, email, role, status, mfa_enabled, created_at, last_login_at, updated_at").eq("id", resourceId).single(),
+        admin.from("admin_audit_log").select("id, action, target_type, target_id, created_at").eq("admin_id", resourceId).order("created_at", { ascending: false }).limit(50),
+      ]);
+      if (profileRes.error || !profileRes.data) return errorResponse("admin_not_found", 404);
+      return successResponse({ admin: profileRes.data, recent_activity: auditRes.data ?? [] });
+    }
+
+    // POST /admin/auth/admins/:admin_id/reset-mfa (row 168)
+    if (resource === "admins" && resourceId && subAction === "reset-mfa" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id, ["super_admin"]);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      // Remove all MFA factors via auth admin API
+      try {
+        const factors = await admin.auth.admin.mfa.listFactors({ userId: resourceId });
+        for (const f of (factors.data?.factors ?? [])) {
+          await admin.auth.admin.mfa.deleteFactor({ userId: resourceId, id: f.id });
+        }
+      } catch (e) {
+        console.error("[admin-auth] mfa factor cleanup failed:", e);
+      }
+      await admin.from("admin_users").update({ mfa_enabled: false, updated_at: new Date().toISOString() }).eq("id", resourceId);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "admin_mfa_reset", target_type: "admin_user", target_id: resourceId, created_at: new Date().toISOString() });
+      return successResponse({ message: "MFA reset; admin must re-enroll on next login" });
+    }
+
+    // POST /admin/auth/admins/:admin_id/revoke-sessions (row 169)
+    if (resource === "admins" && resourceId && subAction === "revoke-sessions" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id, ["super_admin"]);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      // Sign out the user from all sessions
+      try {
+        await admin.auth.admin.signOut(resourceId, "global");
+      } catch (e) {
+        console.error("[admin-auth] signOut failed:", e);
+      }
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "admin_sessions_revoked", target_type: "admin_user", target_id: resourceId, created_at: new Date().toISOString() });
+      return successResponse({ message: "All sessions revoked" });
     }
 
     // PATCH /admin/auth/admins/:admin_id
