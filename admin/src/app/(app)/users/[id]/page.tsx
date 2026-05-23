@@ -12,6 +12,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, initials } from "@/lib/utils";
 import { UserActions } from "./user-actions";
+import { AuthActions } from "./auth-actions";
 
 export const metadata = { title: "Player profile" };
 
@@ -20,7 +21,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const db = createSupabaseAdminClient();
 
-  const [{ data: user }, { data: txs }, { data: games }] = await Promise.all([
+  const [{ data: user }, { data: txs }, { data: games }, authRes] = await Promise.all([
     db.from("profiles").select("*").eq("id", id).maybeSingle(),
     db
       .from("transactions")
@@ -34,9 +35,12 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
       .eq("user_id", id)
       .order("joined_at", { ascending: false })
       .limit(20),
+    db.auth.admin.getUserById(id),
   ]);
 
   if (!user) notFound();
+  const authUser = authRes.data?.user ?? null;
+  const isBanned = authUser?.banned_until ? new Date(authUser.banned_until) > new Date() : false;
 
   return (
     <>
@@ -49,12 +53,14 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
               <Link href="/users"><ArrowLeft className="size-4" /> All users</Link>
             </Button>
             <UserActions userId={id} currentStatus={user.status} />
+            <AuthActions userId={id} userEmail={user.email} isBanned={isBanned} emailConfirmed={!!authUser?.email_confirmed_at} />
           </div>
         }
       />
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-4">
+        <Card>
           <CardContent className="flex flex-col items-center p-6 text-center">
             <Avatar className="size-16">
               <AvatarFallback className="text-lg">{initials(user.full_name ?? user.email)}</AvatarFallback>
@@ -78,6 +84,35 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
             </dl>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Authentication</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs">
+            <dl className="grid grid-cols-2 gap-2">
+              <dt className="text-muted-foreground">Email confirmed</dt>
+              <dd>{authUser?.email_confirmed_at ? formatDateTime(authUser.email_confirmed_at) : <span className="text-amber-500">Not confirmed</span>}</dd>
+              <dt className="text-muted-foreground">Last sign in</dt>
+              <dd>{authUser?.last_sign_in_at ? formatRelative(authUser.last_sign_in_at) : "Never"}</dd>
+              <dt className="text-muted-foreground">Banned until</dt>
+              <dd>{isBanned && authUser?.banned_until ? formatDateTime(authUser.banned_until) : <span className="text-muted-foreground">—</span>}</dd>
+              <dt className="text-muted-foreground">Phone</dt>
+              <dd>{authUser?.phone ?? "—"}</dd>
+              <dt className="text-muted-foreground">Providers</dt>
+              <dd>{authUser?.identities?.length ? authUser.identities.map((i) => i.provider).join(", ") : "email"}</dd>
+              <dt className="text-muted-foreground">Auth ID</dt>
+              <dd className="truncate font-mono">{authUser?.id ?? "—"}</dd>
+            </dl>
+            {authUser?.user_metadata && Object.keys(authUser.user_metadata).length > 0 && (
+              <div>
+                <div className="mb-1 text-muted-foreground">User metadata</div>
+                <pre className="overflow-x-auto rounded bg-muted p-2 text-[10px] leading-tight">{JSON.stringify(authUser.user_metadata, null, 2)}</pre>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        </div>
 
         <div className="lg:col-span-2 space-y-4">
           <div className="grid grid-cols-2 gap-4">

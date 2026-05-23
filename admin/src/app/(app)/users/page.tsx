@@ -12,6 +12,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { formatMoneyDecimal, formatRelative, initials } from "@/lib/utils";
 import { requireAdmin } from "@/lib/auth";
 import { ExportButton } from "@/components/export-button";
+import { CreateUserDialog } from "./create-user-dialog";
 
 export const metadata = { title: "Users" };
 
@@ -51,7 +52,12 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
       <PageHeader
         title="Users"
         description="All registered players and their account state."
-        actions={<ExportButton href="/api/exports/users" />}
+        actions={
+          <div className="flex items-center gap-2">
+            <CreateUserDialog />
+            <ExportButton href="/api/exports/users" />
+          </div>
+        }
       />
 
       <Card className="overflow-hidden">
