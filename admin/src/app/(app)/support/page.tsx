@@ -75,8 +75,12 @@ export default async function SupportPage({ searchParams }: { searchParams: Prom
                   const p = (t.profiles as unknown as { email?: string; full_name?: string } | null) ?? null;
                   return (
                     <TableRow key={t.id}>
-                      <TableCell className="font-mono text-xs">{t.ticket_number}</TableCell>
-                      <TableCell className="max-w-md truncate text-sm">{t.subject}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <Link href={`/support/${t.id}`} className="hover:underline">{t.ticket_number}</Link>
+                      </TableCell>
+                      <TableCell className="max-w-md truncate text-sm">
+                        <Link href={`/support/${t.id}`} className="hover:underline">{t.subject}</Link>
+                      </TableCell>
                       <TableCell>
                         <Link href={`/users/${t.user_id}`} className="text-xs hover:underline">
                           <div>{p?.full_name ?? "—"}</div>
