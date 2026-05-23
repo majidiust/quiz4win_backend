@@ -116,8 +116,9 @@ const PORT = Number(Deno.env.get("PORT") ?? "8000");
 
 realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
   const url = new URL(req.url);
+  const startedAt = Date.now();
 
-  // Health probe.
+  // Health probe — keep silent to avoid log spam from nginx/healthcheck.
   if (url.pathname === "/health" || url.pathname === "/") {
     return new Response(JSON.stringify({ ok: true, services: handlers.size }), {
       status: 200,
@@ -126,7 +127,13 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
   }
 
   const service = resolveService(url.pathname);
+  const log = (status: number, extra = "") =>
+    console.log(
+      `[api] ${req.method} ${url.pathname} → ${service ?? "(none)"} status=${status} ms=${Date.now() - startedAt}${extra ? " " + extra : ""}`,
+    );
+
   if (!service) {
+    log(404);
     return new Response(JSON.stringify({ error: "not_found" }), {
       status: 404,
       headers: { "Content-Type": "application/json" },
@@ -134,9 +141,12 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
   }
 
   try {
-    return await handlers.get(service)!(req);
+    const res = await handlers.get(service)!(req);
+    log(res.status);
+    return res;
   } catch (err) {
-    console.error(`[api] ${service} threw:`, err);
+    console.error(`[api] ${service} threw:`, err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : err);
+    log(500, "threw");
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
