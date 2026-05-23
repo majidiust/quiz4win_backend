@@ -22,20 +22,49 @@ export interface AuthResult {
  *
  * Rule R-03: Every Edge Function that writes to the DB MUST call this
  * before any DB operation.
+ *
+ * R-01 note: the raw token is never logged. We log only its presence,
+ * length, prefix (first 12 chars are fine — JWT header is public) and
+ * the path that triggered the check.
  */
 export async function validateJWT(req: Request): Promise<AuthResult> {
+  const url = new URL(req.url);
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
+  const apikey = req.headers.get("apikey");
+
+  if (!authHeader) {
+    console.warn(
+      `[auth] ${req.method} ${url.pathname} — no Authorization header (apikey_present=${!!apikey} origin=${req.headers.get("origin") ?? "-"})`,
+    );
+    return { user: null, error: "Missing or invalid Authorization header" };
+  }
+  if (!authHeader.startsWith("Bearer ")) {
+    console.warn(
+      `[auth] ${req.method} ${url.pathname} — Authorization header not Bearer (prefix='${authHeader.slice(0, 10)}…')`,
+    );
     return { user: null, error: "Missing or invalid Authorization header" };
   }
 
+  const token = authHeader.slice("Bearer ".length).trim();
+  console.log(
+    `[auth] ${req.method} ${url.pathname} — Bearer received len=${token.length} prefix=${token.slice(0, 12)}… apikey_present=${!!apikey}`,
+  );
+
   const supabase = getAnonClient(req);
+  const startedAt = Date.now();
   const { data: { user }, error } = await supabase.auth.getUser();
+  const elapsed = Date.now() - startedAt;
 
   if (error || !user) {
+    console.warn(
+      `[auth] ${req.method} ${url.pathname} — supabase.auth.getUser failed in ${elapsed}ms: ${error?.message ?? "no user"}`,
+    );
     return { user: null, error: error?.message ?? "Unauthorized" };
   }
 
+  console.log(
+    `[auth] ${req.method} ${url.pathname} — OK user=${user.id} role=${user.role ?? "-"} elapsed_ms=${elapsed}`,
+  );
   return { user, error: null };
 }
 
