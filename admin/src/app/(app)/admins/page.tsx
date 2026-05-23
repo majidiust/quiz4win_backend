@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatRelative, initials } from "@/lib/utils";
+import { InviteAdminDialog, EditAdminButton } from "./admin-user-actions";
 
 export const metadata = { title: "Admin Users" };
 
@@ -22,7 +23,11 @@ export default async function AdminUsersPage() {
 
   return (
     <>
-      <PageHeader title="Admin Users" description="Back-office operators with access to this panel." />
+      <PageHeader
+        title="Admin Users"
+        description="Back-office operators with access to this panel."
+        actions={<InviteAdminDialog />}
+      />
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (
@@ -36,6 +41,7 @@ export default async function AdminUsersPage() {
                 <TableHead>Last login</TableHead>
                 <TableHead>IP</TableHead>
                 <TableHead>Created</TableHead>
+                <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -60,6 +66,14 @@ export default async function AdminUsersPage() {
                   <TableCell className="text-xs text-muted-foreground">{formatRelative(a.last_login_at)}</TableCell>
                   <TableCell className="font-mono text-xs">{a.last_login_ip ?? "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatDateTime(a.created_at)}</TableCell>
+                  <TableCell>
+                    <EditAdminButton
+                      adminId={a.id}
+                      currentRole={a.role}
+                      currentStatus={a.status}
+                      currentName={a.name}
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

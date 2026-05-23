@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatNumber } from "@/lib/utils";
+import { SendBroadcastDialog } from "./send-broadcast-dialog";
 
 export const metadata = { title: "Broadcasts" };
 const PAGE_SIZE = 25;
@@ -33,7 +34,11 @@ export default async function BroadcastsPage({ searchParams }: { searchParams: P
 
   return (
     <>
-      <PageHeader title="Broadcasts" description="Push notification campaigns sent to players." />
+      <PageHeader
+        title="Broadcasts"
+        description="Push notification campaigns sent to players."
+        actions={<SendBroadcastDialog />}
+      />
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (

@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatNumber } from "@/lib/utils";
+import { CreatePromoDialog, DisablePromoButton } from "./referral-actions";
 
 export const metadata = { title: "Referrals" };
 const PAGE_SIZE = 25;
@@ -36,7 +37,11 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
 
   return (
     <>
-      <PageHeader title="Referrals & Promo Codes" description="Player referrals and campaign codes." />
+      <PageHeader
+        title="Referrals & Promo Codes"
+        description="Player referrals and campaign codes."
+        actions={<CreatePromoDialog />}
+      />
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (
@@ -51,6 +56,7 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                   <TableHead className="text-right">Bonus</TableHead>
                   <TableHead>Expires</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -66,6 +72,9 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                     <TableCell className="text-right font-mono text-xs">{formatMoneyDecimal(r.bonus_amount)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDateTime(r.expires_at)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDateTime(r.created_at)}</TableCell>
+                    <TableCell>
+                      <DisablePromoButton code={r.code} type={r.type} />
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

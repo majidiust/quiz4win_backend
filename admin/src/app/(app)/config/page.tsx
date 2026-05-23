@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatRelative } from "@/lib/utils";
+import { ConfigValueCell, MaintenanceModeToggle } from "./config-actions";
 
 export const metadata = { title: "App Config" };
 
@@ -18,9 +19,14 @@ export default async function AppConfigPage() {
     .order("key", { ascending: true });
   if (error) throw error;
 
+  const maintenanceRow = data?.find((c) => c.key === "maintenance_mode");
+  const maintenanceEnabled = maintenanceRow?.value === "true";
+
   return (
     <>
       <PageHeader title="App Config" description="Runtime configuration keys consumed by the mobile clients." />
+
+      <MaintenanceModeToggle enabled={maintenanceEnabled} />
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (
@@ -37,7 +43,9 @@ export default async function AppConfigPage() {
               {data.map((c) => (
                 <TableRow key={c.key}>
                   <TableCell className="font-mono text-xs">{c.key}</TableCell>
-                  <TableCell className="max-w-md truncate font-mono text-xs">{c.value}</TableCell>
+                  <TableCell>
+                    <ConfigValueCell configKey={c.key} value={c.value ?? ""} />
+                  </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{c.value_type}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatRelative(c.updated_at)}</TableCell>
                 </TableRow>
