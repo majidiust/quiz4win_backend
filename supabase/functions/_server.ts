@@ -115,11 +115,11 @@ function resolveService(pathname: string): string | null {
 const PORT = Number(Deno.env.get("PORT") ?? "8000");
 
 // ─── Request tracing ─────────────────────────────────────────────────────────
-// Verbose end-to-end tracing of every inbound request. Secrets (Authorization
-// values, apikeys, cookies, passwords, tokens) are NEVER printed in full — only
-// their presence, length, and a short non-sensitive prefix when applicable.
-// Disable in production by setting API_TRACE=off in the environment.
+// Verbose end-to-end tracing of every inbound request.
+// API_TRACE=off  → disable tracing entirely
+// API_TRACE_RAW=on → print bodies and headers completely unredacted (debug only!)
 const TRACE = (Deno.env.get("API_TRACE") ?? "on").toLowerCase() !== "off";
+const TRACE_RAW = (Deno.env.get("API_TRACE_RAW") ?? "off").toLowerCase() === "on";
 const TRACE_BODY_LIMIT = 4096; // bytes printed of any single body
 
 const SENSITIVE_HEADERS = new Set([
@@ -172,7 +172,7 @@ async function readBodyForTrace(req: Request): Promise<{ text: string; clone: Re
   const bytes = new Uint8Array(buf);
   const decoder = new TextDecoder("utf-8", { fatal: false });
   const fullText = decoder.decode(bytes.slice(0, TRACE_BODY_LIMIT));
-  const display = ct.includes("application/json") ? redactJsonBody(fullText) : fullText;
+  const display = (!TRACE_RAW && ct.includes("application/json")) ? redactJsonBody(fullText) : fullText;
   const suffix = bytes.byteLength > TRACE_BODY_LIMIT ? `…<truncated ${bytes.byteLength - TRACE_BODY_LIMIT}B>` : "";
   // Re-build a request with the same body so the downstream handler can still read it.
   const clone = new Request(req.url, {
@@ -198,7 +198,9 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
   // ── Trace inbound ────────────────────────────────────────────────────────
   let workingReq = req;
   if (TRACE) {
-    const headers = redactHeaders(req.headers);
+    const headers = TRACE_RAW
+      ? Object.fromEntries(req.headers.entries())
+      : redactHeaders(req.headers);
     const hasBody = req.method !== "GET" && req.method !== "HEAD";
     let bodyText = "";
     if (hasBody) {
@@ -239,7 +241,7 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
       if (ct.includes("application/json")) {
         const cloned = res.clone();
         const text = (await cloned.text()).slice(0, TRACE_BODY_LIMIT);
-        log(res.status, `body=${redactJsonBody(text)}`);
+        log(res.status, `body=${TRACE_RAW ? text : redactJsonBody(text)}`);
       } else {
         log(res.status, `content-type=${ct || "(none)"}`);
       }
