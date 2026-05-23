@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy/nginx/setup.sh
 #
-# Installs nginx configs for panel.quiz4win.com and api.quiz4win.com,
+# Installs nginx configs for panel.quiz4win.com, api.quiz4win.com, and app.quiz4win.com,
 # obtains Let's Encrypt TLS certificates via certbot (webroot method),
 # and reloads nginx.
 #
@@ -17,7 +17,8 @@
 set -euo pipefail
 
 # ─── Config ──────────────────────────────────────────────────────────────────
-DOMAINS=("panel.quiz4win.com" "api.quiz4win.com")
+DOMAINS=("panel.quiz4win.com" "api.quiz4win.com" "app.quiz4win.com")
+APP_WEBROOT="/var/www/app.quiz4win.com"   # serves Universal Link association files
 EMAIL="${CERTBOT_EMAIL:-}"               # set env var or pass below
 NGINX_CONF_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
@@ -47,9 +48,13 @@ if [[ -z "$EMAIL" ]]; then
 fi
 [[ "$EMAIL" == *@* ]] || die "Invalid email: $EMAIL"
 
-# ─── 1. Create webroot for ACME challenge ────────────────────────────────────
-info "Creating webroot $WEBROOT"
+# ─── 1. Create webroots ──────────────────────────────────────────────────────
+info "Creating ACME webroot $WEBROOT"
 mkdir -p "$WEBROOT"
+
+# Static root for Universal Link association files (iOS / Android deep links)
+info "Creating app static webroot $APP_WEBROOT/.well-known"
+mkdir -p "${APP_WEBROOT}/.well-known"
 
 # ─── 2. Install HTTP-only bootstrap configs (port 80 only) ───────────────────
 # We need nginx to serve /.well-known/acme-challenge/ BEFORE we have certs.
@@ -124,6 +129,11 @@ echo ""
 ok "Setup complete!"
 echo "  panel.quiz4win.com → https://panel.quiz4win.com  (→ 127.0.0.1:5800)"
 echo "  api.quiz4win.com   → https://api.quiz4win.com    (→ 127.0.0.1:5802)"
+echo "  app.quiz4win.com   → https://app.quiz4win.com    (→ 127.0.0.1:5801)"
+echo ""
+echo "  Universal Link files must be placed at:"
+echo "    ${APP_WEBROOT}/.well-known/apple-app-site-association"
+echo "    ${APP_WEBROOT}/.well-known/assetlinks.json"
 echo ""
 echo "  Start the Docker services if not already running:"
 echo "    docker compose up -d"
