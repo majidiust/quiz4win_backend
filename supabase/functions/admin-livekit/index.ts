@@ -10,6 +10,10 @@
  * POST   /admin/livekit/egress                      — Start egress (API #142)
  * DELETE /admin/livekit/egress/:egress_id           — Stop egress (API #143)
  * POST   /admin/livekit/webhook                     — LiveKit webhook (API #144)
+ * POST   /admin/livekit/rooms/:name/participants/:id/mute   — Mute / unmute track (API #184)
+ * GET    /admin/livekit/egress                      — List egress jobs (API #185)
+ * GET    /admin/livekit/egress/:egress_id           — Egress detail (API #186)
+ * POST   /admin/livekit/rooms/:name/send-data       — Send data to room (API #187)
  *
  * Rule compliance: R-01, R-03
  * Note: Full LiveKit integration requires @livekit/server-sdk and env secrets.
@@ -112,6 +116,26 @@ Deno.serve(async (req: Request) => {
       return successResponse({ message: `Participant ${subResourceId} removed from room ${resourceId}` });
     }
 
+    // POST /admin/livekit/rooms/:name/participants/:id/mute
+    if (resource === "rooms" && resourceId && subResource === "participants" && subResourceId && parts[4] === "mute" && req.method === "POST") {
+      if (!configured) return successResponse({ note: "LiveKit not configured" });
+      const { track_sid, muted } = await req.json();
+      if (!track_sid) return errorResponse("track_sid is required", 400);
+      await livekitFetch("/twirp/livekit.RoomService/MutePublishedTrack", "POST", { room: resourceId, identity: subResourceId, track_sid, muted: !!muted });
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: muted ? "participant_muted" : "participant_unmuted", target_type: "livekit_participant", target_id: subResourceId, details: { room: resourceId, track_sid }, created_at: new Date().toISOString() });
+      return successResponse({ message: `Participant ${subResourceId} ${muted ? "muted" : "unmuted"}` });
+    }
+
+    // POST /admin/livekit/rooms/:name/send-data
+    if (resource === "rooms" && resourceId && subResource === "send-data" && req.method === "POST") {
+      if (!configured) return successResponse({ note: "LiveKit not configured" });
+      const { payload, kind = "RELIABLE" } = await req.json();
+      if (!payload) return errorResponse("payload is required", 400);
+      const encoded = btoa(typeof payload === "string" ? payload : JSON.stringify(payload));
+      await livekitFetch("/twirp/livekit.RoomService/SendData", "POST", { room: resourceId, data: encoded, kind });
+      return successResponse({ message: `Data sent to room ${resourceId}` });
+    }
+
     // POST /admin/livekit/token
     if (resource === "token" && req.method === "POST") {
       // Full token generation requires @livekit/server-sdk AccessToken
@@ -124,6 +148,22 @@ Deno.serve(async (req: Request) => {
       const body = await req.json();
       const result = await livekitFetch("/twirp/livekit.Egress/StartRoomCompositeEgress", "POST", body);
       return successResponse({ egress: result }, 201);
+    }
+
+    // GET /admin/livekit/egress — list jobs
+    if (resource === "egress" && !resourceId && req.method === "GET") {
+      if (!configured) return successResponse({ note: "LiveKit not configured", items: [] });
+      const room = url.searchParams.get("room");
+      const result = await livekitFetch("/twirp/livekit.Egress/ListEgress", "POST", room ? { room_name: room } : {});
+      return successResponse({ items: result.items ?? [] });
+    }
+
+    // GET /admin/livekit/egress/:egress_id — detail
+    if (resource === "egress" && resourceId && req.method === "GET") {
+      if (!configured) return successResponse({ note: "LiveKit not configured" });
+      const result = await livekitFetch("/twirp/livekit.Egress/ListEgress", "POST", { egress_id: resourceId });
+      const item = (result.items ?? [])[0] ?? null;
+      return successResponse({ egress: item });
     }
 
     // DELETE /admin/livekit/egress/:egress_id
