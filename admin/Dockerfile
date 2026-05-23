@@ -25,6 +25,8 @@ ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Ensure public/ exists even if the directory was not committed
+RUN mkdir -p ./public
 RUN npm run build
 
 # ─── runner ──────────────────────────────────────────────────────────────────
