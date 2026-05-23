@@ -27,10 +27,11 @@ const handlers = new Map<string, Handler>();
 let currentService = "";
 
 // ─── Shim Deno.serve ─────────────────────────────────────────────────────────
+// In recent Deno versions `Deno.serve` is defined as a getter-only property, so
+// direct assignment throws. Use Object.defineProperty to override it.
 const realServe = Deno.serve.bind(Deno);
 
-// deno-lint-ignore no-explicit-any
-(Deno as any).serve = (...args: unknown[]): unknown => {
+const shimServe = (...args: unknown[]): unknown => {
   // Accepted call shapes:
   //   Deno.serve(handler)
   //   Deno.serve(options, handler)
@@ -59,6 +60,12 @@ const realServe = Deno.serve.bind(Deno);
   };
 };
 
+Object.defineProperty(Deno, "serve", {
+  value: shimServe,
+  configurable: true,
+  writable: true,
+});
+
 // ─── Discover and import every function ──────────────────────────────────────
 const FUNCTIONS_DIR = new URL(".", import.meta.url).pathname;
 const services: string[] = [];
@@ -86,8 +93,11 @@ for (const name of services) {
 currentService = "";
 
 // Restore the real Deno.serve for the dispatcher.
-// deno-lint-ignore no-explicit-any
-(Deno as any).serve = realServe;
+Object.defineProperty(Deno, "serve", {
+  value: realServe,
+  configurable: true,
+  writable: true,
+});
 
 console.log(`[api] loaded ${handlers.size} services:`, [...handlers.keys()].join(", "));
 
