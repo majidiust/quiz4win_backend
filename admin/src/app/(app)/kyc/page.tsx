@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
 import { DataTablePagination } from "@/components/data-table-pagination";
@@ -72,6 +73,7 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
                   <TableHead>Status</TableHead>
                   <TableHead>Submitted</TableHead>
                   <TableHead>Reviewed</TableHead>
+                  <TableHead className="text-right">Review</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -80,7 +82,7 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
                   return (
                     <TableRow key={k.id}>
                       <TableCell>
-                        <Link href={`/users/${k.user_id}`} className="hover:underline">
+                        <Link href={`/kyc/${k.id}`} className="hover:underline">
                           <div className="text-sm font-medium">{p?.full_name ?? "—"}</div>
                           <div className="text-xs text-muted-foreground">{p?.email}{p?.country ? ` · ${p.country}` : ""}</div>
                         </Link>
@@ -90,6 +92,13 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
                       <TableCell><StatusBadge value={k.status} /></TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(k.submitted_at)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(k.reviewed_at)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button asChild variant="ghost" size="sm">
+                          <Link href={`/kyc/${k.id}`}>
+                            {k.status === "pending" ? "Review" : "Open"} <ChevronRight className="size-3.5" />
+                          </Link>
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   );
                 })}
