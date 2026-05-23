@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatNumber } from "@/lib/utils";
+import { CreateQuestionDialog, BulkImportDialog } from "./create-question-dialog";
 
 export const metadata = { title: "Questions" };
 const PAGE_SIZE = 25;
@@ -50,7 +51,16 @@ export default async function QuestionsPage({ searchParams }: { searchParams: Pr
 
   return (
     <>
-      <PageHeader title="Questions" description="Question bank powering all quiz games." />
+      <PageHeader
+        title="Questions"
+        description="Question bank powering all quiz games."
+        actions={
+          <div className="flex items-center gap-2">
+            <BulkImportDialog />
+            <CreateQuestionDialog />
+          </div>
+        }
+      />
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
@@ -93,7 +103,9 @@ export default async function QuestionsPage({ searchParams }: { searchParams: Pr
               <TableBody>
                 {data.map((q) => (
                   <TableRow key={q.id}>
-                    <TableCell className="max-w-xl truncate text-sm">{q.text}</TableCell>
+                    <TableCell className="max-w-xl truncate text-sm">
+                      <Link href={`/questions/${q.id}`} className="hover:underline">{q.text}</Link>
+                    </TableCell>
                     <TableCell className="text-xs">{q.category}</TableCell>
                     <TableCell><StatusBadge value={q.difficulty} /></TableCell>
                     <TableCell className="text-xs uppercase">{q.language}</TableCell>
