@@ -58,6 +58,7 @@ Deno.serve(async (req: Request) => {
         options: { data: { full_name: name, referral_code: referral_code ?? null } },
       });
       if (error) {
+        console.warn(`[auth] signup failed for ${email}: ${error.message}`);
         if (error.message.toLowerCase().includes("already registered")) {
           return errorResponse("email_taken", 409);
         }
@@ -77,6 +78,7 @@ Deno.serve(async (req: Request) => {
       const supabase = getAnonClient(req);
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
+        console.warn(`[auth] signin failed for ${email}: ${error.message}`);
         if (error.message.toLowerCase().includes("invalid")) {
           return errorResponse("invalid_credentials", 401);
         }
