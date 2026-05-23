@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatNumber } from "@/lib/utils";
+import { CreateVoucherDialog } from "./create-voucher-dialog";
 
 export const metadata = { title: "Vouchers" };
 const PAGE_SIZE = 25;
@@ -41,7 +42,11 @@ export default async function VouchersPage({ searchParams }: { searchParams: Pro
 
   return (
     <>
-      <PageHeader title="Vouchers" description="Promo codes, partner offers, and free-entry vouchers." />
+      <PageHeader
+        title="Vouchers"
+        description="Promo codes, partner offers, and free-entry vouchers."
+        actions={<CreateVoucherDialog />}
+      />
 
       <Card className="overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
@@ -76,8 +81,12 @@ export default async function VouchersPage({ searchParams }: { searchParams: Pro
               <TableBody>
                 {data.map((v) => (
                   <TableRow key={v.id}>
-                    <TableCell className="font-mono text-xs">{v.code}</TableCell>
-                    <TableCell className="text-sm">{v.name}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      <Link href={`/vouchers/${v.id}`} className="hover:underline">{v.code}</Link>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <Link href={`/vouchers/${v.id}`} className="hover:underline">{v.name}</Link>
+                    </TableCell>
                     <TableCell className="text-xs capitalize">{v.type}</TableCell>
                     <TableCell className="text-xs">
                       <span className="capitalize">{v.reward_type?.replace(/_/g, " ") ?? "—"}</span>
