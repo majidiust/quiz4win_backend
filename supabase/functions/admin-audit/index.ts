@@ -1,7 +1,8 @@
 /**
  * Admin Audit Log Edge Function — Quiz4Win
  *
- * GET /admin/audit-log — Immutable admin audit log (API #152)
+ * GET /admin/audit-log       — Immutable admin audit log (API #152)
+ * GET /admin/audit-log/stats — Most active admins, top actions, last-24h count (row 172)
  *
  * Rule compliance: R-01, R-03, R-05 (append-only), super_admin only
  */
@@ -26,6 +27,36 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/audit-log/stats
+    if (path === "stats" && req.method === "GET") {
+      const day = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [total, last24h, recent] = await Promise.all([
+        admin.from("admin_audit_log").select("id", { count: "exact", head: true }),
+        admin.from("admin_audit_log").select("id", { count: "exact", head: true }).gte("created_at", day),
+        admin.from("admin_audit_log").select("admin_id, action, entity_type").gte("created_at", since30d),
+      ]);
+      const rows = (recent.data ?? []) as Array<{ admin_id: string; action: string; entity_type: string | null }>;
+      const byAdmin: Record<string, number> = {};
+      const byAction: Record<string, number> = {};
+      const byEntity: Record<string, number> = {};
+      for (const r of rows) {
+        byAdmin[r.admin_id] = (byAdmin[r.admin_id] ?? 0) + 1;
+        byAction[r.action] = (byAction[r.action] ?? 0) + 1;
+        if (r.entity_type) byEntity[r.entity_type] = (byEntity[r.entity_type] ?? 0) + 1;
+      }
+      const top = (m: Record<string, number>, n: number) =>
+        Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, n).map(([key, count]) => ({ key, count }));
+      return successResponse({
+        total: total.count ?? 0,
+        last_24h: last24h.count ?? 0,
+        events_30d: rows.length,
+        top_admins: top(byAdmin, 5),
+        top_actions: top(byAction, 5),
+        top_entities: top(byEntity, 5),
+      });
+    }
+
     if (!path && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
       const limit = Math.min(200, parseInt(url.searchParams.get("limit") ?? "50"));

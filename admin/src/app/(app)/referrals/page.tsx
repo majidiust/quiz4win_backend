@@ -1,7 +1,8 @@
-import { Link2 } from "lucide-react";
+import { Link2, Tag, Users, TrendingUp } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
+import { StatCard } from "@/components/stat-card";
 import { DataTablePagination } from "@/components/data-table-pagination";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -32,8 +33,18 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
     .range(from, to);
   if (sp.type) q = q.eq("type", sp.type);
 
-  const { data, count, error } = await q;
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [list, codesC, promoC, usesTotal, uses30dC, bonusPaidC] = await Promise.all([
+    q,
+    db.from("referral_codes").select("code", { count: "exact", head: true }),
+    db.from("referral_codes").select("code", { count: "exact", head: true }).eq("type", "promo"),
+    db.from("referral_uses").select("id", { count: "exact", head: true }),
+    db.from("referral_uses").select("id", { count: "exact", head: true }).gte("used_at", since),
+    db.from("referral_uses").select("id", { count: "exact", head: true }).eq("bonus_paid", true),
+  ]);
+  const { data, count, error } = list;
   if (error) throw error;
+  const conversionRate = (usesTotal.count ?? 0) ? (bonusPaidC.count ?? 0) / (usesTotal.count ?? 1) : 0;
 
   return (
     <>
@@ -42,6 +53,13 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
         description="Player referrals and campaign codes."
         actions={<CreatePromoDialog />}
       />
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total codes" value={formatNumber(codesC.count ?? 0)} icon={Tag} hint={`${formatNumber(promoC.count ?? 0)} promo`} />
+        <StatCard label="Total uses" value={formatNumber(usesTotal.count ?? 0)} icon={Users} hint="all time" />
+        <StatCard label="Uses · 30d" value={formatNumber(uses30dC.count ?? 0)} icon={Link2} hint="last 30 days" />
+        <StatCard label="Conversion" value={`${(conversionRate * 100).toFixed(1)}%`} icon={TrendingUp} hint="bonus paid / uses" />
+      </div>
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (

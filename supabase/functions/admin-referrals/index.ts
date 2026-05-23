@@ -4,6 +4,7 @@
  * GET    /admin/referrals               — List all referral codes (API #132)
  * POST   /admin/referrals/promo         — Create promo code (API #133)
  * DELETE /admin/referrals/promo/:code   — Deactivate promo code (API #134)
+ * GET    /admin/referrals/stats         — Program analytics (rows 102/161)
  *
  * Rule compliance: R-01, R-03
  */
@@ -29,6 +30,35 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/referrals/stats — program analytics
+    if (resource === "stats" && req.method === "GET") {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [codesCount, promoCount, usesTotal, uses30d, bonusPaid] = await Promise.all([
+        admin.from("referral_codes").select("code", { count: "exact", head: true }),
+        admin.from("referral_codes").select("code", { count: "exact", head: true }).eq("type", "promo"),
+        admin.from("referral_uses").select("id", { count: "exact", head: true }),
+        admin.from("referral_uses").select("id", { count: "exact", head: true }).gte("used_at", since),
+        admin.from("referral_uses").select("id", { count: "exact", head: true }).eq("bonus_paid", true),
+      ]);
+      const { data: topRows } = await admin
+        .from("referral_codes")
+        .select("code, type, use_count, campaign_name")
+        .order("use_count", { ascending: false })
+        .limit(5);
+      const totalUses = usesTotal.count ?? 0;
+      const paidUses = bonusPaid.count ?? 0;
+      const conversionRate = totalUses ? paidUses / totalUses : 0;
+      return successResponse({
+        total_codes: codesCount.count ?? 0,
+        promo_codes: promoCount.count ?? 0,
+        total_uses: totalUses,
+        uses_30d: uses30d.count ?? 0,
+        bonus_paid_count: paidUses,
+        conversion_rate: Number(conversionRate.toFixed(4)),
+        top_codes: topRows ?? [],
+      });
+    }
+
     // GET /admin/referrals — list all codes
     if (!resource && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));

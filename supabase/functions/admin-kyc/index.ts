@@ -2,6 +2,7 @@
  * Admin KYC Queue Edge Function — Quiz4Win
  *
  * GET /admin/kyc/pending — List pending KYC submissions (API #81)
+ * GET /admin/kyc/stats   — Queue stats: pending/verified/rejected counts, avg review time, rejection rate (row 112)
  *
  * Rule compliance: R-01, R-03, admin-only
  */
@@ -51,6 +52,32 @@ Deno.serve(async (req: Request) => {
           total: count ?? 0,
           total_pages: Math.ceil((count ?? 0) / limit),
         },
+      });
+    }
+
+    // GET /admin/kyc/stats
+    if (path === "stats" && req.method === "GET") {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [pending, verified, rejected, recent] = await Promise.all([
+        admin.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        admin.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "verified"),
+        admin.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "rejected"),
+        admin.from("kyc_requests").select("submitted_at, reviewed_at, status").gte("reviewed_at", since).not("reviewed_at", "is", null),
+      ]);
+
+      const reviewed = (recent.data ?? []) as Array<{ submitted_at: string; reviewed_at: string; status: string }>;
+      const totalMs = reviewed.reduce((acc, r) => acc + (new Date(r.reviewed_at).getTime() - new Date(r.submitted_at).getTime()), 0);
+      const avgReviewMs = reviewed.length ? totalMs / reviewed.length : 0;
+      const rejectedCount = reviewed.filter((r) => r.status === "rejected").length;
+      const rejectionRate = reviewed.length ? rejectedCount / reviewed.length : 0;
+
+      return successResponse({
+        pending: pending.count ?? 0,
+        verified: verified.count ?? 0,
+        rejected: rejected.count ?? 0,
+        avg_review_seconds: Math.round(avgReviewMs / 1000),
+        rejection_rate_30d: Number(rejectionRate.toFixed(4)),
+        reviewed_30d: reviewed.length,
       });
     }
 

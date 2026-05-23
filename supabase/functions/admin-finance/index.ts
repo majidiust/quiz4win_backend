@@ -9,6 +9,8 @@
  * GET  /admin/finance/transactions             — All transactions (API #119)
  * GET  /admin/finance/aml-flags                — AML flags (API #120)
  * POST /admin/finance/aml-flags/:id/review     — Review flag (API #121)
+ * GET  /admin/finance/withdrawals/stats        — Queue stats (row 114)
+ * GET  /admin/finance/aml-flags/stats          — AML stats (row 119)
  *
  * Rule compliance: R-01, R-02, R-03, R-05 (append-only), R-08
  */
@@ -61,6 +63,30 @@ Deno.serve(async (req: Request) => {
       return successResponse({ flags: data ?? [] });
     }
 
+    // GET /admin/finance/aml-flags/stats
+    if (resource === "aml-flags" && resourceId === "stats" && req.method === "GET") {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [openCount, escalatedCount, clearedCount, openSum, recent] = await Promise.all([
+        admin.from("aml_flags").select("id", { count: "exact", head: true }).eq("status", "open"),
+        admin.from("aml_flags").select("id", { count: "exact", head: true }).eq("status", "escalated"),
+        admin.from("aml_flags").select("id", { count: "exact", head: true }).eq("status", "cleared"),
+        admin.from("aml_flags").select("total_24h_usd").eq("status", "open"),
+        admin.from("aml_flags").select("flagged_at, reviewed_at").gte("reviewed_at", since).not("reviewed_at", "is", null),
+      ]);
+      const totalOpenUsd = ((openSum.data ?? []) as Array<{ total_24h_usd: string | number }>).reduce((a, r) => a + Number(r.total_24h_usd ?? 0), 0);
+      const reviewed = (recent.data ?? []) as Array<{ flagged_at: string; reviewed_at: string }>;
+      const totalMs = reviewed.reduce((a, r) => a + (new Date(r.reviewed_at).getTime() - new Date(r.flagged_at).getTime()), 0);
+      const avgResolutionSeconds = reviewed.length ? Math.round(totalMs / 1000 / reviewed.length) : 0;
+      return successResponse({
+        open: openCount.count ?? 0,
+        escalated: escalatedCount.count ?? 0,
+        cleared: clearedCount.count ?? 0,
+        total_open_usd: Number(totalOpenUsd.toFixed(2)),
+        avg_resolution_seconds: avgResolutionSeconds,
+        resolved_30d: reviewed.length,
+      });
+    }
+
     // POST /admin/finance/aml-flags/:id/review
     if (resource === "aml-flags" && resourceId && action === "review" && req.method === "POST") {
       const { decision, notes } = await req.json();
@@ -72,6 +98,32 @@ Deno.serve(async (req: Request) => {
 
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: `aml_flag_${decision}d`, target_type: "aml_flag", target_id: resourceId, details: { notes }, created_at: new Date().toISOString() });
       return successResponse({ message: `AML flag ${decision}d` });
+    }
+
+    // GET /admin/finance/withdrawals/stats
+    if (resource === "withdrawals" && resourceId === "stats" && req.method === "GET") {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [pending, processing, completed, rejected, pendingSum, recent] = await Promise.all([
+        admin.from("withdrawals").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        admin.from("withdrawals").select("id", { count: "exact", head: true }).eq("status", "processing"),
+        admin.from("withdrawals").select("id", { count: "exact", head: true }).eq("status", "completed"),
+        admin.from("withdrawals").select("id", { count: "exact", head: true }).eq("status", "rejected"),
+        admin.from("withdrawals").select("amount").eq("status", "pending"),
+        admin.from("withdrawals").select("requested_at, completed_at").gte("completed_at", since).not("completed_at", "is", null),
+      ]);
+      const totalPendingUsd = ((pendingSum.data ?? []) as Array<{ amount: string | number }>).reduce((a, r) => a + Number(r.amount ?? 0), 0);
+      const completedRows = (recent.data ?? []) as Array<{ requested_at: string; completed_at: string }>;
+      const totalMs = completedRows.reduce((a, r) => a + (new Date(r.completed_at).getTime() - new Date(r.requested_at).getTime()), 0);
+      const avgProcessingSeconds = completedRows.length ? Math.round(totalMs / 1000 / completedRows.length) : 0;
+      return successResponse({
+        pending: pending.count ?? 0,
+        processing: processing.count ?? 0,
+        completed: completed.count ?? 0,
+        rejected: rejected.count ?? 0,
+        total_pending_usd: Number(totalPendingUsd.toFixed(2)),
+        avg_processing_seconds: avgProcessingSeconds,
+        completed_30d: completedRows.length,
+      });
     }
 
     // GET /admin/finance/withdrawals/pending

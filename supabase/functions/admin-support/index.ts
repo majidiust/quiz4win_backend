@@ -6,6 +6,7 @@
  * POST  /admin/support/tickets/:id/reply   — Reply (API #125)
  * PATCH /admin/support/tickets/:id/assign  — Assign (API #126)
  * PATCH /admin/support/tickets/:id/status  — Update status (API #127)
+ * GET   /admin/support/stats               — Ticket stats by status/category (row 148)
  *
  * Rule compliance: R-01, R-03
  */
@@ -19,6 +20,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
 
   const url = new URL(req.url);
+  const isStats = url.pathname.endsWith("/admin/support/stats");
   const parts = url.pathname.replace(/^\/admin\/support\/tickets\/?/, "").split("/").filter(Boolean);
   const ticketId = parts[0] ?? null;
   const action = parts[1] ?? null;
@@ -31,8 +33,34 @@ Deno.serve(async (req: Request) => {
   const admin = getAdminClient();
 
   try {
+    // GET /admin/support/stats
+    if (isStats && req.method === "GET") {
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const [open, inProgress, resolved, closed, recent] = await Promise.all([
+        admin.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "open"),
+        admin.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "in_progress"),
+        admin.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "resolved"),
+        admin.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "closed"),
+        admin.from("support_tickets").select("category, status, created_at, updated_at").gte("updated_at", since),
+      ]);
+      const rows = (recent.data ?? []) as Array<{ category: string; status: string; created_at: string; updated_at: string }>;
+      const byCategory: Record<string, number> = {};
+      for (const r of rows) byCategory[r.category] = (byCategory[r.category] ?? 0) + 1;
+      const resolvedRows = rows.filter((r) => r.status === "resolved" || r.status === "closed");
+      const totalMs = resolvedRows.reduce((a, r) => a + (new Date(r.updated_at).getTime() - new Date(r.created_at).getTime()), 0);
+      const avgResolutionSeconds = resolvedRows.length ? Math.round(totalMs / 1000 / resolvedRows.length) : 0;
+      return successResponse({
+        open: open.count ?? 0,
+        in_progress: inProgress.count ?? 0,
+        resolved: resolved.count ?? 0,
+        closed: closed.count ?? 0,
+        avg_resolution_seconds: avgResolutionSeconds,
+        by_category_30d: byCategory,
+      });
+    }
+
     // GET /admin/support/tickets
-    if (!ticketId && req.method === "GET") {
+    if (!isStats && !ticketId && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
       const limit = Math.min(100, parseInt(url.searchParams.get("limit") ?? "20"));
       const status = url.searchParams.get("status");

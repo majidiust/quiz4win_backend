@@ -1,12 +1,13 @@
-import { History } from "lucide-react";
+import { History, Activity, Users, FileText } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { StatCard } from "@/components/stat-card";
 import { DataTablePagination } from "@/components/data-table-pagination";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
-import { formatRelative } from "@/lib/utils";
+import { formatNumber, formatRelative } from "@/lib/utils";
 
 export const metadata = { title: "Audit Log" };
 const PAGE_SIZE = 50;
@@ -31,12 +32,32 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
   if (sp.entity_type) q = q.eq("entity_type", sp.entity_type);
   if (sp.action) q = q.eq("action", sp.action);
 
-  const { data, count, error } = await q;
+  const day = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [list, totalC, last24C, recent] = await Promise.all([
+    q,
+    db.from("admin_audit_log").select("id", { count: "exact", head: true }),
+    db.from("admin_audit_log").select("id", { count: "exact", head: true }).gte("created_at", day),
+    db.from("admin_audit_log").select("admin_id, action").gte("created_at", since30d),
+  ]);
+  const { data, count, error } = list;
   if (error) throw error;
+  const rows = (recent.data ?? []) as Array<{ admin_id: string; action: string }>;
+  const byAction: Record<string, number> = {};
+  const adminSet = new Set<string>();
+  for (const r of rows) { byAction[r.action] = (byAction[r.action] ?? 0) + 1; adminSet.add(r.admin_id); }
+  const topAction = Object.entries(byAction).sort((a, b) => b[1] - a[1])[0];
 
   return (
     <>
       <PageHeader title="Audit Log" description="Append-only record of every admin action." />
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Total events" value={formatNumber(totalC.count ?? 0)} icon={History} hint="all time" />
+        <StatCard label="Last 24h" value={formatNumber(last24C.count ?? 0)} icon={Activity} hint="recent activity" />
+        <StatCard label="Active admins · 30d" value={formatNumber(adminSet.size)} icon={Users} hint={`${rows.length} events`} />
+        <StatCard label="Top action" value={topAction ? topAction[0] : "—"} icon={FileText} hint={topAction ? `${formatNumber(topAction[1])} · 30d` : "no activity"} />
+      </div>
 
       <Card className="overflow-hidden">
         {data && data.length > 0 ? (

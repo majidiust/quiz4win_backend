@@ -1,14 +1,22 @@
 import Link from "next/link";
-import { LifeBuoy } from "lucide-react";
+import { LifeBuoy, Inbox, CheckCircle2, Clock } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
+import { StatCard } from "@/components/stat-card";
 import { DataTablePagination } from "@/components/data-table-pagination";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
-import { formatRelative } from "@/lib/utils";
+import { formatNumber, formatRelative } from "@/lib/utils";
+
+function formatDuration(sec: number): string {
+  if (!sec) return "—";
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86400) return `${(sec / 3600).toFixed(1)}h`;
+  return `${(sec / 86400).toFixed(1)}d`;
+}
 
 export const metadata = { title: "Support Tickets" };
 const PAGE_SIZE = 25;
@@ -34,14 +42,32 @@ export default async function SupportPage({ searchParams }: { searchParams: Prom
   if (sp.status) q = q.eq("status", sp.status);
   if (sp.category) q = q.eq("category", sp.category);
 
-  const { data, count, error } = await q;
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [list, openC, inProgC, resolvedC, recent] = await Promise.all([
+    q,
+    db.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "open"),
+    db.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "in_progress"),
+    db.from("support_tickets").select("id", { count: "exact", head: true }).eq("status", "resolved"),
+    db.from("support_tickets").select("status, created_at, updated_at").gte("updated_at", since).in("status", ["resolved", "closed"]),
+  ]);
+  const { data, count, error } = list;
   if (error) throw error;
+  const reslv = (recent.data ?? []) as Array<{ created_at: string; updated_at: string }>;
+  const totalMs = reslv.reduce((a, r) => a + (new Date(r.updated_at).getTime() - new Date(r.created_at).getTime()), 0);
+  const avgResSec = reslv.length ? Math.round(totalMs / 1000 / reslv.length) : 0;
 
   const statuses = ["open", "in_progress", "resolved", "closed"];
 
   return (
     <>
       <PageHeader title="Support Tickets" description="Player conversations awaiting response." />
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Open" value={formatNumber(openC.count ?? 0)} icon={Inbox} hint="awaiting first response" />
+        <StatCard label="In progress" value={formatNumber(inProgC.count ?? 0)} icon={LifeBuoy} hint="with agent" />
+        <StatCard label="Resolved" value={formatNumber(resolvedC.count ?? 0)} icon={CheckCircle2} hint="all time" />
+        <StatCard label="Avg resolution" value={formatDuration(avgResSec)} icon={Clock} hint={`${reslv.length} resolved · 30d`} />
+      </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Link href="/support" className={`rounded-md border px-3 py-1 text-xs ${!sp.status ? "bg-muted" : "text-muted-foreground"}`}>All</Link>

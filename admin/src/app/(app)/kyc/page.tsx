@@ -1,15 +1,23 @@
 import Link from "next/link";
-import { ShieldCheck, ChevronRight } from "lucide-react";
+import { ShieldCheck, ChevronRight, Clock, CheckCircle2, XCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
+import { StatCard } from "@/components/stat-card";
 import { DataTablePagination } from "@/components/data-table-pagination";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
-import { formatRelative } from "@/lib/utils";
+import { formatNumber, formatRelative } from "@/lib/utils";
+
+function formatDuration(sec: number): string {
+  if (!sec) return "—";
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86400) return `${(sec / 3600).toFixed(1)}h`;
+  return `${(sec / 86400).toFixed(1)}d`;
+}
 
 export const metadata = { title: "KYC Queue" };
 
@@ -26,16 +34,28 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
   const to = from + PAGE_SIZE - 1;
 
   const db = createSupabaseAdminClient();
-  const { data, count, error } = await db
-    .from("kyc_requests")
-    .select(
-      "id, user_id, doc_type, status, attempt_number, submitted_at, reviewed_at, profiles!kyc_requests_user_id_fkey(email, full_name, country)",
-      { count: "exact" },
-    )
-    .eq("status", status)
-    .order("submitted_at", { ascending: false })
-    .range(from, to);
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const [list, pendingC, verifiedC, rejectedC, reviewed] = await Promise.all([
+    db
+      .from("kyc_requests")
+      .select(
+        "id, user_id, doc_type, status, attempt_number, submitted_at, reviewed_at, profiles!kyc_requests_user_id_fkey(email, full_name, country)",
+        { count: "exact" },
+      )
+      .eq("status", status)
+      .order("submitted_at", { ascending: false })
+      .range(from, to),
+    db.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+    db.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "verified"),
+    db.from("kyc_requests").select("id", { count: "exact", head: true }).eq("status", "rejected"),
+    db.from("kyc_requests").select("submitted_at, reviewed_at, status").gte("reviewed_at", since).not("reviewed_at", "is", null),
+  ]);
+  const { data, count, error } = list;
   if (error) throw error;
+  const reviewedRows = (reviewed.data ?? []) as Array<{ submitted_at: string; reviewed_at: string; status: string }>;
+  const totalMs = reviewedRows.reduce((a, r) => a + (new Date(r.reviewed_at).getTime() - new Date(r.submitted_at).getTime()), 0);
+  const avgReviewSec = reviewedRows.length ? Math.round(totalMs / 1000 / reviewedRows.length) : 0;
+  const rejectionRate = reviewedRows.length ? reviewedRows.filter((r) => r.status === "rejected").length / reviewedRows.length : 0;
 
   const tabs: { key: string; label: string }[] = [
     { key: "pending", label: "Pending" },
@@ -46,6 +66,13 @@ export default async function KycPage({ searchParams }: { searchParams: Promise<
   return (
     <>
       <PageHeader title="KYC Queue" description="Identity verification submissions awaiting decision." />
+
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="Pending" value={formatNumber(pendingC.count ?? 0)} icon={ShieldCheck} hint="awaiting review" />
+        <StatCard label="Verified" value={formatNumber(verifiedC.count ?? 0)} icon={CheckCircle2} hint="all time" />
+        <StatCard label="Rejected" value={formatNumber(rejectedC.count ?? 0)} icon={XCircle} hint={`${(rejectionRate * 100).toFixed(1)}% rejection · 30d`} />
+        <StatCard label="Avg review time" value={formatDuration(avgReviewSec)} icon={Clock} hint={`${reviewedRows.length} reviewed · 30d`} />
+      </div>
 
       <div className="mb-3 inline-flex rounded-md border p-0.5 text-sm">
         {tabs.map((t) => (
