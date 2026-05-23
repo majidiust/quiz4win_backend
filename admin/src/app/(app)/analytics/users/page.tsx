@@ -49,7 +49,7 @@ export default async function UserAnalyticsPage({ searchParams }: { searchParams
               data={data.series}
               dataKey="signups"
               color="var(--chart-1)"
-              valueFormatter={(v) => formatNumber(v)}
+              valueFormat="number"
             />
           </CardContent>
         </Card>

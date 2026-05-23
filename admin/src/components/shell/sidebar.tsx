@@ -4,11 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { type NavSection } from "@/lib/nav";
+import { filterNavByRole } from "@/lib/nav";
+import type { AdminRole } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
 
-export function Sidebar({ sections }: { sections: NavSection[] }) {
+export function Sidebar({ role }: { role: AdminRole }) {
   const pathname = usePathname();
+  const sections = filterNavByRole(role);
 
   return (
     <aside className="hidden w-64 shrink-0 border-r bg-sidebar text-sidebar-foreground lg:flex lg:flex-col">

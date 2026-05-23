@@ -5,6 +5,9 @@
  * POST  /admin/auth/token                   — Admin token refresh (API #59)
  * POST  /admin/auth/signout                 — Admin sign out (API #60)
  * GET   /admin/auth/me                      — Get admin profile (API #61)
+ * PATCH /admin/auth/me                      — Update own display name
+ * POST  /admin/auth/me/password             — Change own password
+ * POST  /admin/auth/me/mfa                  — Set own MFA enabled flag
  * GET   /admin/auth/admins                  — List admin users (API #62)
  * POST  /admin/auth/admins                  — Create admin user (API #63)
  * PATCH /admin/auth/admins/:admin_id        — Update admin user (API #64)
@@ -75,12 +78,87 @@ Deno.serve(async (req: Request) => {
     }
 
     // GET /admin/auth/me
-    if (resource === "me" && req.method === "GET") {
+    if (resource === "me" && !parts[1] && req.method === "GET") {
       const { user, error: authErr } = await validateJWT(req);
       if (authErr || !user) return errorResponse("unauthorized", 401);
       const { adminUser, error: adminErr } = await requireAdminRole(user.id);
       if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
       return successResponse({ admin: adminUser });
+    }
+
+    // PATCH /admin/auth/me — update own display name
+    if (resource === "me" && !parts[1] && req.method === "PATCH") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      const { name } = await req.json();
+      if (!name || typeof name !== "string" || !name.trim()) return errorResponse("name is required", 400);
+
+      const { data, error } = await admin.from("admin_users")
+        .update({ name: name.trim(), updated_at: new Date().toISOString() })
+        .eq("id", user.id)
+        .select("id, name, email, role")
+        .single();
+      if (error) return errorResponse(sanitizeError(error), 400);
+
+      await admin.from("admin_audit_log").insert({
+        admin_id: user.id, action: "profile_updated", target_type: "admin_user",
+        target_id: user.id, details: { name: name.trim() }, created_at: new Date().toISOString(),
+      });
+      return successResponse({ admin: data });
+    }
+
+    // POST /admin/auth/me/password — change own password
+    if (resource === "me" && parts[1] === "password" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      const { current_password, new_password } = await req.json();
+      if (!current_password || !new_password) return errorResponse("current_password and new_password are required", 400);
+      if (typeof new_password !== "string" || new_password.length < 8) return errorResponse("new_password must be at least 8 characters", 400);
+
+      // Re-authenticate with the current password.
+      const verify = getAnonClient(req);
+      const { error: signInErr } = await verify.auth.signInWithPassword({
+        email: adminUser.email as string,
+        password: current_password,
+      });
+      if (signInErr) return errorResponse("current password is incorrect", 401);
+
+      const { error: updErr } = await admin.auth.admin.updateUserById(user.id, { password: new_password });
+      if (updErr) return errorResponse(sanitizeError(updErr), 400);
+
+      await admin.from("admin_audit_log").insert({
+        admin_id: user.id, action: "password_changed", target_type: "admin_user",
+        target_id: user.id, created_at: new Date().toISOString(),
+      });
+      return successResponse({ message: "Password changed" });
+    }
+
+    // POST /admin/auth/me/mfa — set own MFA enabled flag (after client-side enroll/verify or unenroll)
+    if (resource === "me" && parts[1] === "mfa" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+      const { adminUser, error: adminErr } = await requireAdminRole(user.id);
+      if (adminErr || !adminUser) return errorResponse(adminErr ?? "forbidden", 403);
+
+      const { enabled } = await req.json();
+      if (typeof enabled !== "boolean") return errorResponse("enabled (boolean) is required", 400);
+
+      const { error } = await admin.from("admin_users")
+        .update({ mfa_enabled: enabled, updated_at: new Date().toISOString() })
+        .eq("id", user.id);
+      if (error) return errorResponse(sanitizeError(error), 400);
+
+      await admin.from("admin_audit_log").insert({
+        admin_id: user.id, action: enabled ? "mfa_enabled" : "mfa_disabled",
+        target_type: "admin_user", target_id: user.id, created_at: new Date().toISOString(),
+      });
+      return successResponse({ message: enabled ? "MFA enabled" : "MFA disabled" });
     }
 
     // GET /admin/auth/admins — super_admin only

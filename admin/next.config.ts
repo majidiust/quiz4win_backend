@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   typedRoutes: false,
+  output: "standalone",
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "*.supabase.co" },

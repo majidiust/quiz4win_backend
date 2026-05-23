@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+node_modules
+admin/node_modules
+admin/.next
+.env
+.env.local
+.env.*.local
+.tmp_*
+*.log
+project-brain
+agents
+agents.md
+README.md

@@ -56,7 +56,7 @@ export default async function FinanceAnalyticsPage({ searchParams }: { searchPar
               data={data.series}
               dataKey="topups"
               color="var(--chart-1)"
-              valueFormatter={(v) => formatMoneyDecimal(v)}
+              valueFormat="money"
             />
           </CardContent>
         </Card>

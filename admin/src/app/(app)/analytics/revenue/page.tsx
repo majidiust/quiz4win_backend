@@ -59,7 +59,7 @@ export default async function RevenueAnalyticsPage({ searchParams }: { searchPar
               data={data.series}
               dataKey="revenue"
               color="var(--chart-1)"
-              valueFormatter={(v) => formatMoneyDecimal(v)}
+              valueFormat="money"
             />
           </CardContent>
         </Card>

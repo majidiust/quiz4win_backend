@@ -53,7 +53,7 @@ export default async function GamesAnalyticsPage({ searchParams }: { searchParam
               data={data.series}
               dataKey="games"
               color="var(--chart-2)"
-              valueFormatter={(v) => formatNumber(v)}
+              valueFormat="number"
             />
           </CardContent>
         </Card>

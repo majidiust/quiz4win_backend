@@ -72,7 +72,7 @@ export default async function DashboardPage() {
             <CardDescription>Daily new player registrations</CardDescription>
           </CardHeader>
           <CardContent className="h-64">
-            <TrendChart data={series} dataKey="signups" color="var(--chart-1)" valueFormatter={(v) => formatNumber(v)} />
+            <TrendChart data={series} dataKey="signups" color="var(--chart-1)" valueFormat="number" />
           </CardContent>
         </Card>
         <Card>
@@ -85,7 +85,7 @@ export default async function DashboardPage() {
               data={series}
               dataKey="topups"
               color="var(--chart-2)"
-              valueFormatter={(v) => formatMoneyDecimal(v)}
+              valueFormat="money"
             />
           </CardContent>
         </Card>

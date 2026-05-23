@@ -1,15 +1,17 @@
 "use client";
 
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { formatMoneyDecimal, formatNumber } from "@/lib/utils";
 
 interface TrendChartProps {
   data: readonly object[];
   dataKey: string;
   color: string;
-  valueFormatter: (n: number) => string;
+  valueFormat: "number" | "money";
 }
 
-export function TrendChart({ data, dataKey, color, valueFormatter }: TrendChartProps) {
+export function TrendChart({ data, dataKey, color, valueFormat }: TrendChartProps) {
+  const valueFormatter = valueFormat === "money" ? formatMoneyDecimal : formatNumber;
   const id = `g-${String(dataKey)}`;
   return (
     <ResponsiveContainer width="100%" height="100%">

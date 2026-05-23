@@ -43,7 +43,7 @@ export async function getRevenueAnalytics(range: DateRange): Promise<RevenueAnal
   const db = createSupabaseAdminClient();
   const { data, error } = await db
     .from("transactions")
-    .select("amount, currency, created_at")
+    .select("amount, created_at")
     .eq("type", "topup")
     .eq("status", "completed")
     .gte("created_at", range.from)
@@ -55,9 +55,8 @@ export async function getRevenueAnalytics(range: DateRange): Promise<RevenueAnal
   let total = 0;
   for (const row of data ?? []) {
     const amount = Number.parseFloat((row as { amount: string | null }).amount ?? "0");
-    const cur = (row as { currency: string | null }).currency ?? "USD";
     const day = (row as { created_at: string }).created_at.slice(0, 10);
-    byCurrency[cur] = (byCurrency[cur] ?? 0) + amount;
+    byCurrency.USD = (byCurrency.USD ?? 0) + amount;
     if (byDay.has(day)) byDay.set(day, (byDay.get(day) ?? 0) + amount);
     total += amount;
   }

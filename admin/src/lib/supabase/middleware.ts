@@ -42,12 +42,30 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Signed in on /login → bounce to dashboard
-  if (user && isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
-    url.searchParams.delete("redirect");
-    return NextResponse.redirect(url);
+  if (user) {
+    // Check Authentication Assurance Level.
+    // aal1 = password only; aal2 = password + verified TOTP factor.
+    // If the user has a verified TOTP factor, nextLevel will be "aal2".
+    // We must block access to protected routes until aal2 is reached.
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    const needsMfa = aal?.nextLevel === "aal2" && aal?.currentLevel !== "aal2";
+
+    if (needsMfa && !isAuthRoute) {
+      // Session exists but second factor not yet verified → send to login MFA step.
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.searchParams.set("mfa", "required");
+      url.searchParams.set("redirect", pathname);
+      return NextResponse.redirect(url);
+    }
+
+    // Fully authenticated (no MFA required, or MFA already verified) on /login → dashboard.
+    if (!needsMfa && isAuthRoute) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/dashboard";
+      url.searchParams.delete("redirect");
+      return NextResponse.redirect(url);
+    }
   }
 
   return response;
