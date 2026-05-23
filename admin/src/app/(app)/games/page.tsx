@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatNumber } from "@/lib/utils";
+import { CreateGameDialog } from "./create-game-dialog";
 
 export const metadata = { title: "Games" };
 const PAGE_SIZE = 25;
@@ -40,7 +41,7 @@ export default async function GamesPage({ searchParams }: { searchParams: Promis
 
   return (
     <>
-      <PageHeader title="Games" description="All games — scheduled, live, and historical." />
+      <PageHeader title="Games" description="All games — scheduled, live, and historical." actions={<CreateGameDialog />} />
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Link href="/games" className={`rounded-md border px-3 py-1 text-xs capitalize ${!sp.status ? "bg-muted" : "text-muted-foreground"}`}>All</Link>
@@ -74,8 +75,8 @@ export default async function GamesPage({ searchParams }: { searchParams: Promis
                 {data.map((g) => (
                   <TableRow key={g.id}>
                     <TableCell>
-                      <Link href={`/games/${g.id}`} className="hover:underline">
-                        <div className="text-sm font-medium">{g.title}</div>
+                      <Link href={`/games/${g.id}`} className="group hover:underline">
+                        <div className="text-sm font-medium group-hover:underline">{g.title}</div>
                         <div className="text-xs text-muted-foreground">{g.category ?? "—"}</div>
                       </Link>
                     </TableCell>
