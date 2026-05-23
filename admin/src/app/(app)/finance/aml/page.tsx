@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatMoneyDecimal, formatRelative } from "@/lib/utils";
+import { AmlReview } from "./aml-review";
 
 export const metadata = { title: "AML Flags" };
 
@@ -65,6 +66,7 @@ export default async function AmlPage({ searchParams }: { searchParams: Promise<
                   <TableHead>Note</TableHead>
                   <TableHead>Flagged</TableHead>
                   <TableHead>Reviewed</TableHead>
+                  {status === "open" ? <TableHead className="text-right">Actions</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -83,6 +85,9 @@ export default async function AmlPage({ searchParams }: { searchParams: Promise<
                       <TableCell className="max-w-xs truncate text-xs text-muted-foreground">{a.review_note ?? "—"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(a.flagged_at)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(a.reviewed_at)}</TableCell>
+                      {status === "open" ? (
+                        <TableCell className="text-right"><AmlReview flagId={a.id} /></TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })}
