@@ -1,5 +1,7 @@
 # Quiz4Win Backend — AI Agent Change Log
 
+[2026-05-23] [A-01] [BUILD] Recovery/invite redirectTo now points at https://app.quiz4win.com/auth/reset-password so password-reset emails open in the Expo mobile app via Universal Link. Added appUrl() helper in auth-users.ts reading APP_URL env var (server-only, default https://app.quiz4win.com). Added APP_URL to docker-compose.yml admin service. Magic-link redirectTo unchanged (stays on admin panel for staff).
+
 Last updated: 2026-05-22
 Owner: A-02 (Project Memory Guardian)
 

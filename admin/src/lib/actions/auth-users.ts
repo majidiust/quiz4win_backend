@@ -214,10 +214,18 @@ export async function revokeAllSessions(input: z.infer<typeof DeleteSchema>): Pr
 
 const LinkSchema = z.object({ id: z.string().uuid(), type: z.enum(["recovery", "magiclink"]) });
 
-/** Base URL of this admin panel, used to build per-link redirect URLs. */
+/** Base URL of this admin panel, used to build staff-facing redirect URLs. */
 function adminUrl() {
   const base = process.env.NEXT_PUBLIC_ADMIN_URL ?? "";
   return base.replace(/\/$/, ""); // strip trailing slash
+}
+
+/** Base URL of the user-facing mobile/web app (https://app.quiz4win.com).
+ *  Used as redirectTo for end-user emails (recovery, invite) so the link
+ *  opens the Expo app via Universal Link, or falls back to the web app. */
+function appUrl() {
+  const base = process.env.APP_URL ?? "https://app.quiz4win.com";
+  return base.replace(/\/$/, "");
 }
 
 export async function sendAuthLink(input: z.infer<typeof LinkSchema>): Promise<ActionResult> {
@@ -229,10 +237,11 @@ export async function sendAuthLink(input: z.infer<typeof LinkSchema>): Promise<A
   const { data: target } = await db.auth.admin.getUserById(parsed.data.id);
   if (!target.user?.email) return { ok: false, message: "User has no email" };
 
-  // Point each link type to the appropriate handler in this panel.
+  // Recovery links go to the user-facing app (opens in Expo via Universal Link).
+  // Magic-link is used for staff and stays on the admin panel.
   const redirectTo =
     parsed.data.type === "recovery"
-      ? `${adminUrl()}/auth/reset-password`
+      ? `${appUrl()}/auth/reset-password`
       : `${adminUrl()}/login`;
 
   const { error } = await db.auth.admin.generateLink({
@@ -257,7 +266,7 @@ export async function inviteUserByEmail(input: z.infer<typeof InviteSchema>): Pr
 
   const db = createSupabaseAdminClient();
   const { data, error } = await db.auth.admin.inviteUserByEmail(parsed.data.email, {
-    redirectTo: `${adminUrl()}/auth/reset-password`,
+    redirectTo: `${appUrl()}/auth/reset-password`,
   });
   if (error || !data.user) return { ok: false, message: error?.message ?? "Failed to invite user" };
 
