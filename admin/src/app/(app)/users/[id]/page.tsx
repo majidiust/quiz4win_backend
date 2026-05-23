@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ShieldCheck, Wallet, Trophy, AlertOctagon } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Wallet, Trophy, AlertOctagon, Gamepad2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, initials } from "@/lib/utils";
+import { UserActions } from "./user-actions";
 
 export const metadata = { title: "Player profile" };
 
@@ -19,13 +20,19 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const db = createSupabaseAdminClient();
 
-  const [{ data: user }, { data: txs }] = await Promise.all([
+  const [{ data: user }, { data: txs }, { data: games }] = await Promise.all([
     db.from("profiles").select("*").eq("id", id).maybeSingle(),
     db
       .from("transactions")
       .select("id, type, amount, status, created_at, description")
       .eq("user_id", id)
       .order("created_at", { ascending: false })
+      .limit(20),
+    db
+      .from("game_participants")
+      .select("game_id, score, rank, prize_earned, entry_fee_paid, joined_at, games(title, mode, status)")
+      .eq("user_id", id)
+      .order("joined_at", { ascending: false })
       .limit(20),
   ]);
 
@@ -37,9 +44,12 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
         title={user.full_name ?? user.email}
         description={user.email}
         actions={
-          <Button asChild variant="outline" size="sm">
-            <Link href="/users"><ArrowLeft className="size-4" /> All users</Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/users"><ArrowLeft className="size-4" /> All users</Link>
+            </Button>
+            <UserActions userId={id} currentStatus={user.status} />
+          </div>
         }
       />
 
@@ -76,6 +86,45 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
             <StatCard label="Total deposited" value={formatMoneyDecimal(user.total_deposited)} icon={ShieldCheck} />
             <StatCard label="Total withdrawn" value={formatMoneyDecimal(user.total_withdrawn)} icon={AlertOctagon} />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Gamepad2 className="size-4" /> Recent games</CardTitle>
+            </CardHeader>
+            <CardContent className="px-0 pt-0">
+              {games && games.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Game</TableHead>
+                      <TableHead>Mode</TableHead>
+                      <TableHead>Score</TableHead>
+                      <TableHead>Rank</TableHead>
+                      <TableHead>Prize</TableHead>
+                      <TableHead>Joined</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {games.map((g) => {
+                      const game = g.games as { title?: string; mode?: string; status?: string } | null;
+                      return (
+                        <TableRow key={g.game_id}>
+                          <TableCell className="text-sm font-medium">{game?.title ?? "—"}</TableCell>
+                          <TableCell className="text-xs capitalize">{game?.mode?.replace(/_/g, " ") ?? "—"}</TableCell>
+                          <TableCell className="text-xs">{g.score}</TableCell>
+                          <TableCell className="text-xs">{g.rank ?? "—"}</TableCell>
+                          <TableCell className="font-mono text-xs">{formatMoneyDecimal(g.prize_earned)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{formatRelative(g.joined_at)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="px-6 pb-6 text-sm text-muted-foreground">No games played yet.</div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
