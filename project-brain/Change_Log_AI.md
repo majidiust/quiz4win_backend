@@ -1,5 +1,8 @@
 # Quiz4Win Backend — AI Agent Change Log
 
+[2026-05-23] [A-01] [FIX] /auth/update-password edge function now uses admin.auth.admin.updateUserById() instead of anon supabase.auth.updateUser(). The previous implementation silently failed with "Auth session missing" because the anon client only had the Bearer token forwarded as a header — no internal GoTrue session was established via setSession(). validateJWT() still verifies the token via getUser() before the admin client performs the actual write. Affects both the in-app OTP flow and the new Universal Link magic-link flow.
+[2026-05-23] [A-01] [BUILD] /auth/forgot-password now passes redirectTo=https://app.quiz4win.com/auth/reset-password (configurable via APP_URL env var) so end-user-initiated recovery emails open in the Expo app via Universal Link. Added APP_URL to the api service in docker-compose.yml.
+[2026-05-23] [A-01] [BUILD] Added deploy/nginx/app.quiz4win.com.conf — TLS reverse-proxy config for app.quiz4win.com (Universal Link host). Serves .well-known/ from /var/www/app.quiz4win.com (apple-app-site-association, assetlinks.json) and proxies everything else to 127.0.0.1:5801. Updated deploy/nginx/setup.sh to issue a Let's Encrypt cert for app.quiz4win.com and create the static webroot.
 [2026-05-23] [A-01] [BUILD] Recovery/invite redirectTo now points at https://app.quiz4win.com/auth/reset-password so password-reset emails open in the Expo mobile app via Universal Link. Added appUrl() helper in auth-users.ts reading APP_URL env var (server-only, default https://app.quiz4win.com). Added APP_URL to docker-compose.yml admin service. Magic-link redirectTo unchanged (stays on admin panel for staff).
 
 Last updated: 2026-05-22

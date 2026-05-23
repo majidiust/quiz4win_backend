@@ -137,8 +137,13 @@ Deno.serve(async (req: Request) => {
       const { email } = await req.json();
       if (!email) return errorResponse("email is required", 400);
       const supabase = getAnonClient(req);
+      // The redirect URL lands in the Expo mobile app via Universal Link
+      // (https://app.quiz4win.com is configured for applinks). The email
+      // also contains a 6-digit OTP for the in-app code-entry flow.
+      const redirectTo = (Deno.env.get("APP_URL") ?? "https://app.quiz4win.com")
+        .replace(/\/$/, "") + "/auth/reset-password";
       // Always returns 200 to prevent email enumeration (sheet note)
-      await supabase.auth.resetPasswordForEmail(email);
+      await supabase.auth.resetPasswordForEmail(email, { redirectTo });
       return successResponse({ message: "OTP sent if account exists" });
     }
 
@@ -161,6 +166,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── POST /auth/update-password ─────────────────────────────────────────
+    // Works for both flows:
+    //  - In-app OTP flow: token comes from /auth/verify-otp.
+    //  - Magic-link Universal Link flow: token comes from the URL hash
+    //    fragment of the recovery email (#access_token=…).
+    // Authorization: Bearer <access_token>
+    // Body: { new_password }
     if (path === "update-password" && req.method === "POST") {
       const { user, error: authErr } = await validateJWT(req);
       if (authErr || !user) return errorResponse("unauthorized", 401);
@@ -168,9 +179,20 @@ Deno.serve(async (req: Request) => {
       if (!new_password || new_password.length < 8) {
         return errorResponse("weak_password", 400);
       }
-      const supabase = getAnonClient(req);
-      const { error } = await supabase.auth.updateUser({ password: new_password });
-      if (error) return errorResponse(error.message.includes("password") ? "weak_password" : error.message, 400);
+      // Use the admin client to update the password. The anon client's
+      // auth.updateUser() relies on an internal session that we never
+      // establish here (we only forward the Bearer token), so it would
+      // fail with "Auth session missing". The user id was already verified
+      // by validateJWT via supabase.auth.getUser().
+      const admin = getAdminClient();
+      const { error } = await admin.auth.admin.updateUserById(user.id, {
+        password: new_password,
+      });
+      if (error) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("password")) return errorResponse("weak_password", 400);
+        return errorResponse(error.message, 400);
+      }
       return successResponse({ message: "Password updated" });
     }
 
