@@ -29,26 +29,31 @@ Deno.serve(async (req: Request) => {
 
   try {
     // GET /profile
+    // Note: the public API exposes `name` and `nationality` for backward
+    // compatibility; the underlying columns are `full_name` and `country`.
+    // PostgREST `alias:source` syntax renames them in the response.
     if (!path && req.method === "GET") {
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, name, email, avatar_url, phone, date_of_birth, nationality, language, kyc_status, status, wallet_balance, referral_code, created_at")
+        .select("id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, referral_code, created_at, nationality:country")
         .eq("id", user.id)
         .single();
 
-      if (error || !data) return errorResponse("profile_not_found", 404);
+      if (error || !data) {
+        console.warn(`[profile] GET — user=${user.id} lookup failed:`, error?.message ?? "no row");
+        return errorResponse("profile_not_found", 404);
+      }
       return successResponse({ user: data });
     }
 
     // PATCH /profile
+    // Frontend sends `name` / `nationality` (API contract); map to real columns.
     if (!path && req.method === "PATCH") {
       const body = await req.json();
       const allowed: Record<string, unknown> = {};
-      if (body.name !== undefined) allowed.name = body.name;
+      if (body.name !== undefined) allowed.full_name = body.name;
       if (body.language !== undefined) allowed.language = body.language;
-      if (body.phone !== undefined) allowed.phone = body.phone;
-      if (body.date_of_birth !== undefined) allowed.date_of_birth = body.date_of_birth;
-      if (body.nationality !== undefined) allowed.nationality = body.nationality;
+      if (body.nationality !== undefined) allowed.country = body.nationality;
 
       if (Object.keys(allowed).length === 0) {
         return errorResponse("No updatable fields provided", 400);
@@ -58,10 +63,13 @@ Deno.serve(async (req: Request) => {
         .from("profiles")
         .update({ ...allowed, updated_at: new Date().toISOString() })
         .eq("id", user.id)
-        .select("id, name, email, avatar_url, language, updated_at")
+        .select("id, email, name:full_name, avatar_url, language, updated_at")
         .single();
 
-      if (error) return errorResponse(sanitizeError(error), 400);
+      if (error) {
+        console.warn(`[profile] PATCH — user=${user.id} update failed:`, error.message);
+        return errorResponse(sanitizeError(error), 400);
+      }
       return successResponse({ user: data });
     }
 
