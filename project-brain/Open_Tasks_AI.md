@@ -48,7 +48,7 @@ Owner: A-01 (Augment Code Agent)
 
 - [P1] [DONE] [A-01] **Set up Drizzle ORM** — Installed drizzle-orm + postgres (runtime), drizzle-kit + tsx (dev). Introspected live DB with `drizzle-kit pull`; artifacts in `supabase/drizzle/` (schema.ts, relations.ts). Created Deno import map `supabase/functions/deno.json`. Created shared DB client `supabase/functions/_shared/db/client.ts` and barrel `supabase/functions/_shared/db/index.ts`. Edge Functions import via `import { db, <table> } from "../_shared/db/index.ts"`. — 2026-05-22
 
-- [P1] [TODO] [A-01] **Build `_shared/auth.ts` helper** — JWT validation utility reused by all Edge Functions (per R-03 and Coding_Standards.md §3).
+- [P1] [DONE] [A-01] **Build `_shared/auth.ts` helper** — JWT validation utility reused by all Edge Functions (per R-03 and Coding_Standards.md §3). Pass JWT explicitly to `getUser(token)`. — 2026-05-24
 
 - [P1] [TODO] [A-01] **Build `_shared/errors.ts` helper** — Standardised `errorResponse` and `successResponse` helpers.
 
