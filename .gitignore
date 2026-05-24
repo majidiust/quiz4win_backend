@@ -12,12 +12,13 @@
 *.p12
 *.pfx
 /tmp/
-*.json
 
 # Temporary agent scripts (contain service-account keys — delete after use)
 .tmp_*.py
 .tmp_*.txt
 .tmp_*.json
+# Google / GCP service-account credential files (never commit)
+*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*.json
 
 # ─── Supabase ────────────────────────────────────────────────────────────────
 supabase/.temp/
