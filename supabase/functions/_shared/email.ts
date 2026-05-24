@@ -54,8 +54,10 @@ const BRAND = {
 function logoUrl(): string {
   const override = Deno.env.get("EMAIL_LOGO_URL");
   if (override) return override;
-  const panel = (Deno.env.get("NEXT_PUBLIC_ADMIN_URL") ?? "https://panel.quiz4win.com").replace(/\/$/, "");
-  return `${panel}/email/q4w_text_logo.png`;
+  // Served from the public static container (app.quiz4win.com) — no auth gate,
+  // no Next.js middleware, reliably reachable by email-client image proxies.
+  const app = (Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "");
+  return `${app}/q4w_text_logo.png`;
 }
 
 function ctaButton(label: string, url: string, bg: string, fg: string): string {

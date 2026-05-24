@@ -50,8 +50,10 @@ export interface BrandEmailInput {
 function logoUrl(): string {
   const base = process.env.EMAIL_LOGO_URL;
   if (base) return base;
-  const panel = (process.env.NEXT_PUBLIC_ADMIN_URL ?? "https://panel.quiz4win.com").replace(/\/$/, "");
-  return `${panel}/email/q4w_text_logo.png`;
+  // Served from the public static container (app.quiz4win.com) — no auth gate,
+  // no Next.js middleware, reliably reachable by email-client image proxies.
+  const app = (process.env.APP_URL ?? "https://app.quiz4win.com").replace(/\/$/, "");
+  return `${app}/q4w_text_logo.png`;
 }
 
 function ctaColor(variant: CtaVariant): { bg: string; fg: string } {
