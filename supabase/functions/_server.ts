@@ -92,9 +92,30 @@ for (const name of services) {
 }
 currentService = "";
 
-// Restore the real Deno.serve for the dispatcher.
+// Do NOT restore the real Deno.serve here.
+// Any function module that has an async top-level IIFE (e.g. async initialiser
+// that runs after the import phase completes) and calls Deno.serve() inside it
+// would otherwise hit the real serve and try to re-bind port 8000 — causing the
+// "AddrInUse" crash-loop seen in Docker.
+//
+// Instead, replace Deno.serve with a permanent dead-end shim so any escaped
+// async Deno.serve() call is silently absorbed.  realServe is still available
+// via the captured reference below and is called directly for the dispatcher.
 Object.defineProperty(Deno, "serve", {
-  value: realServe,
+  value: (..._args: unknown[]) => {
+    console.error(
+      "[api] Blocked rogue Deno.serve() call after server start. " +
+      "A function module has an async top-level Deno.serve() that escaped " +
+      "the import-phase shim. Move async initialisation inside the handler.",
+    );
+    return {
+      finished: new Promise<void>(() => {}),
+      shutdown: () => Promise.resolve(),
+      ref: () => {},
+      unref: () => {},
+      addr: { transport: "tcp", hostname: "0.0.0.0", port: 0 },
+    };
+  },
   configurable: true,
   writable: true,
 });

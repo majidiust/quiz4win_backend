@@ -70,7 +70,11 @@ services:
       dockerfile: Dockerfile
     image: quiz4win-api:latest
     container_name: quiz4win-api
-    restart: unless-stopped
+    # on-failure:5 — stops retrying after 5 consecutive crashes so a boot-loop
+    # (e.g. AddrInUse) doesn't spin forever and fills the disk with logs.
+    # Change to `unless-stopped` once the service is confirmed stable.
+    restart: on-failure:5
+    stop_grace_period: 15s
     ports:
       - "127.0.0.1:5802:8000"
     environment:
