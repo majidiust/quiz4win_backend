@@ -132,3 +132,35 @@ export function welcomeTemplate(opts: { name: string; appUrl?: string }): { subj
   });
   return { subject, html, text };
 }
+
+/** Sent when a player wins a prize and it is credited to their wallet. */
+export function winTemplate(opts: {
+  name: string;
+  gameTitle: string;
+  rank: number | null;
+  prizeAmountCents: number;
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = (opts.appUrl ?? Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "");
+  const amount = `$${(opts.prizeAmountCents / 100).toFixed(2)}`;
+  const rankBadge = opts.rank
+    ? `<span style="display:inline-block;background:${BRAND.gold};color:#0F172A;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:700">#${opts.rank} place</span>`
+    : "";
+  const subject = `🏆 You won ${amount} on Quiz4Win!`;
+  const { html, text } = renderBrandEmail({
+    preheader: `Congratulations, ${opts.name}! ${amount} has been credited to your wallet.`,
+    heroTitle: `🏆 Congratulations, ${escapeHtml(opts.name)}!`,
+    heroSubtitle: `You won ${amount} on ${escapeHtml(opts.gameTitle)}.`,
+    bodyHtml: `${rankBadge ? `<p style="margin:0 0 16px">${rankBadge}</p>` : ""}
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:8px 0 16px">
+<tr><td align="center" bgcolor="#ECFDF5" style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:12px;padding:24px">
+<p style="margin:0 0 4px;font-size:13px;color:#065F46;text-transform:uppercase;letter-spacing:.08em;font-weight:600">Prize credited</p>
+<p style="margin:0;font-size:32px;line-height:1;color:${BRAND.win};font-weight:800">${amount}</p>
+</td></tr></table>
+<p style="margin:0 0 12px">Your winnings have been added to your Quiz4Win wallet. You can use the balance to enter new games or withdraw it once KYC is verified.</p>
+<p style="margin:0;color:${BRAND.textMuted}">Thanks for playing — see you in the next round.</p>`,
+    cta: { label: "View Wallet →", url: `${app}/wallet`, bg: BRAND.win },
+    text: `Congratulations, ${opts.name}! You won ${amount} on ${opts.gameTitle}${opts.rank ? ` (#${opts.rank} place)` : ""}. Your winnings have been credited to your Quiz4Win wallet. Visit ${app}/wallet to view your balance.`,
+  });
+  return { subject, html, text };
+}

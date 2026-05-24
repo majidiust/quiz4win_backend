@@ -19,6 +19,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { sendEmail, winTemplate } from "../_shared/email.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -182,7 +183,7 @@ Deno.serve(async (req: Request) => {
     if (gameId && action === "claim-prize" && req.method === "POST") {
       const { data: participant } = await supabase
         .from("game_participants")
-        .select("id, prize_amount, prize_credited")
+        .select("id, prize_amount, prize_credited, rank")
         .eq("game_id", gameId).eq("user_id", user.id).single();
       if (!participant) return errorResponse("not_a_participant", 404);
       if (participant.prize_credited) return errorResponse("prize_already_credited", 409);
@@ -191,6 +192,27 @@ Deno.serve(async (req: Request) => {
       const admin = getAdminClient();
       await admin.rpc("credit_wallet", { p_user_id: user.id, p_amount_cents: participant.prize_amount, p_reference_id: gameId, p_type: "prize" });
       await admin.from("game_participants").update({ prize_credited: true }).eq("id", participant.id);
+
+      // Fire branded win notification (non-blocking — never fail the claim on email error)
+      try {
+        const [{ data: profile }, { data: game }] = await Promise.all([
+          admin.from("profiles").select("full_name, email").eq("id", user.id).single(),
+          admin.from("games").select("title").eq("id", gameId).single(),
+        ]);
+        if (profile?.email && game?.title) {
+          const tpl = winTemplate({
+            name: profile.full_name ?? "there",
+            gameTitle: game.title,
+            rank: participant.rank ?? null,
+            prizeAmountCents: participant.prize_amount,
+          });
+          sendEmail({ to: { email: profile.email, name: profile.full_name ?? undefined }, subject: tpl.subject, html: tpl.html, text: tpl.text })
+            .catch((e) => console.error("[games] win email failed:", e));
+        }
+      } catch (e) {
+        console.error("[games] win email lookup failed:", e);
+      }
+
       return successResponse({ message: "Prize credited to wallet", amount_cents: participant.prize_amount });
     }
 
