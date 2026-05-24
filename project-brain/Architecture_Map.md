@@ -13,8 +13,8 @@ Quiz4Win is a **real-money quiz gaming platform**. The backend is hosted entirel
 - **Supabase Auth** — user identity and JWT issuance
 - **Supabase Edge Functions** — Deno/TypeScript serverless functions (business logic, external API calls)
 - **Supabase Realtime** — live game state broadcast to connected mobile clients
-- **Supabase Storage** — KYC document uploads, profile avatar images
-- **External APIs** — payment gateways (top-up/withdrawal), reCAPTCHA (fraud prevention)
+- **S3-compatible Object Storage** (DigitalOcean Spaces, region `fra1`, bucket `wingobingo`) — all file uploads: KYC documents (private, presigned GET), profile avatars (public-read), and any future attachments. Shared by both the edge functions (`supabase/functions/_shared/s3.ts`) and the admin panel (`admin/src/lib/s3.ts`). Supabase Storage is no longer used.
+- **External APIs** — payment gateways (top-up/withdrawal), reCAPTCHA (fraud prevention), Brevo (transactional email)
 
 ---
 

@@ -101,8 +101,13 @@ export const admin_users = pgTable("admin_users", {
 	name: text().notNull(),
 	role: text().notNull(),
 	status: text().default('active').notNull(),
+	password_hash: text(),
+	password_changed_at: timestamp({ withTimezone: true, mode: 'string' }),
 	mfa_enabled: boolean().default(false).notNull(),
 	mfa_secret: text(),
+	mfa_recovery_codes: jsonb(),
+	failed_login_attempts: integer().default(0).notNull(),
+	locked_until: timestamp({ withTimezone: true, mode: 'string' }),
 	last_login_at: timestamp({ withTimezone: true, mode: 'string' }),
 	last_login_ip: text(),
 	invited_by: uuid(),
@@ -141,6 +146,75 @@ export const admin_audit_log = pgTable("admin_audit_log", {
 			foreignColumns: [admin_users.id],
 			name: "admin_audit_log_admin_id_fkey"
 		}),
+]);
+
+export const admin_sessions = pgTable("admin_sessions", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	admin_id: uuid().notNull(),
+	session_token_hash: text().notNull(),
+	refresh_token_hash: text(),
+	aal: text().default('aal2').notNull(),
+	ip_address: text(),
+	user_agent: text(),
+	expires_at: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
+	refresh_expires_at: timestamp({ withTimezone: true, mode: 'string' }),
+	last_used_at: timestamp({ withTimezone: true, mode: 'string' }),
+	revoked_at: timestamp({ withTimezone: true, mode: 'string' }),
+	created_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_admin_sessions_admin_id").using("btree", table.admin_id.asc().nullsLast().op("uuid_ops")),
+	index("idx_admin_sessions_expires_at").using("btree", table.expires_at.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.admin_id],
+			foreignColumns: [admin_users.id],
+			name: "admin_sessions_admin_id_fkey"
+		}).onDelete("cascade"),
+	unique("admin_sessions_session_token_hash_key").on(table.session_token_hash),
+	unique("admin_sessions_refresh_token_hash_key").on(table.refresh_token_hash),
+	check("admin_sessions_aal_check", sql`aal = ANY (ARRAY['aal1'::text, 'aal2'::text])`),
+]);
+
+export const admin_password_reset_tokens = pgTable("admin_password_reset_tokens", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	admin_id: uuid().notNull(),
+	token_hash: text().notNull(),
+	purpose: text().default('reset').notNull(),
+	expires_at: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
+	used_at: timestamp({ withTimezone: true, mode: 'string' }),
+	ip_address: text(),
+	created_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_admin_password_reset_tokens_admin_id").using("btree", table.admin_id.asc().nullsLast().op("uuid_ops")),
+	index("idx_admin_password_reset_tokens_expires").using("btree", table.expires_at.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.admin_id],
+			foreignColumns: [admin_users.id],
+			name: "admin_password_reset_tokens_admin_id_fkey"
+		}).onDelete("cascade"),
+	unique("admin_password_reset_tokens_token_hash_key").on(table.token_hash),
+	check("admin_password_reset_tokens_purpose_check", sql`purpose = ANY (ARRAY['reset'::text, 'invite'::text])`),
+]);
+
+export const admin_mfa_challenges = pgTable("admin_mfa_challenges", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	admin_id: uuid().notNull(),
+	challenge_hash: text().notNull(),
+	purpose: text().default('verify').notNull(),
+	expires_at: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
+	consumed_at: timestamp({ withTimezone: true, mode: 'string' }),
+	ip_address: text(),
+	user_agent: text(),
+	created_at: timestamp({ withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_admin_mfa_challenges_admin_id").using("btree", table.admin_id.asc().nullsLast().op("uuid_ops")),
+	index("idx_admin_mfa_challenges_expires").using("btree", table.expires_at.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.admin_id],
+			foreignColumns: [admin_users.id],
+			name: "admin_mfa_challenges_admin_id_fkey"
+		}).onDelete("cascade"),
+	unique("admin_mfa_challenges_challenge_hash_key").on(table.challenge_hash),
+	check("admin_mfa_challenges_purpose_check", sql`purpose = ANY (ARRAY['verify'::text, 'enrol'::text])`),
 ]);
 
 export const show_hosts = pgTable("show_hosts", {

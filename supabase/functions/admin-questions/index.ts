@@ -10,6 +10,8 @@
  * POST   /admin/questions/bulk-import     — Bulk import (API #99)
  * GET    /admin/questions/export          — Bulk export CSV (row 143)
  * POST   /admin/questions/categories      — Create category (row 145)
+ * PATCH  /admin/questions/categories/:name — Update category name/description (row 81)
+ * DELETE /admin/questions/categories/:name — Remove category (row 82)
  * GET    /admin/questions/:id/usage       — Usage history (row 146)
  * POST   /admin/questions/:id/restore     — Restore soft-deleted (row 147)
  *
@@ -61,6 +63,37 @@ Deno.serve(async (req: Request) => {
       ]);
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "questions_exported", target_type: "questions", details: { count: rows.length, filters: { category, difficulty } }, created_at: new Date().toISOString() });
       return csvResponse(csv, `questions-${todayStamp()}.csv`);
+    }
+
+    // PATCH /admin/questions/categories/:name — update a category (row 81)
+    if (questionId === "categories" && parts[1] && req.method === "PATCH") {
+      const categoryName = decodeURIComponent(parts[1]);
+      const { name: newName, description } = await req.json();
+      if (!newName) return errorResponse("name is required", 400);
+      const { data: existing } = await admin.from("app_config").select("value").eq("key", "question_categories").maybeSingle();
+      const list: Array<{ name: string; description?: string }> = existing?.value ? JSON.parse(existing.value) : [];
+      const idx = list.findIndex((c) => c.name === categoryName);
+      if (idx === -1) return errorResponse("category_not_found", 404);
+      if (newName !== categoryName && list.find((c) => c.name === newName)) return errorResponse("Category name already exists", 409);
+      list[idx] = { name: newName, description: description ?? list[idx].description };
+      await admin.from("app_config").upsert({ key: "question_categories", value: JSON.stringify(list), updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "question_category_updated", target_type: "question_category", details: { old_name: categoryName, new_name: newName }, created_at: new Date().toISOString() });
+      return successResponse({ category: list[idx] });
+    }
+
+    // DELETE /admin/questions/categories/:name — remove a category (row 82)
+    if (questionId === "categories" && parts[1] && req.method === "DELETE") {
+      const categoryName = decodeURIComponent(parts[1]);
+      const { data: existing } = await admin.from("app_config").select("value").eq("key", "question_categories").maybeSingle();
+      const list: Array<{ name: string; description?: string }> = existing?.value ? JSON.parse(existing.value) : [];
+      const idx = list.findIndex((c) => c.name === categoryName);
+      if (idx === -1) return errorResponse("category_not_found", 404);
+      const { count } = await admin.from("questions").select("id", { count: "exact", head: true }).eq("category", categoryName).eq("is_deleted", false);
+      if ((count ?? 0) > 0) return errorResponse("Cannot delete a category that still has questions", 409);
+      list.splice(idx, 1);
+      await admin.from("app_config").upsert({ key: "question_categories", value: JSON.stringify(list), updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "question_category_deleted", target_type: "question_category", details: { name: categoryName }, created_at: new Date().toISOString() });
+      return successResponse({ deleted: true });
     }
 
     // GET /admin/questions/categories — list distinct categories with counts (row 144)

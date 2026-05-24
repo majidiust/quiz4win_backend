@@ -13,6 +13,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { uploadObject } from "../_shared/s3.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -84,22 +85,17 @@ Deno.serve(async (req: Request) => {
       if (file.size > maxBytes) return errorResponse("File too large (max 5 MB)", 400);
 
       const ext = file.type.split("/")[1];
-      const filePath = `avatars/${user.id}/avatar.${ext}`;
+      const key = `avatars/${user.id}/avatar.${ext}`;
       const arrayBuffer = await file.arrayBuffer();
 
-      const admin = getAdminClient();
-      const { error: uploadErr } = await admin.storage
-        .from("user-avatars")
-        .upload(filePath, arrayBuffer, {
-          contentType: file.type,
-          upsert: true,
-        });
-
-      if (uploadErr) return errorResponse(sanitizeError(uploadErr), 500);
-
-      const { data: { publicUrl } } = admin.storage
-        .from("user-avatars")
-        .getPublicUrl(filePath);
+      let publicUrl: string | null;
+      try {
+        const result = await uploadObject(key, arrayBuffer, file.type, "public-read");
+        publicUrl = result.publicUrl;
+      } catch (err) {
+        return errorResponse(sanitizeError(err), 500);
+      }
+      if (!publicUrl) return errorResponse("upload_failed", 500);
 
       await supabase
         .from("profiles")

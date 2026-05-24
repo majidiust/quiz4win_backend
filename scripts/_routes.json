@@ -1,0 +1,162 @@
+{
+  "auth": [
+    {
+      "method": "POST",
+      "path": "/auth/signup"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/signin"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/token"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/signout"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/forgot-password"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/verify-otp"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/update-password"
+    }
+  ],
+  "config": [
+    {
+      "method": "GET",
+      "path": "/config/app"
+    }
+  ],
+  "games": [],
+  "kyc": [
+    {
+      "method": "GET",
+      "path": "/kyc/status"
+    },
+    {
+      "method": "POST",
+      "path": "/kyc/submit"
+    },
+    {
+      "method": "POST",
+      "path": "/kyc/resubmit"
+    }
+  ],
+  "leaderboard": [
+    {
+      "method": "GET",
+      "path": "/leaderboard/global"
+    }
+  ],
+  "legal": [
+    {
+      "method": "GET",
+      "path": "/legal/tos"
+    },
+    {
+      "method": "GET",
+      "path": "/legal/privacy"
+    },
+    {
+      "method": "POST",
+      "path": "/legal/tos/accept"
+    }
+  ],
+  "notifications": [
+    {
+      "method": "PATCH",
+      "path": "/notifications/read"
+    },
+    {
+      "method": "PUT",
+      "path": "/notifications/preferences"
+    },
+    {
+      "method": "POST",
+      "path": "/notifications/push-token"
+    }
+  ],
+  "profile": [
+    {
+      "method": "POST",
+      "path": "/profile/avatar"
+    }
+  ],
+  "referrals": [
+    {
+      "method": "POST",
+      "path": "/referrals/validate"
+    },
+    {
+      "method": "GET",
+      "path": "/referrals/my-code"
+    },
+    {
+      "method": "GET",
+      "path": "/referrals/stats"
+    }
+  ],
+  "security": [
+    {
+      "method": "POST",
+      "path": "/security/verify-recaptcha"
+    }
+  ],
+  "settings": [],
+  "support": [
+    {
+      "method": "GET",
+      "path": "/support/articles"
+    },
+    {
+      "method": "POST",
+      "path": "/support/tickets"
+    },
+    {
+      "method": "GET",
+      "path": "/support/tickets"
+    }
+  ],
+  "topup": [
+    {
+      "method": "POST",
+      "path": "/topup/stripe/intent"
+    },
+    {
+      "method": "POST",
+      "path": "/topup/stripe/webhook"
+    },
+    {
+      "method": "POST",
+      "path": "/topup/apple-pay/session"
+    },
+    {
+      "method": "POST",
+      "path": "/topup/google-pay/order"
+    },
+    {
+      "method": "GET",
+      "path": "/topup/crypto/address"
+    }
+  ],
+  "vouchers": [],
+  "wallet": [
+    {
+      "method": "GET",
+      "path": "/wallet/balance"
+    },
+    {
+      "method": "GET",
+      "path": "/wallet/transactions"
+    }
+  ],
+  "withdrawals": []
+}

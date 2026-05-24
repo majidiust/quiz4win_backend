@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { presignGet } from "@/lib/s3";
 
 const ReviewSchema = z.object({
   kyc_id: z.string().uuid(),
@@ -92,14 +93,18 @@ export async function reviewKyc(input: ReviewKycInput): Promise<ActionResult> {
 }
 
 /**
- * Create a short-lived signed URL for a private kyc-documents storage object.
- * Returns null when the path is missing or the signing call fails.
+ * Create a short-lived presigned URL for a private KYC document stored in S3.
+ * Returns null when the key is missing or signing fails.
+ *
+ * The stored value is an S3 object key (e.g. "kyc/<uid>/id_front.jpg") — no
+ * leading slash and no host. URL is valid for 10 minutes.
  */
-export async function signKycDocumentUrl(path: string | null | undefined): Promise<string | null> {
-  if (!path) return null;
+export async function signKycDocumentUrl(key: string | null | undefined): Promise<string | null> {
+  if (!key) return null;
   await requireAdmin(["super_admin", "admin", "support"]);
-  const db = createSupabaseAdminClient();
-  const { data, error } = await db.storage.from("kyc-documents").createSignedUrl(path, 60 * 10);
-  if (error || !data) return null;
-  return data.signedUrl;
+  try {
+    return await presignGet(key, 60 * 10);
+  } catch {
+    return null;
+  }
 }

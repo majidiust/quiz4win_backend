@@ -12,6 +12,7 @@
 *.p12
 *.pfx
 /tmp/
+*.json
 
 # Temporary agent scripts (contain service-account keys — delete after use)
 .tmp_*.py

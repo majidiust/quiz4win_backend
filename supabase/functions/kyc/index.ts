@@ -12,6 +12,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { uploadObject } from "../_shared/s3.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -80,13 +81,11 @@ Deno.serve(async (req: Request) => {
       const admin = getAdminClient();
       const uploadFile = async (file: File, name: string) => {
         const ext = file.type.split("/")[1] ?? "jpg";
-        const path = `kyc/${user.id}/${name}.${ext}`;
+        const key = `kyc/${user.id}/${name}.${ext}`;
         const buf = await file.arrayBuffer();
-        await admin.storage.from("kyc-documents").upload(path, buf, {
-          contentType: file.type,
-          upsert: true,
-        });
-        return path;
+        // Private — readable only via presigned URLs minted by the admin panel.
+        await uploadObject(key, buf, file.type, "private");
+        return key;
       };
 
       const idFrontPath = await uploadFile(idFront, "id_front");
