@@ -17,7 +17,7 @@ import { corsHeaders, handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
-import { sendEmail, welcomeTemplate } from "../_shared/email.ts";
+import { sendEmail, welcomeTemplate, recoveryTemplate } from "../_shared/email.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -142,17 +142,54 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── POST /auth/forgot-password ─────────────────────────────────────────
+    // Generates the recovery link via the admin client (no email is sent by
+    // Supabase) and dispatches our own branded email through Brevo so the
+    // customer receives the same Q4W look-and-feel as every other transactional
+    // message (R-01: no secrets exposed; always returns 200 to prevent
+    // account-enumeration regardless of whether the email exists).
     if (path === "forgot-password" && req.method === "POST") {
       const { email } = await req.json();
       if (!email) return errorResponse("email is required", 400);
-      const supabase = getAnonClient(req);
-      // The redirect URL lands in the Expo mobile app via Universal Link
-      // (https://app.quiz4win.com is configured for applinks). The email
-      // also contains a 6-digit OTP for the in-app code-entry flow.
       const redirectTo = (Deno.env.get("APP_URL") ?? "https://app.quiz4win.com")
         .replace(/\/$/, "") + "/auth/reset-password";
-      // Always returns 200 to prevent email enumeration (sheet note)
-      await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+
+      // Fire-and-forget — never block the response on email work, never leak
+      // whether the account exists via timing or error codes.
+      (async () => {
+        try {
+          const admin = getAdminClient();
+          const { data, error } = await admin.auth.admin.generateLink({
+            type: "recovery",
+            email,
+            options: { redirectTo },
+          });
+          if (error || !data) {
+            console.warn(`[auth] generateLink failed for ${email}: ${error?.message ?? "no data"}`);
+            return;
+          }
+          const actionUrl = (data.properties as { action_link?: string } | null)?.action_link;
+          const otp = (data.properties as { email_otp?: string } | null)?.email_otp;
+          if (!actionUrl) {
+            console.warn(`[auth] generateLink returned no action_link for ${email}`);
+            return;
+          }
+          // Pull the customer's display name from profiles for personalisation.
+          let name = "";
+          if (data.user?.id) {
+            const { data: profile } = await admin
+              .from("profiles")
+              .select("full_name")
+              .eq("id", data.user.id)
+              .maybeSingle();
+            name = (profile?.full_name as string | null | undefined) ?? "";
+          }
+          const tpl = recoveryTemplate({ name, actionUrl, otp });
+          await sendEmail({ to: { email, name: name || undefined }, ...tpl });
+        } catch (err) {
+          console.warn("[auth] recovery email failed:", err);
+        }
+      })();
+
       return successResponse({ message: "OTP sent if account exists" });
     }
 

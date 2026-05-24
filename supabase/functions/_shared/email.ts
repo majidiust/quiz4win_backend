@@ -133,6 +133,37 @@ export function welcomeTemplate(opts: { name: string; appUrl?: string }): { subj
   return { subject, html, text };
 }
 
+/** Sent when a customer requests a password reset. */
+export function recoveryTemplate(opts: {
+  name: string;
+  actionUrl: string;
+  otp?: string;
+  ttlMinutes?: number;
+}): { subject: string; html: string; text: string } {
+  const subject = "Reset your Quiz4Win password";
+  const ttl = opts.ttlMinutes ?? 60;
+  const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const otpBlock = opts.otp
+    ? `<p style="margin:20px 0 8px;font-size:13px;color:${BRAND.textMuted};text-transform:uppercase;letter-spacing:.08em;font-weight:600">Or enter this code in the app</p>
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 8px"><tr><td align="center" bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:18px 28px">
+<p style="margin:0;font-family:Menlo,Consolas,monospace;font-size:28px;letter-spacing:.35em;color:${BRAND.textDark};font-weight:700">${escapeHtml(opts.otp)}</p>
+</td></tr></table>`
+    : "";
+  const { html, text } = renderBrandEmail({
+    preheader: `Reset your Quiz4Win password — link expires in ${ttl} minutes.`,
+    heroTitle: "Reset your password",
+    heroSubtitle: "Choose a new password for your Quiz4Win account.",
+    bodyHtml: `<p style="margin:0 0 12px">${greeting} we received a request to reset the password on your Quiz4Win account.</p>
+<p style="margin:0 0 12px">Tap the button below to set a new password. The link is valid for ${ttl} minutes.</p>
+${otpBlock}
+<p style="margin:16px 0 0;color:${BRAND.textMuted}">If you didn't request this, you can safely ignore this email — your password will remain unchanged.</p>`,
+    cta: { label: "Reset password →", url: opts.actionUrl },
+    ctaNote: `This link expires in ${ttl} minutes.`,
+    text: `${opts.name ? `Hi ${opts.name}, ` : ""}we received a request to reset your Quiz4Win password. Open this link to set a new password (expires in ${ttl} minutes): ${opts.actionUrl}${opts.otp ? `\n\nOr enter this code in the app: ${opts.otp}` : ""}\n\nIf you didn't request this, you can safely ignore this email.`,
+  });
+  return { subject, html, text };
+}
+
 /** Sent when a player wins a prize and it is credited to their wallet. */
 export function winTemplate(opts: {
   name: string;
