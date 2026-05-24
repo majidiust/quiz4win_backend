@@ -11,6 +11,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toggleVoucherStatus, cancelVoucher, issueVoucher } from "@/lib/actions/vouchers";
 
 interface Props {
@@ -95,15 +96,28 @@ export function IssueVoucherButton({ voucherId, currentStatus }: Props) {
   const [open, setOpen] = useState(false);
   const [userId, setUserId] = useState("");
   const [note, setNote] = useState("");
+  const [shouldSendEmail, setShouldSendEmail] = useState(true);
   const router = useRouter();
   const [pending, start] = useTransition();
 
   function handle() {
     if (!userId.trim()) { toast.error("User ID is required"); return; }
     start(async () => {
-      const res = await issueVoucher({ voucherId, userId: userId.trim(), note: note.trim() || undefined });
-      if (res.ok) { toast.success(res.message); setOpen(false); setUserId(""); setNote(""); router.refresh(); }
-      else toast.error(res.message);
+      const res = await issueVoucher({
+        voucherId,
+        userId: userId.trim(),
+        note: note.trim() || undefined,
+        sendEmail: shouldSendEmail,
+      });
+      if (res.ok) {
+        toast.success(res.message);
+        setOpen(false);
+        setUserId("");
+        setNote("");
+        router.refresh();
+      } else {
+        toast.error(res.message);
+      }
     });
   }
 
@@ -120,7 +134,7 @@ export function IssueVoucherButton({ voucherId, currentStatus }: Props) {
             <DialogTitle>Issue voucher to user</DialogTitle>
             <DialogDescription>Directly grant this voucher to a specific user by their ID.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="space-y-1">
               <Label htmlFor="issue-user">User ID (UUID) *</Label>
               <Input id="issue-user" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" className="font-mono text-xs" />
@@ -128,6 +142,10 @@ export function IssueVoucherButton({ voucherId, currentStatus }: Props) {
             <div className="space-y-1">
               <Label htmlFor="issue-note">Note (optional)</Label>
               <Textarea id="issue-note" value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. Compensation for game issue" />
+            </div>
+            <div className="flex items-center space-x-2">
+              <Checkbox id="send-email" checked={shouldSendEmail} onCheckedChange={(v) => setShouldSendEmail(!!v)} />
+              <Label htmlFor="send-email" className="text-sm font-normal">Send branded notification email to user</Label>
             </div>
           </div>
           <DialogFooter>

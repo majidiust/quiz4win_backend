@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { sendEmail } from "@/lib/admin-auth/email";
+import { voucherTemplate } from "@/lib/admin-auth/email-templates";
 
 export interface ActionResult {
   ok: boolean;
@@ -140,6 +142,7 @@ const IssueSchema = z.object({
   voucherId: z.string().uuid(),
   userId: z.string().uuid(),
   note: z.string().trim().max(500).optional(),
+  sendEmail: z.boolean().default(true),
 });
 
 export async function issueVoucher(input: z.infer<typeof IssueSchema>): Promise<ActionResult> {
@@ -147,11 +150,14 @@ export async function issueVoucher(input: z.infer<typeof IssueSchema>): Promise<
   const parsed = IssueSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: "Invalid input" };
 
-  const { voucherId, userId, note } = parsed.data;
+  const { voucherId, userId, note, sendEmail: shouldSendEmail } = parsed.data;
   const db = createSupabaseAdminClient();
 
-  const { data: v } = await db.from("vouchers").select("id, status, reward_type, reward_value").eq("id", voucherId).single();
+  const { data: v } = await db.from("vouchers").select("*").eq("id", voucherId).single();
   if (!v || v.status !== "active") return { ok: false, message: "Voucher not found or not active" };
+
+  const { data: userProfile } = await db.from("profiles").select("full_name, email").eq("id", userId).single();
+  if (!userProfile) return { ok: false, message: "User not found" };
 
   const { data: existing } = await db.from("voucher_redemptions").select("id").eq("voucher_id", voucherId).eq("user_id", userId).maybeSingle();
   if (existing) return { ok: false, message: "User already has this voucher" };
@@ -170,6 +176,23 @@ export async function issueVoucher(input: z.infer<typeof IssueSchema>): Promise<
 
   if (v.reward_type === "wallet_credit" && rewardCents > 0) {
     await db.rpc("credit_wallet", { p_user_id: userId, p_amount_cents: rewardCents, p_reference_id: voucherId, p_type: "voucher" });
+  }
+
+  if (shouldSendEmail && userProfile.email) {
+    const tpl = voucherTemplate({
+      name: userProfile.full_name ?? "there",
+      voucherCode: v.code,
+      voucherName: v.name,
+      displayText: v.display_text,
+      rewardDescription: v.reward_description,
+      validUntil: v.valid_until,
+    });
+    await sendEmail({
+      to: userProfile.email,
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    });
   }
 
   await db.from("admin_audit_log").insert({

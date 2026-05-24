@@ -108,3 +108,29 @@ export function customEmailTemplate(opts: {
   });
   return { subject: opts.subject, html, text };
 }
+
+export function voucherTemplate(opts: {
+  name: string;
+  voucherCode: string;
+  voucherName: string;
+  displayText: string;
+  rewardDescription: string;
+  validUntil?: string | null;
+}) {
+  const subject = `You've received a voucher: ${opts.voucherCode} 🎁`;
+  const { html, text } = renderBrandEmail({
+    preheader: `You've received a ${opts.voucherName} voucher! Redeem it for ${opts.rewardDescription}.`,
+    heroTitle: "You've got a gift! 🎁",
+    heroSubtitle: `Hi ${escapeHtml(opts.name)}, an administrator has issued a voucher to your account.`,
+    bodyHtml: `<p style="margin:0 0 12px">Use the code <strong>${escapeHtml(opts.voucherCode)}</strong> to claim your reward:</p>
+<div style="background:#F8FAFC;border:1px dashed #CBD5E1;border-radius:12px;padding:24px;text-align:center;margin:24px 0">
+  <div style="font-size:13px;color:#64748B;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${escapeHtml(opts.displayText)}</div>
+  <div style="font-size:32px;font-weight:800;letter-spacing:3px;color:#0F172A;font-family:Menlo,Consolas,monospace">${escapeHtml(opts.voucherCode)}</div>
+</div>
+<p style="margin:0;color:#475569"><strong>Reward:</strong> ${escapeHtml(opts.rewardDescription)}</p>
+${opts.validUntil ? `<p style="margin:8px 0 0;font-size:13px;color:#94A3B8">Valid until: ${new Date(opts.validUntil).toLocaleDateString()}</p>` : ""}`,
+    cta: { label: "Redeem Now", url: "https://app.quiz4win.com/vouchers", variant: "gold" },
+    text: `You've received a ${opts.voucherName} voucher! Use code ${opts.voucherCode} to claim: ${opts.rewardDescription}. Redeem at https://app.quiz4win.com/vouchers`,
+  });
+  return { subject, html, text };
+}
