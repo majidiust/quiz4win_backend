@@ -57,32 +57,42 @@ Deno.serve(async (req: Request) => {
     const supabase = getAnonClient(req);
 
     // GET /referrals/my-code
-    // Schema column is owner_id (not user_id).
+    // Schema column is owner_id (not user_id). Use admin for the read fallback
+    // so we don't double-insert on retries when the user's anon SELECT is
+    // denied (e.g. before RLS policies are applied).
     if (path === "my-code" && req.method === "GET") {
-      const { data: rc, error } = await supabase
+      const cols = "code, use_count, max_uses, created_at, expires_at, bonus_amount";
+      const { data: rc } = await supabase
         .from("referral_codes")
-        .select("code, use_count, max_uses, created_at, expires_at, bonus_amount")
+        .select(cols)
         .eq("owner_id", user.id)
+        .maybeSingle();
+
+      if (rc) return successResponse({ referral_code: rc });
+
+      const admin = getAdminClient();
+      const { data: existing } = await admin
+        .from("referral_codes")
+        .select(cols)
+        .eq("owner_id", user.id)
+        .maybeSingle();
+      if (existing) return successResponse({ referral_code: existing });
+
+      // Auto-generate; use a random 8-hex suffix to avoid PK collisions across
+      // retries or if another generator picked the same prefix.
+      const rand = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0").toUpperCase();
+      const newCode = `Q4W-${rand}`;
+      const { data: created, error: createErr } = await admin
+        .from("referral_codes")
+        .insert({ owner_id: user.id, code: newCode, type: "user" })
+        .select(cols)
         .single();
 
-      if (error || !rc) {
-        // Auto-generate if not yet created.
-        const newCode = `Q4W-${user.id.substring(0, 8).toUpperCase()}`;
-        const admin = getAdminClient();
-        const { data: created, error: createErr } = await admin
-          .from("referral_codes")
-          .insert({ owner_id: user.id, code: newCode, type: "user" })
-          .select("code, use_count, created_at, bonus_amount")
-          .single();
-
-        if (createErr) {
-          console.warn("[referrals] create failed:", createErr.message);
-          return errorResponse("Failed to create referral code", 500);
-        }
-        return successResponse({ referral_code: created });
+      if (createErr) {
+        console.warn(`[referrals] create failed user=${user.id}:`, createErr.message);
+        return errorResponse("Failed to create referral code", 500);
       }
-
-      return successResponse({ referral_code: rc });
+      return successResponse({ referral_code: created });
     }
 
     // GET /referrals/stats

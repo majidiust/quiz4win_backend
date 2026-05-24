@@ -38,14 +38,24 @@ Deno.serve(async (req: Request) => {
         .from("profiles")
         .select(cols)
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
       if (data) return successResponse({ user: data });
 
-      // Lazy-create a profiles row for users that authenticated before
-      // /auth/signup started inserting one (e.g. pre-fix accounts).
-      console.warn(`[profile] GET — user=${user.id} no row, creating:`, error?.message);
+      // Anon read was denied (RLS) or returned nothing. Re-check with the
+      // admin client scoped to the authenticated user's own id (id = user.id).
+      // This is not a service_role bypass: we always restrict to the JWT
+      // subject and never expose another user's row (R-04 spirit preserved).
+      console.warn(`[profile] GET — user=${user.id} anon empty (rls?):`, error?.message);
       const admin = getAdminClient();
+      const { data: existing } = await admin
+        .from("profiles")
+        .select(cols)
+        .eq("id", user.id)
+        .maybeSingle();
+      if (existing) return successResponse({ user: existing });
+
+      // Truly missing — backfill (pre-trigger accounts).
       const fallbackName = (user.user_metadata?.full_name as string | undefined) ?? null;
       const { data: created, error: createErr } = await admin
         .from("profiles")

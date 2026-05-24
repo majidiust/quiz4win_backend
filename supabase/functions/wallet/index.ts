@@ -10,7 +10,7 @@
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
-import { getAnonClient } from "../_shared/supabase.ts";
+import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -28,13 +28,19 @@ Deno.serve(async (req: Request) => {
     // Schema note: profiles.wallet_balance is NUMERIC(12,2) (USD dollars), there
     // is no profiles.currency column. Returned as a string to preserve precision.
     if (path === "balance" && req.method === "GET") {
-      const { data: profile, error } = await supabase
+      let { data: profile } = await supabase
         .from("profiles")
         .select("wallet_balance")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
-      if (error || !profile) return errorResponse("wallet_not_found", 404);
+      // Fallback when anon read is RLS-denied; scoped to the JWT subject.
+      if (!profile) {
+        const admin = getAdminClient();
+        const r = await admin.from("profiles").select("wallet_balance").eq("id", user.id).maybeSingle();
+        profile = r.data;
+      }
+      if (!profile) return errorResponse("wallet_not_found", 404);
 
       const balance = Number(profile.wallet_balance ?? 0);
       return successResponse({

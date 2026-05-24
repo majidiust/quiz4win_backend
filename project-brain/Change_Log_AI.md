@@ -1,3 +1,5 @@
+[2026-05-24] [A-01] [FIX] Aligned all customer-facing Edge Functions with actual DB schema (commit 72c52c4): auth (is_active/profile-create), profile (lazy-create/DELETE), wallet (currency/reference), settings (columns), notifications (is_read/push-tokens), withdrawals (currency/completed_at), games (schema columns/prize_earned), leaderboard (full_name alias), support (content/no-priority), referrals (owner_id/referral_uses), vouchers (reward_value/voucher_redemptions/announcements).
+[2026-05-24] [A-01] [AUDIT] Smoke test script at scripts/api-smoke-test.py; all 12 handlers tested. Changes committed and pushed (72c52c4). Awaiting deploy on server.
 [2026-05-24] [A-02] [AUDIT] Session started. Auditing project state against Rules.md and Architecture_Map.md.
 [2026-05-24] [A-02] [RULE] **VIOLATION (R-07):** Previous session changes by A-01 were logged but didn't follow the session start/end protocols defined in Collaboration_Protocol.md.
 [2026-05-24] [A-03] [ARCH] **CONFIRMED:** `quiz4win-app` container (port 5801) is the unified host for Universal Links and web fallbacks. A-01 correctly implemented it after initially deviating with static files proposal.
