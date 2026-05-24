@@ -35,16 +35,15 @@ Deno.serve(async (req: Request) => {
 
       const supabase = getAnonClient(req);
 
-      // Validate referral code if provided
+      // Validate referral code if provided (no `is_active` column in schema).
       if (referral_code) {
         const admin = getAdminClient();
         const { data: rc } = await admin
           .from("referral_codes")
-          .select("code, is_active, expires_at, max_uses, use_count")
+          .select("code, expires_at, max_uses, use_count")
           .eq("code", referral_code)
           .single();
         if (!rc) return errorResponse("invalid_referral", 400);
-        if (!rc.is_active) return errorResponse("invalid_referral", 400);
         if (rc.expires_at && new Date(rc.expires_at) < new Date()) {
           return errorResponse("invalid_referral", 400);
         }
@@ -67,6 +66,20 @@ Deno.serve(async (req: Request) => {
           return errorResponse("weak_password", 400);
         }
         return errorResponse(error.message, 400);
+      }
+      // Create the profiles row (auth.signUp() only writes to auth.users). Use the
+      // admin client so we bypass RLS on first insert, then continue regardless of
+      // duplicate-key races (e.g. retry after a transient error).
+      if (data.user) {
+        const admin = getAdminClient();
+        const { error: profileErr } = await admin.from("profiles").insert({
+          id: data.user.id,
+          email: data.user.email,
+          full_name: name,
+        });
+        if (profileErr && !profileErr.message.toLowerCase().includes("duplicate")) {
+          console.warn(`[auth] profile insert failed for ${email}: ${profileErr.message}`);
+        }
       }
       // Fire welcome email — non-blocking so a Brevo hiccup never fails the signup.
       if (data.user?.email) {

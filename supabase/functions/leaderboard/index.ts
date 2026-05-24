@@ -44,7 +44,7 @@ Deno.serve(async (req: Request) => {
       // Join with profiles for display info
       let query = supabase
         .from("game_participants")
-        .select("user_id, score, profiles!inner(id, name, avatar_url)")
+        .select("user_id, score, profiles!inner(id, name:full_name, avatar_url)")
         .not("score", "is", null);
 
       if (dateFilter) {

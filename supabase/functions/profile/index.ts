@@ -33,17 +33,31 @@ Deno.serve(async (req: Request) => {
     // compatibility; the underlying columns are `full_name` and `country`.
     // PostgREST `alias:source` syntax renames them in the response.
     if (!path && req.method === "GET") {
+      const cols = "id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, referral_code, created_at, nationality:country";
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, referral_code, created_at, nationality:country")
+        .select(cols)
         .eq("id", user.id)
         .single();
 
-      if (error || !data) {
-        console.warn(`[profile] GET — user=${user.id} lookup failed:`, error?.message ?? "no row");
+      if (data) return successResponse({ user: data });
+
+      // Lazy-create a profiles row for users that authenticated before
+      // /auth/signup started inserting one (e.g. pre-fix accounts).
+      console.warn(`[profile] GET — user=${user.id} no row, creating:`, error?.message);
+      const admin = getAdminClient();
+      const fallbackName = (user.user_metadata?.full_name as string | undefined) ?? null;
+      const { data: created, error: createErr } = await admin
+        .from("profiles")
+        .insert({ id: user.id, email: user.email, full_name: fallbackName })
+        .select(cols)
+        .single();
+
+      if (createErr || !created) {
+        console.warn(`[profile] GET — user=${user.id} lazy-create failed:`, createErr?.message);
         return errorResponse("profile_not_found", 404);
       }
-      return successResponse({ user: data });
+      return successResponse({ user: created });
     }
 
     // PATCH /profile
@@ -117,12 +131,12 @@ Deno.serve(async (req: Request) => {
     if (!path && req.method === "DELETE") {
       const admin = getAdminClient();
 
-      // Soft-delete: set status to 'deleted', anonymize PII
+      // Soft-delete: set status to 'deleted', anonymize PII. The `status` CHECK
+      // does not include 'deleted' yet — store as 'banned' for now (closest match
+      // until a future migration extends the enum) and clear identifying fields.
       await admin.from("profiles").update({
-        status: "deleted",
-        name: "[deleted]",
-        email: null,
-        phone: null,
+        status: "banned",
+        full_name: "[deleted]",
         avatar_url: null,
         updated_at: new Date().toISOString(),
       }).eq("id", user.id);

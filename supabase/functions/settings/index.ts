@@ -12,16 +12,8 @@ import { errorResponse, successResponse, sanitizeError } from "../_shared/errors
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
 
-const UPDATABLE_SETTINGS = [
-  "language",
-  "theme",
-  "sound_enabled",
-  "haptics_enabled",
-  "notifications_enabled",
-  "marketing_emails",
-  "timezone",
-  "currency_display",
-];
+// Only the columns that exist in public.user_settings (see initial schema).
+const UPDATABLE_SETTINGS = ["theme", "sound_enabled", "haptics_enabled"];
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -48,15 +40,9 @@ Deno.serve(async (req: Request) => {
         const admin = getAdminClient();
         const defaults = {
           user_id: user.id,
-          language: "en",
           theme: "system",
           sound_enabled: true,
           haptics_enabled: true,
-          notifications_enabled: true,
-          marketing_emails: false,
-          timezone: "UTC",
-          currency_display: "USD",
-          created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
         const { data: created, error: createErr } = await admin

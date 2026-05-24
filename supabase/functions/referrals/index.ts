@@ -21,6 +21,9 @@ Deno.serve(async (req: Request) => {
 
   try {
     // POST /referrals/validate — public (no auth required)
+    // Schema: referral_codes(code PK, owner_id, type, expires_at, max_uses,
+    //   use_count, bonus_amount, campaign_name, created_at). No `is_active`
+    //   or `bonus_currency` columns.
     if (path === "validate" && req.method === "POST") {
       const { code } = await req.json();
       if (!code) return errorResponse("code is required", 400);
@@ -28,12 +31,11 @@ Deno.serve(async (req: Request) => {
       const admin = getAdminClient();
       const { data: rc } = await admin
         .from("referral_codes")
-        .select("code, is_active, expires_at, max_uses, use_count, bonus_amount, bonus_currency")
+        .select("code, expires_at, max_uses, use_count, bonus_amount")
         .eq("code", code.toUpperCase())
         .single();
 
       if (!rc) return successResponse({ valid: false, reason: "Code not found" });
-      if (!rc.is_active) return successResponse({ valid: false, reason: "Code is inactive" });
       if (rc.expires_at && new Date(rc.expires_at) < new Date()) {
         return successResponse({ valid: false, reason: "Code expired" });
       }
@@ -45,7 +47,6 @@ Deno.serve(async (req: Request) => {
         valid: true,
         code: rc.code,
         bonus_amount: rc.bonus_amount,
-        bonus_currency: rc.bonus_currency,
       });
     }
 
@@ -56,24 +57,28 @@ Deno.serve(async (req: Request) => {
     const supabase = getAnonClient(req);
 
     // GET /referrals/my-code
+    // Schema column is owner_id (not user_id).
     if (path === "my-code" && req.method === "GET") {
       const { data: rc, error } = await supabase
         .from("referral_codes")
-        .select("code, is_active, use_count, max_uses, created_at, expires_at, bonus_amount, bonus_currency")
-        .eq("user_id", user.id)
+        .select("code, use_count, max_uses, created_at, expires_at, bonus_amount")
+        .eq("owner_id", user.id)
         .single();
 
       if (error || !rc) {
-        // Auto-generate if not yet created
+        // Auto-generate if not yet created.
         const newCode = `Q4W-${user.id.substring(0, 8).toUpperCase()}`;
         const admin = getAdminClient();
         const { data: created, error: createErr } = await admin
           .from("referral_codes")
-          .insert({ user_id: user.id, code: newCode, is_active: true, use_count: 0 })
-          .select("code, is_active, use_count, created_at")
+          .insert({ owner_id: user.id, code: newCode, type: "user" })
+          .select("code, use_count, created_at, bonus_amount")
           .single();
 
-        if (createErr) return errorResponse("Failed to create referral code", 500);
+        if (createErr) {
+          console.warn("[referrals] create failed:", createErr.message);
+          return errorResponse("Failed to create referral code", 500);
+        }
         return successResponse({ referral_code: created });
       }
 
@@ -81,20 +86,22 @@ Deno.serve(async (req: Request) => {
     }
 
     // GET /referrals/stats
+    // Schema: referral_uses(code, referred_user_id, referrer_user_id,
+    //   bonus_paid, bonus_paid_at, used_at). Profile alias for `name`.
     if (path === "stats" && req.method === "GET") {
       const { data: rc } = await supabase
         .from("referral_codes")
         .select("code, use_count")
-        .eq("user_id", user.id)
+        .eq("owner_id", user.id)
         .single();
 
       const { data: uses } = await supabase
         .from("referral_uses")
-        .select("id, referred_user_id, bonus_credited, created_at, profiles!referred_user_id(name)")
-        .eq("referrer_id", user.id)
-        .order("created_at", { ascending: false });
+        .select("id, referred_user_id, bonus_paid, used_at, profiles!referred_user_id(name:full_name)")
+        .eq("referrer_user_id", user.id)
+        .order("used_at", { ascending: false });
 
-      const totalBonus = (uses ?? []).filter((u) => u.bonus_credited).length;
+      const totalBonus = (uses ?? []).filter((u) => u.bonus_paid).length;
 
       return successResponse({
         code: rc?.code ?? null,

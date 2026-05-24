@@ -25,19 +25,22 @@ Deno.serve(async (req: Request) => {
 
   try {
     // GET /wallet/balance
+    // Schema note: profiles.wallet_balance is NUMERIC(12,2) (USD dollars), there
+    // is no profiles.currency column. Returned as a string to preserve precision.
     if (path === "balance" && req.method === "GET") {
       const { data: profile, error } = await supabase
         .from("profiles")
-        .select("wallet_balance, currency")
+        .select("wallet_balance")
         .eq("id", user.id)
         .single();
 
       if (error || !profile) return errorResponse("wallet_not_found", 404);
 
+      const balance = Number(profile.wallet_balance ?? 0);
       return successResponse({
-        balance: profile.wallet_balance ?? 0, // stored as integer cents (R-02)
-        currency: profile.currency ?? "USD",
-        formatted: `${((profile.wallet_balance ?? 0) / 100).toFixed(2)}`,
+        balance,
+        currency: "USD",
+        formatted: balance.toFixed(2),
       });
     }
 
@@ -45,12 +48,15 @@ Deno.serve(async (req: Request) => {
     if (path === "transactions" && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
       const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") ?? "20")));
-      const type = url.searchParams.get("type"); // topup|withdrawal|prize|entry_fee|refund
+      const type = url.searchParams.get("type"); // topup|withdrawal|prize|game_entry_fee|refund
       const offset = (page - 1) * limit;
 
+      // Schema columns: id, user_id, type, amount, status, reference, description,
+      // game_id, admin_id, metadata, created_at. Alias `reference` as `reference_id`
+      // for backwards compatibility with the public API.
       let query = supabase
         .from("transactions")
-        .select("id, type, amount, currency, status, description, reference_id, created_at", { count: "exact" })
+        .select("id, type, amount, status, description, reference_id:reference, created_at", { count: "exact" })
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .range(offset, offset + limit - 1);

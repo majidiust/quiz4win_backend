@@ -33,7 +33,7 @@ Deno.serve(async (req: Request) => {
       // R-08: KYC must be verified before withdrawal
       const { data: profile } = await supabase
         .from("profiles")
-        .select("kyc_status, wallet_balance, currency")
+        .select("kyc_status, wallet_balance")
         .eq("id", user.id)
         .single();
 
@@ -50,8 +50,9 @@ Deno.serve(async (req: Request) => {
         return errorResponse(`Maximum withdrawal is ${MAX_WITHDRAWAL_CENTS / 100}`, 400);
       }
 
-      const balance = profile?.wallet_balance ?? 0;
-      if (amount_cents > balance) {
+      // Schema stores wallet_balance as NUMERIC dollars; compare in cents.
+      const balanceCents = Math.round(Number(profile?.wallet_balance ?? 0) * 100);
+      if (amount_cents > balanceCents) {
         return errorResponse("insufficient_balance", 400);
       }
 
@@ -61,19 +62,20 @@ Deno.serve(async (req: Request) => {
 
       const admin = getAdminClient();
 
-      // R-09: debit wallet and create withdrawal as a single atomic transaction
+      // R-09: debit wallet and create withdrawal as a single atomic transaction.
+      // Schema columns: amount NUMERIC(12,2), method, account_details JSONB,
+      // status, requested_at, completed_at, reviewed_at. No `currency` column.
       const { data: withdrawal, error: wErr } = await admin
         .from("withdrawals")
         .insert({
           user_id: user.id,
-          amount: amount_cents, // R-02: stored as integer cents
-          currency: profile?.currency ?? "USD",
+          amount: amount_cents / 100, // schema is NUMERIC dollars
           method,
-          account_details: JSON.stringify(account_details),
+          account_details, // JSONB column accepts the object directly
           status: "pending",
           requested_at: new Date().toISOString(),
         })
-        .select("id, amount, currency, status, requested_at")
+        .select("id, amount, status, requested_at")
         .single();
 
       if (wErr) return errorResponse(sanitizeError(wErr), 500);
@@ -94,7 +96,7 @@ Deno.serve(async (req: Request) => {
       const withdrawalId = rawPath;
       const { data, error } = await supabase
         .from("withdrawals")
-        .select("id, amount, currency, method, status, requested_at, processed_at, rejection_reason")
+        .select("id, amount, method, status, requested_at, completed_at, rejection_reason")
         .eq("id", withdrawalId)
         .eq("user_id", user.id)
         .single();
@@ -112,7 +114,7 @@ Deno.serve(async (req: Request) => {
 
       let query = supabase
         .from("withdrawals")
-        .select("id, amount, currency, method, status, requested_at, processed_at, rejection_reason", { count: "exact" })
+        .select("id, amount, method, status, requested_at, completed_at, rejection_reason", { count: "exact" })
         .eq("user_id", user.id)
         .order("requested_at", { ascending: false })
         .range(offset, offset + limit - 1);

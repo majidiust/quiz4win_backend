@@ -28,13 +28,16 @@ Deno.serve(async (req: Request) => {
 
   try {
     // POST /vouchers/validate — check without consuming
+    // Schema: vouchers(reward_type, reward_value NUMERIC, valid_from,
+    //   valid_until, max_redemptions, redemption_count, status, ...).
+    //   No reward_amount / reward_currency columns.
     if (rawPath.endsWith("/vouchers/validate") && req.method === "POST") {
-      const { code, game_id } = await req.json();
+      const { code } = await req.json();
       if (!code) return errorResponse("code is required", 400);
 
       const { data: voucher } = await admin
         .from("vouchers")
-        .select("id, code, status, reward_type, reward_amount, reward_currency, valid_from, valid_until, max_redemptions, redemption_count, usage_policy, eligibility_rules")
+        .select("id, code, status, reward_type, reward_value, valid_from, valid_until, max_redemptions, redemption_count")
         .eq("code", code.toUpperCase())
         .single();
 
@@ -47,13 +50,13 @@ Deno.serve(async (req: Request) => {
         return successResponse({ valid: false, reason: "Redemption limit reached" });
       }
 
-      // Check if user already redeemed this voucher (if single-use-per-user policy)
+      // Check if user already redeemed this voucher.
       const { data: existing } = await admin
         .from("voucher_redemptions")
         .select("id")
         .eq("voucher_id", voucher.id)
         .eq("user_id", user.id)
-        .single();
+        .maybeSingle();
       if (existing) return successResponse({ valid: false, reason: "Already redeemed by this user" });
 
       return successResponse({
@@ -61,8 +64,7 @@ Deno.serve(async (req: Request) => {
         voucher: {
           code: voucher.code,
           reward_type: voucher.reward_type,
-          reward_amount: voucher.reward_amount, // R-02: integer cents
-          reward_currency: voucher.reward_currency,
+          reward_value: voucher.reward_value,
           valid_until: voucher.valid_until,
         },
       });
@@ -73,10 +75,9 @@ Deno.serve(async (req: Request) => {
       const { code, game_id } = await req.json();
       if (!code) return errorResponse("code is required", 400);
 
-      // Re-validate
       const { data: voucher } = await admin
         .from("vouchers")
-        .select("id, code, status, reward_type, reward_amount, reward_currency, valid_until, max_redemptions, redemption_count")
+        .select("id, code, status, reward_type, reward_value, valid_until, max_redemptions, redemption_count")
         .eq("code", code.toUpperCase())
         .single();
 
@@ -86,28 +87,31 @@ Deno.serve(async (req: Request) => {
         return errorResponse("voucher_limit_reached", 400);
       }
 
-      const { data: existing } = await admin.from("voucher_redemptions").select("id").eq("voucher_id", voucher.id).eq("user_id", user.id).single();
+      const { data: existing } = await admin.from("voucher_redemptions").select("id").eq("voucher_id", voucher.id).eq("user_id", user.id).maybeSingle();
       if (existing) return errorResponse("already_redeemed", 409);
 
-      // R-05: append-only redemption record
+      // R-05: append-only redemption record. Schema columns:
+      // voucher_id, user_id, game_id, announcement_id, attempt_ip, user_agent,
+      // reward_applied, reward_value_applied_usd, transaction_id, redeemed_at.
+      const willApply = voucher.reward_type === "wallet_credit" && Number(voucher.reward_value ?? 0) > 0;
       const { error: redemptionErr } = await admin.from("voucher_redemptions").insert({
         voucher_id: voucher.id,
         user_id: user.id,
         game_id: game_id ?? null,
-        redeemed_at: new Date().toISOString(),
-        reward_type: voucher.reward_type,
-        reward_amount: voucher.reward_amount,
+        reward_applied: willApply,
+        reward_value_applied_usd: willApply ? voucher.reward_value : null,
       });
       if (redemptionErr) return errorResponse(sanitizeError(redemptionErr), 500);
 
       // Increment redemption count
       await admin.from("vouchers").update({ redemption_count: voucher.redemption_count + 1 }).eq("id", voucher.id);
 
-      // Apply reward
-      if (voucher.reward_type === "wallet_credit" && voucher.reward_amount > 0) {
+      // Apply reward (schema stores reward_value as NUMERIC dollars).
+      if (willApply) {
+        const cents = Math.round(Number(voucher.reward_value) * 100);
         await admin.rpc("credit_wallet", {
           p_user_id: user.id,
-          p_amount_cents: voucher.reward_amount,
+          p_amount_cents: cents,
           p_reference_id: voucher.id,
           p_type: "voucher",
         });
@@ -116,23 +120,24 @@ Deno.serve(async (req: Request) => {
       return successResponse({
         message: "Voucher redeemed successfully",
         reward_type: voucher.reward_type,
-        reward_amount: voucher.reward_amount,
-        reward_currency: voucher.reward_currency,
+        reward_value: voucher.reward_value,
       });
     }
 
-    // GET /games/:id/active-voucher — active show voucher announcement
+    // GET /games/:id/active-voucher — active show voucher announcement.
+    // Schema: voucher_announcements(expired_at, expiry_reason). No is_active.
     const activeVoucherMatch = rawPath.match(/\/games\/([^/]+)\/active-voucher/);
     if (activeVoucherMatch && req.method === "GET") {
       const gameId = activeVoucherMatch[1];
 
       const { data } = await admin
         .from("voucher_announcements")
-        .select("id, voucher_id, announced_at, expires_at, vouchers(code, reward_type, reward_amount, reward_currency)")
+        .select("id, voucher_id, announced_at, expired_at, vouchers(code, reward_type, reward_value)")
         .eq("game_id", gameId)
-        .eq("is_active", true)
-        .gte("expires_at", new Date().toISOString())
-        .single();
+        .is("expired_at", null)
+        .order("announced_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       if (!data) return successResponse({ active_voucher: null });
       return successResponse({ active_voucher: data });
@@ -146,7 +151,7 @@ Deno.serve(async (req: Request) => {
 
       const { data, error, count } = await admin
         .from("voucher_redemptions")
-        .select("id, redeemed_at, reward_type, reward_amount, vouchers(code, reward_currency)", { count: "exact" })
+        .select("id, redeemed_at, reward_applied, reward_value_applied_usd, vouchers(code, reward_type)", { count: "exact" })
         .eq("user_id", user.id)
         .order("redeemed_at", { ascending: false })
         .range(offset, offset + limit - 1);

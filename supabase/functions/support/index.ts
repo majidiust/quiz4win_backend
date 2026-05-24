@@ -25,14 +25,18 @@ Deno.serve(async (req: Request) => {
       const category = url.searchParams.get("category");
       const q = url.searchParams.get("q");
 
+      // Schema: help_articles(id, title, content, category, language,
+      // is_published, created_at, updated_at). No excerpt or sort_order columns.
       const admin = getAdminClient();
+      const lang = url.searchParams.get("lang");
       let query = admin
         .from("help_articles")
-        .select("id, title, category, excerpt, content, updated_at")
+        .select("id, title, category, content, language, updated_at")
         .eq("is_published", true)
-        .order("sort_order", { ascending: true });
+        .order("updated_at", { ascending: false });
 
       if (category) query = query.eq("category", category);
+      if (lang) query = query.eq("language", lang);
       if (q) query = query.ilike("title", `%${q}%`);
 
       const { data, error } = await query;
@@ -47,18 +51,17 @@ Deno.serve(async (req: Request) => {
     const supabase = getAnonClient(req);
 
     // POST /support/tickets
+    // Schema: support_tickets(user_id, ticket_number, category in
+    //   ('payment','kyc','game','account','other'), subject, description,
+    //   status, created_at, updated_at). No `priority` column.
     if (path === "tickets" && req.method === "POST") {
-      const { subject, category, message, priority = "normal" } = await req.json();
+      const { subject, category, message } = await req.json();
       if (!subject || !message) return errorResponse("subject and message are required", 400);
 
-      const validCategories = ["payment", "game", "account", "kyc", "technical", "other"];
-      const validPriorities = ["low", "normal", "high", "urgent"];
+      const validCategories = ["payment", "game", "account", "kyc", "other"];
 
       if (category && !validCategories.includes(category)) {
         return errorResponse(`Invalid category. Valid: ${validCategories.join(", ")}`, 400);
-      }
-      if (!validPriorities.includes(priority)) {
-        return errorResponse(`Invalid priority. Valid: ${validPriorities.join(", ")}`, 400);
       }
 
       const admin = getAdminClient();
@@ -72,23 +75,21 @@ Deno.serve(async (req: Request) => {
           user_id: user.id,
           ticket_number: ticketNumber,
           subject,
+          description: message, // schema column is `description` on the ticket
           category: category ?? "other",
-          priority,
           status: "open",
-          created_at: new Date().toISOString(),
         })
-        .select("id, ticket_number, subject, category, status, priority, created_at")
+        .select("id, ticket_number, subject, category, status, created_at")
         .single();
 
       if (ticketErr) return errorResponse(sanitizeError(ticketErr), 500);
 
-      // Add initial message
+      // Add initial message (column is `content`, not `message`).
       await admin.from("support_ticket_messages").insert({
         ticket_id: ticket.id,
         sender_type: "user",
         sender_id: user.id,
-        message,
-        created_at: new Date().toISOString(),
+        content: message,
       });
 
       return successResponse({ ticket }, 201);
@@ -103,7 +104,7 @@ Deno.serve(async (req: Request) => {
 
       let query = supabase
         .from("support_tickets")
-        .select("id, ticket_number, subject, category, status, priority, created_at, updated_at", { count: "exact" })
+        .select("id, ticket_number, subject, category, status, created_at, updated_at", { count: "exact" })
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .range(offset, offset + limit - 1);

@@ -44,10 +44,17 @@ Deno.serve(async (req: Request) => {
       const status = url.searchParams.get("status") ?? "open";
       const offset = (page - 1) * limit;
 
+      // Schema: games has max_players, total_participants, scheduled_at,
+      // started_at, ended_at. Alias to the public API shape.
       let query = supabase
         .from("games")
-        .select("id, title, mode, status, entry_fee, prize_pool, participant_count, max_participants, start_time, end_time, category", { count: "exact" })
-        .order("start_time", { ascending: true })
+        .select(
+          "id, title, mode, status, entry_fee, prize_pool, " +
+            "participant_count:total_participants, max_participants:max_players, " +
+            "start_time:scheduled_at, end_time:ended_at, category",
+          { count: "exact" },
+        )
+        .order("scheduled_at", { ascending: true })
         .range(offset, offset + limit - 1);
 
       if (mode) query = query.eq("mode", mode);
@@ -74,10 +81,10 @@ Deno.serve(async (req: Request) => {
     // POST /games/:id/join — join game (R-09: atomic debit + join)
     if (gameId && action === "join" && req.method === "POST") {
       const { data: game } = await supabase
-        .from("games").select("id, status, entry_fee, max_participants, participant_count").eq("id", gameId).single();
+        .from("games").select("id, status, entry_fee, max_players, total_participants").eq("id", gameId).single();
       if (!game) return errorResponse("game_not_found", 404);
       if (game.status !== "open") return errorResponse("game_not_open", 400);
-      if (game.max_participants && game.participant_count >= game.max_participants) {
+      if (game.max_players && (game.total_participants ?? 0) >= game.max_players) {
         return errorResponse("game_full", 400);
       }
 
@@ -85,9 +92,9 @@ Deno.serve(async (req: Request) => {
       const { data: existing } = await supabase.from("game_participants").select("id").eq("game_id", gameId).eq("user_id", user.id).single();
       if (existing) return errorResponse("already_joined", 409);
 
-      // Check wallet balance (R-02: integer cents)
+      // Wallet balance and entry fee are both NUMERIC dollars in schema.
       const { data: profile } = await supabase.from("profiles").select("wallet_balance, kyc_status").eq("id", user.id).single();
-      if ((profile?.wallet_balance ?? 0) < (game.entry_fee ?? 0)) {
+      if (Number(profile?.wallet_balance ?? 0) < Number(game.entry_fee ?? 0)) {
         return errorResponse("insufficient_balance", 400);
       }
 
@@ -128,7 +135,7 @@ Deno.serve(async (req: Request) => {
       const offset = (page - 1) * limit;
       const { data, error, count } = await supabase
         .from("game_participants")
-        .select("user_id, score, rank, joined_at, profiles(name, avatar_url)", { count: "exact" })
+        .select("user_id, score, rank, joined_at, profiles(name:full_name, avatar_url)", { count: "exact" })
         .eq("game_id", gameId)
         .order("score", { ascending: false })
         .range(offset, offset + limit - 1);
@@ -169,29 +176,42 @@ Deno.serve(async (req: Request) => {
       return successResponse({ result });
     }
 
-    // GET /games/:id/result — my result
+    // GET /games/:id/result — my result. Schema fields: score, rank,
+    // prize_earned, correct_answers, wrong_answers, completed_at.
     if (gameId && action === "result" && req.method === "GET") {
       const { data, error } = await supabase
         .from("game_participants")
-        .select("score, rank, prize_amount, prize_credited, correct_answers, total_questions, completed_at")
+        .select("score, rank, prize_amount:prize_earned, correct_answers, wrong_answers, completed_at")
         .eq("game_id", gameId).eq("user_id", user.id).single();
       if (error || !data) return errorResponse("result_not_found", 404);
       return successResponse({ result: data });
     }
 
-    // POST /games/:id/claim-prize — manual prize claim fallback
+    // POST /games/:id/claim-prize — manual prize claim fallback.
+    // No `prize_credited` column in schema; gate double-claims by looking for an
+    // existing prize transaction referencing this game.
     if (gameId && action === "claim-prize" && req.method === "POST") {
       const { data: participant } = await supabase
         .from("game_participants")
-        .select("id, prize_amount, prize_credited, rank")
+        .select("id, prize_earned, rank")
         .eq("game_id", gameId).eq("user_id", user.id).single();
       if (!participant) return errorResponse("not_a_participant", 404);
-      if (participant.prize_credited) return errorResponse("prize_already_credited", 409);
-      if (!participant.prize_amount || participant.prize_amount === 0) return errorResponse("no_prize_to_claim", 400);
+      const prizeDollars = Number(participant.prize_earned ?? 0);
+      if (prizeDollars <= 0) return errorResponse("no_prize_to_claim", 400);
 
       const admin = getAdminClient();
-      await admin.rpc("credit_wallet", { p_user_id: user.id, p_amount_cents: participant.prize_amount, p_reference_id: gameId, p_type: "prize" });
-      await admin.from("game_participants").update({ prize_credited: true }).eq("id", participant.id);
+      const { data: priorTx } = await admin
+        .from("transactions")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("type", "prize")
+        .eq("game_id", gameId)
+        .limit(1)
+        .maybeSingle();
+      if (priorTx) return errorResponse("prize_already_credited", 409);
+
+      const prizeCents = Math.round(prizeDollars * 100);
+      await admin.rpc("credit_wallet", { p_user_id: user.id, p_amount_cents: prizeCents, p_reference_id: gameId, p_type: "prize" });
 
       // Fire branded win notification (non-blocking — never fail the claim on email error)
       try {
@@ -204,7 +224,7 @@ Deno.serve(async (req: Request) => {
             name: profile.full_name ?? "there",
             gameTitle: game.title,
             rank: participant.rank ?? null,
-            prizeAmountCents: participant.prize_amount,
+            prizeAmountCents: prizeCents,
           });
           sendEmail({ to: { email: profile.email, name: profile.full_name ?? undefined }, subject: tpl.subject, html: tpl.html, text: tpl.text })
             .catch((e) => console.error("[games] win email failed:", e));
@@ -213,7 +233,7 @@ Deno.serve(async (req: Request) => {
         console.error("[games] win email lookup failed:", e);
       }
 
-      return successResponse({ message: "Prize credited to wallet", amount_cents: participant.prize_amount });
+      return successResponse({ message: "Prize credited to wallet", amount_cents: prizeCents });
     }
 
     // GET /games/:id/leaderboard
@@ -221,7 +241,7 @@ Deno.serve(async (req: Request) => {
       const limit = Math.min(200, parseInt(url.searchParams.get("limit") ?? "50"));
       const { data, error } = await supabase
         .from("game_participants")
-        .select("rank, score, prize_amount, user_id, profiles(name, avatar_url)")
+        .select("rank, score, prize_amount:prize_earned, user_id, profiles(name:full_name, avatar_url)")
         .eq("game_id", gameId)
         .order("rank", { ascending: true })
         .limit(limit);

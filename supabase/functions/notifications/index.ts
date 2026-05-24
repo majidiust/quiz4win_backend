@@ -33,14 +33,15 @@ Deno.serve(async (req: Request) => {
       const unreadOnly = url.searchParams.get("unread_only") === "true";
       const offset = (page - 1) * limit;
 
+      // Schema column is `read` (not `is_read`). Alias for the public response.
       let query = supabase
         .from("notifications")
-        .select("id, type, title, body, data, is_read, created_at", { count: "exact" })
+        .select("id, type, title, body, data, is_read:read, sent_via_push, created_at", { count: "exact" })
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
-      if (unreadOnly) query = query.eq("is_read", false);
+      if (unreadOnly) query = query.eq("read", false);
 
       const { data, error, count } = await query;
       if (error) return errorResponse("Failed to fetch notifications", 500);
@@ -58,9 +59,9 @@ Deno.serve(async (req: Request) => {
       const admin = getAdminClient();
 
       if (notificationId) {
-        await admin.from("notifications").update({ is_read: true, read_at: new Date().toISOString() }).eq("id", notificationId).eq("user_id", user.id);
+        await admin.from("notifications").update({ read: true }).eq("id", notificationId).eq("user_id", user.id);
       } else {
-        await admin.from("notifications").update({ is_read: true, read_at: new Date().toISOString() }).eq("user_id", user.id).eq("is_read", false);
+        await admin.from("notifications").update({ read: true }).eq("user_id", user.id).eq("read", false);
       }
 
       return successResponse({ message: notificationId ? "Notification marked as read" : "All notifications marked as read" });
@@ -69,10 +70,8 @@ Deno.serve(async (req: Request) => {
     // PUT /notifications/preferences
     if (path === "preferences" && req.method === "PUT") {
       const prefs = await req.json();
-      const allowed = [
-        "game_start", "game_result", "prize_credited", "withdrawal_update",
-        "kyc_update", "new_message", "promotions", "system",
-      ];
+      // Schema columns on public.notification_preferences.
+      const allowed = ["game_reminders", "promotions", "kyc_updates", "system"];
 
       const updateData: Record<string, boolean> = {};
       for (const key of allowed) {
@@ -93,11 +92,16 @@ Deno.serve(async (req: Request) => {
     }
 
     // POST /notifications/push-token
+    // Schema: push_tokens(user_id, token, platform CHECK in ('ios','android'),
+    //                     device_id UNIQUE NOT NULL, created_at). No is_active /
+    //         updated_at columns; conflict key is device_id, not token.
     if (path === "push-token" && req.method === "POST") {
       const { token, platform, device_id } = await req.json();
-      if (!token || !platform) return errorResponse("token and platform are required", 400);
+      if (!token || !platform || !device_id) {
+        return errorResponse("token, platform and device_id are required", 400);
+      }
 
-      const validPlatforms = ["expo", "fcm", "apns", "web"];
+      const validPlatforms = ["ios", "android"];
       if (!validPlatforms.includes(platform)) {
         return errorResponse(`Invalid platform. Supported: ${validPlatforms.join(", ")}`, 400);
       }
@@ -105,14 +109,7 @@ Deno.serve(async (req: Request) => {
       const admin = getAdminClient();
       const { error } = await admin
         .from("push_tokens")
-        .upsert({
-          user_id: user.id,
-          token,
-          platform,
-          device_id: device_id ?? null,
-          is_active: true,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "token" });
+        .upsert({ user_id: user.id, token, platform, device_id }, { onConflict: "device_id" });
 
       if (error) return errorResponse(sanitizeError(error), 500);
       return successResponse({ message: "Push token registered" }, 201);
