@@ -20,7 +20,7 @@ import { createEmailBroadcast } from "@/lib/actions/email-broadcasts";
 const broadcastSchema = z.object({
   title: z.string().min(1, "Internal title is required"),
   subject: z.string().min(1, "Email subject is required"),
-  type: z.enum(["system", "promotion"]).default("promotion"),
+  type: z.enum(["system", "promotion"]),
   target_segment: z.enum([
     "all", "verified_only", "non_verified_only", "active_players_30d", "inactive_players_30d", "specific_ids"
   ]),
@@ -30,7 +30,7 @@ const broadcastSchema = z.object({
   bodyHtml: z.string().min(1, "Body content is required"),
   ctaLabel: z.string().optional(),
   ctaUrl: z.string().url().optional().or(z.literal("")),
-  ctaVariant: z.enum(["primary", "gold", "win", "dark"]).default("primary"),
+  ctaVariant: z.enum(["primary", "gold", "win", "dark"]),
   ctaNote: z.string().optional(),
 });
 
