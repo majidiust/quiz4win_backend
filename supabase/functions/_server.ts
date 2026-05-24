@@ -204,7 +204,45 @@ async function readBodyForTrace(req: Request): Promise<{ text: string; clone: Re
   return { text: display + suffix, clone };
 }
 
-realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
+// Guard against double-invocation: if _server.ts is loaded twice in the same
+// Deno process (e.g. via different import specifiers), only the first call
+// actually binds the port. The second call is silently absorbed.
+const SERVE_GUARD = Symbol.for("quiz4win.api.served");
+// deno-lint-ignore no-explicit-any
+const _g = globalThis as any;
+if (_g[SERVE_GUARD]) {
+  console.warn("[api] _server.ts loaded a second time — skipping duplicate Deno.serve()");
+} else {
+  _g[SERVE_GUARD] = true;
+  startServerWithRetry();
+}
+
+async function startServerWithRetry(): Promise<void> {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const server = realServe({ port: PORT, hostname: "0.0.0.0" }, dispatch);
+      // Wait for the server lifecycle. If bind fails, Deno may reject
+      // server.finished. We swallow only AddrInUse to retry; other errors
+      // are fatal.
+      await server.finished;
+      return;
+    } catch (err) {
+      if (err instanceof Deno.errors.AddrInUse && attempt < MAX_ATTEMPTS) {
+        const delayMs = 2000 * attempt;
+        console.warn(
+          `[api] port ${PORT} already in use (attempt ${attempt}/${MAX_ATTEMPTS}) — retrying in ${delayMs}ms`,
+        );
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      console.error(`[api] fatal: could not bind port ${PORT}:`, err);
+      Deno.exit(1);
+    }
+  }
+}
+
+async function dispatch(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const startedAt = Date.now();
 
@@ -278,4 +316,4 @@ realServe({ port: PORT, hostname: "0.0.0.0" }, async (req: Request) => {
       headers: { "Content-Type": "application/json" },
     });
   }
-});
+}
