@@ -17,6 +17,7 @@ import { corsHeaders, handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { sendEmail, welcomeTemplate } from "../_shared/email.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -67,6 +68,14 @@ Deno.serve(async (req: Request) => {
         }
         return errorResponse(error.message, 400);
       }
+      // Fire welcome email — non-blocking so a Brevo hiccup never fails the signup.
+      if (data.user?.email) {
+        const tpl = welcomeTemplate({ name });
+        sendEmail({ to: { email: data.user.email, name }, ...tpl }).catch((err) =>
+          console.warn("[auth] welcome email failed:", err)
+        );
+      }
+
       return successResponse({ user: data.user, session: data.session }, 201);
     }
 
