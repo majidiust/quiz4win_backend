@@ -57,7 +57,13 @@ The mobile/devops team must host these two files at `https://app.quiz4win.com/.w
   ```
   (Get the SHA-256 fingerprint via Expo: `eas credentials` → Android → production.)
 
-The nginx config at `deploy/nginx/app.quiz4win.com.conf` already serves these from `/var/www/app.quiz4win.com/.well-known/`.
+These manifests are served by the `quiz4win-app` Docker container from `app/public/.well-known/` (see `app/Dockerfile`). Edit the placeholders (`TEAMID` and the SHA-256 fingerprint) in those files, then publish with:
+
+```bash
+docker compose build app && docker compose up -d app
+```
+
+Host nginx (`deploy/nginx/app.quiz4win.com.conf`) terminates TLS and proxies everything to that container on `127.0.0.1:5801`.
 
 ## 2) Handle the deep link route
 

@@ -18,7 +18,6 @@ set -euo pipefail
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 DOMAINS=("panel.quiz4win.com" "api.quiz4win.com" "app.quiz4win.com")
-APP_WEBROOT="/var/www/app.quiz4win.com"   # serves Universal Link association files
 EMAIL="${CERTBOT_EMAIL:-}"               # set env var or pass below
 NGINX_CONF_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
@@ -52,9 +51,9 @@ fi
 info "Creating ACME webroot $WEBROOT"
 mkdir -p "$WEBROOT"
 
-# Static root for Universal Link association files (iOS / Android deep links)
-info "Creating app static webroot $APP_WEBROOT/.well-known"
-mkdir -p "${APP_WEBROOT}/.well-known"
+# Note: Universal Link / App Link manifest files are now served by the
+# quiz4win-app Docker container (see app/public/.well-known/). No host
+# webroot is required for app.quiz4win.com anymore.
 
 # ─── 2. Install HTTP-only bootstrap configs (port 80 only) ───────────────────
 # We need nginx to serve /.well-known/acme-challenge/ BEFORE we have certs.
@@ -127,13 +126,13 @@ fi
 
 echo ""
 ok "Setup complete!"
-echo "  panel.quiz4win.com → https://panel.quiz4win.com  (→ 127.0.0.1:5800)"
-echo "  api.quiz4win.com   → https://api.quiz4win.com    (→ 127.0.0.1:5802)"
-echo "  app.quiz4win.com   → https://app.quiz4win.com    (→ 127.0.0.1:5801)"
+echo "  panel.quiz4win.com → https://panel.quiz4win.com  (→ 127.0.0.1:5800, quiz4win-admin)"
+echo "  app.quiz4win.com   → https://app.quiz4win.com    (→ 127.0.0.1:5801, quiz4win-app)"
+echo "  api.quiz4win.com   → https://api.quiz4win.com    (→ 127.0.0.1:5802, quiz4win-api)"
 echo ""
-echo "  Universal Link files must be placed at:"
-echo "    ${APP_WEBROOT}/.well-known/apple-app-site-association"
-echo "    ${APP_WEBROOT}/.well-known/assetlinks.json"
+echo "  Universal Link manifests are served by the quiz4win-app container from"
+echo "  app/public/.well-known/ — edit those files (TEAM_ID, SHA-256 fingerprint)"
+echo "  and run 'docker compose build app && docker compose up -d app' to publish."
 echo ""
 echo "  Start the Docker services if not already running:"
 echo "    docker compose up -d"

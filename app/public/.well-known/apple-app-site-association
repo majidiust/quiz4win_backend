@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "TEAMID.com.quiz4win.app",
+        "paths": ["/auth/*"]
+      }
+    ]
+  }
+}

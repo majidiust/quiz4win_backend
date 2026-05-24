@@ -16,6 +16,16 @@ Quiz4Win is a **real-money quiz gaming platform**. The backend is hosted entirel
 - **S3-compatible Object Storage** (DigitalOcean Spaces, region `fra1`, bucket `wingobingo`) — all file uploads: KYC documents (private, presigned GET), profile avatars (public-read), and any future attachments. Shared by both the edge functions (`supabase/functions/_shared/s3.ts`) and the admin panel (`admin/src/lib/s3.ts`). Supabase Storage is no longer used.
 - **External APIs** — payment gateways (top-up/withdrawal), reCAPTCHA (fraud prevention), Brevo (transactional email)
 
+### Public hostnames
+
+| Host | Port | Container | Purpose |
+|------|------|-----------|---------|
+| `panel.quiz4win.com` | 5800 → 3000 | `quiz4win-admin` (Next.js)        | Admin panel (staff) |
+| `app.quiz4win.com`   | 5801 → 8080 | `quiz4win-app` (nginx:alpine)     | Customer Universal Link host: AASA + assetlinks manifests, password-reset web fallback, landing page |
+| `api.quiz4win.com`   | 5802 → 8000 | `quiz4win-api` (Deno edge fns)    | All customer + admin REST/Edge endpoints |
+
+Host nginx terminates TLS for all three subdomains and proxies to the loopback ports above. See `deploy/nginx/*.conf` and `docker-compose.yml`.
+
 ---
 
 ## 2. Repository Structure

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quiz4Win — Play Live. Compete Fast.</title>
+  <meta name="description" content="Quiz4Win is a live quiz gaming platform. Download the app to join games, answer fast, and win real prizes." />
+  <meta name="robots" content="index,follow" />
+  <style>
+    :root {
+      --primary: #5B6BF5;
+      --primary-dark: #4452E8;
+      --dark: #0F172A;
+      --darker: #0B1124;
+      --text-dark: #0F172A;
+      --text-muted: #475569;
+      --bg: #F4F5FB;
+      --surface: #FFFFFF;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text-dark);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--darker);
+      padding: 20px 24px;
+      text-align: center;
+    }
+    header img { height: 28px; vertical-align: middle; }
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+    }
+    .card {
+      background: var(--surface);
+      max-width: 480px;
+      width: 100%;
+      padding: 40px 32px;
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(15, 23, 42, 0.08);
+      text-align: center;
+    }
+    h1 { margin: 0 0 12px; font-size: 28px; }
+    p.lead { color: var(--text-muted); margin: 0 0 32px; font-size: 16px; line-height: 1.5; }
+    .btn-row { display: flex; gap: 12px; flex-direction: column; }
+    .btn {
+      display: inline-block;
+      padding: 14px 24px;
+      border-radius: 10px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 16px;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-outline { border: 1.5px solid var(--dark); color: var(--dark); }
+    footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <header><img src="/q4w_text_logo.png" alt="Quiz4Win" /></header>
+  <main>
+    <div class="card">
+      <h1>Play Live. Compete Fast.</h1>
+      <p class="lead">Quiz4Win is available on iOS and Android. Download the app to join live games and win real prizes.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://apps.apple.com/app/quiz4win/id000000000">Download for iOS</a>
+        <a class="btn btn-outline" href="https://play.google.com/store/apps/details?id=com.quiz4win.app">Get it on Google Play</a>
+      </div>
+    </div>
+  </main>
+  <footer>© Quiz4Win · 18+ where applicable · Play responsibly.</footer>
+</body>
+</html>

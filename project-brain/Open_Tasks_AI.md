@@ -92,7 +92,18 @@ Owner: A-01 (Augment Code Agent)
 
 ---
 
+## Pending Deployment / Mobile Coordination
+
+- [P1] [TODO] [HUMAN-MOBILE] **Fill iOS Universal Link manifest placeholders** — Edit `app/public/.well-known/apple-app-site-association` and replace `TEAMID.com.quiz4win.app` with the real Apple Team ID once provisioning is finalised. Then rebuild + redeploy: `docker compose build app && docker compose up -d app`.
+
+- [P1] [TODO] [HUMAN-MOBILE] **Fill Android App Link manifest placeholder** — Edit `app/public/.well-known/assetlinks.json` and replace `REPLACE_WITH_SHA256_FROM_eas_credentials` with the SHA-256 cert fingerprint from `eas credentials` (Android → production). Then rebuild + redeploy as above.
+
+- [P1] [TODO] [HUMAN-OPS] **Deploy quiz4win-app container to production host** — Pull latest, then `docker compose build app && docker compose up -d app` on the production VM. Also re-run `sudo bash deploy/nginx/setup.sh` only if the cert for `app.quiz4win.com` is not yet issued (the script is idempotent). Fixes the 502 on the recovery-link web fallback.
+
+---
+
 ## Completed Tasks
 
+- [P1] [DONE] [A-01] **Add quiz4win-app static container for app.quiz4win.com** — Created `app/` module (Dockerfile + nginx.conf + public/) serving Universal Link manifests + password-reset web fallback; wired into `docker-compose.yml` on port 5801; simplified host nginx config + setup script. Resolves 502 on Supabase recovery links opened in browser. — 2026-05-24
 - [P0] [DONE] [HUMAN] Supabase project credentials added to `.env`. — 2026-05-22
 - [P0] [DONE] [A-02] Bootstrap multi-agent coordination framework — Created agents.md, /project-brain/ (7 files), /agents/ (5 files). — 2026-05-22
