@@ -55,6 +55,42 @@ export function inviteTemplate(opts: { name: string; activationUrl: string; role
   return { subject, html, text };
 }
 
+export function customerMagicLinkTemplate(opts: { name: string; actionUrl: string }) {
+  const subject = "Your Quiz4Win sign-in link";
+  const html = wrap(
+    "Sign in to Quiz4Win",
+    `<p>Hello${opts.name ? ` ${escapeHtml(opts.name)}` : ""},</p>
+     <p>An administrator generated a one-click sign-in link for your Quiz4Win account.
+        Click the button below to sign in. The link can only be used once.</p>
+     <p style="margin:24px 0"><a href="${opts.actionUrl}"
+        style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">
+        Sign in to Quiz4Win</a></p>
+     <p style="font-size:13px;color:#475569">If the button doesn't work, copy and paste this URL into your browser:<br>
+        <a href="${opts.actionUrl}" style="color:#0f172a;word-break:break-all">${opts.actionUrl}</a></p>
+     <p style="font-size:13px;color:#475569">If you weren't expecting this email, you can safely ignore it.</p>`,
+  );
+  const text = `Sign in to Quiz4Win\n\nHello${opts.name ? ` ${opts.name}` : ""},\n\nOpen this link to sign in:\n${opts.actionUrl}\n\nIf you weren't expecting this, ignore this email.`;
+  return { subject, html, text };
+}
+
+export function customerRecoveryTemplate(opts: { name: string; actionUrl: string }) {
+  const subject = "Reset your Quiz4Win password";
+  const html = wrap(
+    "Password reset request",
+    `<p>Hello${opts.name ? ` ${escapeHtml(opts.name)}` : ""},</p>
+     <p>An administrator requested a password reset on your Quiz4Win account.
+        Click the button below to choose a new password.</p>
+     <p style="margin:24px 0"><a href="${opts.actionUrl}"
+        style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">
+        Reset password</a></p>
+     <p style="font-size:13px;color:#475569">If the button doesn't work, copy and paste this URL into your browser:<br>
+        <a href="${opts.actionUrl}" style="color:#0f172a;word-break:break-all">${opts.actionUrl}</a></p>
+     <p style="font-size:13px;color:#475569">If you didn't request this, you can safely ignore this email — your password will remain unchanged.</p>`,
+  );
+  const text = `Reset your Quiz4Win password\n\nHello${opts.name ? ` ${opts.name}` : ""},\n\nOpen this link to choose a new password:\n${opts.actionUrl}\n\nIf you didn't request this, ignore this email.`;
+  return { subject, html, text };
+}
+
 export function passwordChangedTemplate(opts: { name: string; ipAddress: string | null; at: Date }) {
   const subject = "Your Quiz4Win admin password was changed";
   const html = wrap(

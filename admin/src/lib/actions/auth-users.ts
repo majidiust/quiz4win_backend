@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { sendEmail } from "@/lib/admin-auth/email";
+import { customerMagicLinkTemplate, customerRecoveryTemplate } from "@/lib/admin-auth/email-templates";
 
 export interface ActionResult { ok: boolean; message: string; userId?: string }
 
@@ -237,19 +239,27 @@ export async function sendAuthLink(input: z.infer<typeof LinkSchema>): Promise<A
   const { data: target } = await db.auth.admin.getUserById(parsed.data.id);
   if (!target.user?.email) return { ok: false, message: "User has no email" };
 
-  // Recovery links go to the user-facing app (opens in Expo via Universal Link).
-  // Magic-link is used for staff and stays on the admin panel.
-  const redirectTo =
-    parsed.data.type === "recovery"
-      ? `${appUrl()}/auth/reset-password`
-      : `${adminUrl()}/login`;
+  // Both magic-link and recovery flows land on the customer app (Expo Universal Link).
+  const redirectTo = `${appUrl()}/auth/${parsed.data.type === "recovery" ? "reset-password" : "callback"}`;
 
-  const { error } = await db.auth.admin.generateLink({
+  const { data: linkData, error } = await db.auth.admin.generateLink({
     type: parsed.data.type,
     email: target.user.email,
     options: { redirectTo },
   });
-  if (error) return { ok: false, message: error.message };
+  if (error || !linkData?.properties?.action_link) {
+    return { ok: false, message: error?.message ?? "Failed to generate link" };
+  }
+
+  // Supabase only generates the link; we must dispatch the email ourselves via Brevo.
+  const name = (target.user.user_metadata?.full_name as string | undefined) ?? "";
+  const tpl =
+    parsed.data.type === "recovery"
+      ? customerRecoveryTemplate({ name, actionUrl: linkData.properties.action_link })
+      : customerMagicLinkTemplate({ name, actionUrl: linkData.properties.action_link });
+
+  const send = await sendEmail({ to: target.user.email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+  if (!send.ok) return { ok: false, message: `Email send failed (${send.error ?? "unknown"})` };
 
   await audit(admin.id, `auth_user_${parsed.data.type}_sent`, parsed.data.id, { email: target.user.email });
   return { ok: true, message: parsed.data.type === "recovery" ? "Recovery email sent" : "Magic link email sent" };
