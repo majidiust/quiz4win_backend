@@ -5,7 +5,11 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/admin-auth/email";
-import { customerMagicLinkTemplate, customerRecoveryTemplate } from "@/lib/admin-auth/email-templates";
+import {
+  customerMagicLinkTemplate,
+  customerRecoveryTemplate,
+  customEmailTemplate,
+} from "@/lib/admin-auth/email-templates";
 
 export interface ActionResult { ok: boolean; message: string; userId?: string }
 
@@ -283,4 +287,49 @@ export async function inviteUserByEmail(input: z.infer<typeof InviteSchema>): Pr
   await audit(admin.id, "auth_user_invited", data.user.id, { email: parsed.data.email });
   revalidatePath("/users");
   return { ok: true, message: "Invite email sent", userId: data.user.id };
+}
+
+/* ----------------------------- custom email ----------------------------- */
+
+const CustomEmailSchema = z.object({
+  id: z.string().uuid(),
+  subject: z.string().trim().min(1).max(200),
+  heroTitle: z.string().trim().min(1).max(200),
+  heroSubtitle: z.string().trim().max(500).optional(),
+  bodyHtml: z.string().trim().min(1).max(5000),
+  ctaLabel: z.string().trim().max(50).optional(),
+  ctaUrl: z.string().trim().url().optional(),
+  ctaVariant: z.enum(["primary", "gold", "win", "dark"]).default("primary"),
+});
+
+export async function sendCustomEmail(input: z.infer<typeof CustomEmailSchema>): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin", "support"]);
+  const parsed = CustomEmailSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input" };
+
+  const db = createSupabaseAdminClient();
+  const { data: target } = await db.auth.admin.getUserById(parsed.data.id);
+  if (!target.user?.email) return { ok: false, message: "User has no email" };
+
+  const tpl = customEmailTemplate({
+    subject: parsed.data.subject,
+    heroTitle: parsed.data.heroTitle,
+    heroSubtitle: parsed.data.heroSubtitle,
+    bodyHtml: parsed.data.bodyHtml,
+    cta: (parsed.data.ctaLabel && parsed.data.ctaUrl)
+      ? { label: parsed.data.ctaLabel, url: parsed.data.ctaUrl, variant: parsed.data.ctaVariant }
+      : undefined,
+    // Very basic text conversion: strip tags, keep lines.
+    text: parsed.data.bodyHtml.replace(/<[^>]*>/g, ""),
+  });
+
+  const send = await sendEmail({ to: target.user.email, subject: tpl.subject, html: tpl.html, text: tpl.text });
+  if (!send.ok) return { ok: false, message: `Email send failed (${send.error ?? "unknown"})` };
+
+  await audit(admin.id, "auth_user_custom_email_sent", parsed.data.id, {
+    subject: parsed.data.subject,
+    email: target.user.email,
+  });
+
+  return { ok: true, message: "Email sent" };
 }

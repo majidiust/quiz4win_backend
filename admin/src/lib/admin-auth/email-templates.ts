@@ -89,3 +89,22 @@ export function customerRecoveryTemplate(opts: { name: string; actionUrl: string
   });
   return { subject, html, text };
 }
+
+export function customEmailTemplate(opts: {
+  subject: string;
+  heroTitle: string;
+  heroSubtitle?: string;
+  bodyHtml: string;
+  cta?: { label: string; url: string; variant?: "primary" | "gold" | "win" | "dark" };
+  text: string;
+}) {
+  const { html, text } = renderBrandEmail({
+    preheader: opts.subject,
+    heroTitle: opts.heroTitle,
+    heroSubtitle: opts.heroSubtitle,
+    bodyHtml: opts.bodyHtml,
+    cta: opts.cta,
+    text: opts.text,
+  });
+  return { subject: opts.subject, html, text };
+}

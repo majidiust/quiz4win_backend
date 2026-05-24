@@ -13,6 +13,7 @@ import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, initials } from "@/lib/utils";
 import { UserActions } from "./user-actions";
 import { AuthActions } from "./auth-actions";
+import { CustomEmailAction } from "./custom-email-action";
 
 export const metadata = { title: "Player profile" };
 
@@ -52,6 +53,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
             <Button asChild variant="outline" size="sm">
               <Link href="/users"><ArrowLeft className="size-4" /> All users</Link>
             </Button>
+            <CustomEmailAction userId={id} userEmail={user.email} />
             <UserActions userId={id} currentStatus={user.status} />
             <AuthActions userId={id} userEmail={user.email} isBanned={isBanned} emailConfirmed={!!authUser?.email_confirmed_at} />
           </div>
