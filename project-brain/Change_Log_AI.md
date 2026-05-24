@@ -1,5 +1,13 @@
 # Quiz4Win Backend — AI Agent Change Log
 
+[2026-05-24] [A-01] [BUILD] **Phase 1-6 Email System Implementation.**
+- [Phase 1] Premium brand shell for all transactional emails (admin/src/lib/admin-auth/email-brand.ts).
+- [Phase 2] Welcome email on customer signup (supabase/functions/_shared/email.ts + supabase/functions/auth/index.ts).
+- [Phase 3] Admin-initiated custom email UI (admin/src/app/(app)/users/[id]/custom-email-action.tsx) and server action (sendCustomEmail).
+- [Phase 4] Voucher notification emails with UI checkbox in voucher-actions.
+- [Phase 5] Win / prize notification email triggered on successful claim-prize in supabase/functions/games/index.ts.
+- [Phase 6] Bulk Email Broadcast system: new tables email_broadcasts, email_messages; new admin UI under /email-broadcasts; server action createEmailBroadcast; Edge Function worker email-broadcast.
+
 [2026-05-23] [A-01] [BUILD] Created MOBILE_TEAM_PROMPT.md — a detailed handoff document for the mobile team explaining how to implement Universal Links and password reset without the Supabase SDK.
 [2026-05-23] [A-01] [FIX] /auth/update-password edge function now uses admin.auth.admin.updateUserById() instead of anon supabase.auth.updateUser(). The previous implementation silently failed with "Auth session missing" because the anon client only had the Bearer token forwarded as a header — no internal GoTrue session was established via setSession(). validateJWT() still verifies the token via getUser() before the admin client performs the actual write. Affects both the in-app OTP flow and the new Universal Link magic-link flow.
 [2026-05-23] [A-01] [BUILD] /auth/forgot-password now passes redirectTo=https://app.quiz4win.com/auth/reset-password (configurable via APP_URL env var) so end-user-initiated recovery emails open in the Expo app via Universal Link. Added APP_URL to the api service in docker-compose.yml.

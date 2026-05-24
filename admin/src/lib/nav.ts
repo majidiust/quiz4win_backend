@@ -71,7 +71,8 @@ export const navSections: NavSection[] = [
     title: "Engagement",
     items: [
       { title: "Support Tickets", href: "/support", icon: LifeBuoy, roles: ["super_admin", "admin", "support"] },
-      { title: "Broadcasts", href: "/notifications", icon: Megaphone, roles: ["super_admin", "admin"] },
+      { title: "Push Broadcasts", href: "/notifications", icon: Megaphone, roles: ["super_admin", "admin"] },
+      { title: "Email Broadcasts", href: "/email-broadcasts", icon: Bell, roles: ["super_admin", "admin"] },
       { title: "Vouchers", href: "/vouchers", icon: Ticket, roles: ["super_admin", "admin"] },
       { title: "Referrals", href: "/referrals", icon: Link2, roles: ["super_admin", "admin"] },
     ],
