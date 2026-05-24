@@ -6,5 +6,6 @@ export * from "./totp";
 export * from "./sessions";
 export * from "./session-validator";
 export * from "./email";
+export * from "./email-brand";
 export * from "./email-templates";
 export * from "./audit";
