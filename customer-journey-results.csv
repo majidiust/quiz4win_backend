@@ -1,23 +1,22 @@
 Endpoint,Method,Tested,Scenario,Request,Response,Error,Fix,Final
 /auth/signin,POST,Yes,Login with valid credentials,sent,200,,,PASS
-/profile,GET,Yes,Fetch own profile after login,sent,404,"{""error"":""profile_not_found""}",,FAIL
-/profile,PATCH,Yes,Update display name + language + nationality,sent,400,"{""error"":""Internal server error""}",,FAIL
+/profile,GET,Yes,Fetch own profile after login,sent,200,,,PASS
+/profile,PATCH,Yes,Update display name + language + nationality,sent,200,,,PASS
 /profile/avatar,POST,Yes,Upload 1x1 PNG avatar,sent,500,"{""error"":""Internal server error""}",,FAIL
 /settings,GET,Yes,Fetch settings,sent,200,,,PASS
 /settings,PATCH,Yes,Update theme/sound/haptics,sent,200,,,PASS
-/wallet/balance,GET,Yes,Read balance,sent,404,"{""error"":""wallet_not_found""}",,FAIL
+/wallet/balance,GET,Yes,Read balance,sent,200,,,PASS
 /wallet/transactions,GET,Yes,List transactions,sent,200,,,PASS
 /games,GET,Yes,Browse upcoming games,sent,200,,,PASS
 /leaderboard/global,GET,Yes,Global leaderboard,sent,200,,,PASS
 /notifications,GET,Yes,Inbox,sent,200,,,PASS
 /notifications/push-token,POST,Yes,Register dummy push token,sent,201,,,PASS
 /kyc/status,GET,Yes,Check KYC verification status,sent,200,,,PASS
-/kyc/upload-document,POST,Yes,Upload ID document (1x1 PNG),sent,404,"{""error"":""Not found""}",,FAIL
-/kyc/submit,POST,Yes,Submit KYC fields,sent,400,"{""error"":""Content-Type must be multipart/form-data""}",,FAIL
+/kyc/submit,POST,Yes,Submit KYC with id_front + selfie + document_type (multipart),sent,409,"{""error"":""kyc_already_pending""}",,FAIL
 /topup/crypto/address,GET,Yes,Request crypto deposit address,sent,200,,,PASS
 /withdrawals,GET,Yes,List withdrawal requests,sent,200,,,PASS
-/withdrawals,POST,Yes,Request withdrawal (expect fail - no balance/KYC),sent,404,"{""error"":""Not found""}",,EXPECTED-FAIL
-/referrals/my-code,GET,Yes,Fetch or auto-create own referral code,sent,500,"{""error"":""Failed to create referral code""}",,FAIL
+/withdrawals/request,POST,Yes,Request withdrawal (expect fail - no balance/KYC),sent,403,"{""error"":""kyc_required""}",,EXPECTED-FAIL
+/referrals/my-code,GET,Yes,Fetch or auto-create own referral code,sent,200,,,PASS
 /referrals/stats,GET,Yes,Referral stats,sent,200,,,PASS
 /referrals/validate,POST,Yes,Validate non-existent code (expect valid=false),sent,200,,,PASS
 /vouchers/my-redemptions,GET,Yes,List own voucher redemptions,sent,200,,,PASS

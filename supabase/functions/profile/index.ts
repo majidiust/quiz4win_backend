@@ -125,14 +125,25 @@ Deno.serve(async (req: Request) => {
         const result = await uploadObject(key, arrayBuffer, file.type, "public-read");
         publicUrl = result.publicUrl;
       } catch (err) {
+        // R-01: log full error server-side for ops; return sanitized to client.
+        const e = err as { name?: string; message?: string; Code?: string; $metadata?: unknown };
+        console.error("[profile/avatar] s3 upload failed", {
+          name: e?.name, code: e?.Code, message: e?.message, meta: e?.$metadata,
+        });
         return errorResponse(sanitizeError(err), 500);
       }
       if (!publicUrl) return errorResponse("upload_failed", 500);
 
-      await supabase
+      // Use admin client so the UPDATE isn't silently dropped by RLS.
+      const admin = getAdminClient();
+      const { error: updErr } = await admin
         .from("profiles")
         .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
         .eq("id", user.id);
+      if (updErr) {
+        console.error("[profile/avatar] profile update failed", updErr);
+        return errorResponse(sanitizeError(updErr), 500);
+      }
 
       return successResponse({ avatar_url: publicUrl });
     }
