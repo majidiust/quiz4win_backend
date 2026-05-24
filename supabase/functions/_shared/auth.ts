@@ -50,9 +50,13 @@ export async function validateJWT(req: Request): Promise<AuthResult> {
     `[auth] ${req.method} ${url.pathname} — Bearer received len=${token.length} prefix=${token.slice(0, 12)}… apikey_present=${!!apikey}`,
   );
 
+  // IMPORTANT: pass the JWT explicitly. Calling getUser() with no argument
+  // makes the SDK read from its internal session, which is empty in an
+  // Edge Function context (persistSession: false) — so it would always
+  // return AuthSessionMissingError regardless of the forwarded header.
   const supabase = getAnonClient(req);
   const startedAt = Date.now();
-  const { data: { user }, error } = await supabase.auth.getUser();
+  const { data: { user }, error } = await supabase.auth.getUser(token);
   const elapsed = Date.now() - startedAt;
 
   if (error || !user) {
