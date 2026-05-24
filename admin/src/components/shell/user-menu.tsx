@@ -15,7 +15,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { initials } from "@/lib/utils";
 import type { AdminUser } from "@/lib/auth";
 
@@ -26,8 +25,7 @@ export function UserMenu({ admin }: { admin: AdminUser }) {
   const signOut = async () => {
     setSigningOut(true);
     try {
-      const supabase = createSupabaseBrowserClient();
-      await supabase.auth.signOut();
+      await fetch("/api/admin/auth/logout", { method: "POST" });
       toast.success("Signed out");
       router.replace("/login");
       router.refresh();

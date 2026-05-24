@@ -16,7 +16,6 @@ import {
 import { navSections } from "@/lib/nav";
 import { useTheme } from "next-themes";
 import { Moon, Sun, LogOut } from "lucide-react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 interface CommandStore {
   isOpen: boolean;
@@ -54,8 +53,7 @@ export function CommandPalette() {
   };
 
   const signOut = async () => {
-    const supabase = createSupabaseBrowserClient();
-    await supabase.auth.signOut();
+    await fetch("/api/admin/auth/logout", { method: "POST" });
     router.replace("/login");
     router.refresh();
   };
