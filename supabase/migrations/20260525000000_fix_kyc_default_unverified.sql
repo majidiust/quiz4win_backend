@@ -7,8 +7,9 @@
 --   1. Drop the old CHECK constraint that omitted 'unverified'.
 --   2. Add a new CHECK constraint that includes 'unverified'.
 --   3. Change the column default to 'unverified'.
---   4. Backfill: any profile with kyc_status='pending' but no kyc_requests row
---      is a user who never submitted — flip them to 'unverified'.
+--   4. Delete all pending kyc_requests (none are genuinely reviewed yet).
+--   5. Reset ALL profiles to kyc_status = 'unverified' so every user
+--      starts fresh and can submit their first KYC via POST /kyc/submit.
 
 ALTER TABLE public.profiles
   DROP CONSTRAINT IF EXISTS profiles_kyc_status_check;
@@ -20,9 +21,10 @@ ALTER TABLE public.profiles
 ALTER TABLE public.profiles
   ALTER COLUMN kyc_status SET DEFAULT 'unverified';
 
-UPDATE public.profiles p
+-- Clear all pending KYC requests so users are not blocked by old stale submissions.
+DELETE FROM public.kyc_requests WHERE status = 'pending';
+
+-- Reset every profile to 'unverified' (full reset for all users).
+UPDATE public.profiles
 SET kyc_status = 'unverified', updated_at = NOW()
-WHERE p.kyc_status = 'pending'
-  AND NOT EXISTS (
-    SELECT 1 FROM public.kyc_requests r WHERE r.user_id = p.id
-  );
+WHERE kyc_status != 'unverified';
