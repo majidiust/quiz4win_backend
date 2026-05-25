@@ -17,6 +17,7 @@
  * POST   /admin/games/:id/duplicate            — Duplicate game (row 123)
  * GET    /admin/games/:id/result               — Final rankings + prize breakdown (row 124)
  * POST   /admin/games/:id/questions            — Assign question set (row 127)
+ * POST   /admin/games/:id/asset                — Upload icon/thumbnail/host_avatar to S3
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -26,6 +27,13 @@ import { errorResponse, successResponse, sanitizeError } from "../_shared/errors
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
 import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
+import { uploadObject } from "../_shared/s3.ts";
+
+/** Fields on `games` that store a public asset URL and can be uploaded via /asset. */
+const ASSET_FIELDS = ["icon", "thumbnail_url", "host_avatar_url"] as const;
+type AssetField = typeof ASSET_FIELDS[number];
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"];
+const MAX_ASSET_BYTES = 10 * 1024 * 1024; // 10 MB
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -268,6 +276,66 @@ Deno.serve(async (req: Request) => {
       await admin.from("game_participants").delete().eq("id", p.id);
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "participant_removed", target_type: "game_participant", target_id: `${gameId}:${actionId}`, created_at: new Date().toISOString() });
       return successResponse({ message: "Participant removed" });
+    }
+
+    // POST /admin/games/:id/asset — upload icon/thumbnail/host_avatar to S3
+    // (multipart/form-data: `file` + `field`). Mirrors the /profile/avatar flow.
+    if (gameId && action === "asset" && req.method === "POST") {
+      console.log(`[admin-games][asset] step=1 game=${gameId} admin=${user.id}`);
+      const contentType = req.headers.get("content-type") ?? "";
+      if (!contentType.includes("multipart/form-data")) {
+        return errorResponse("Content-Type must be multipart/form-data", 400);
+      }
+
+      let formData: FormData;
+      try { formData = await req.formData(); }
+      catch (err) {
+        console.log("[admin-games][asset] step=2 FAILED formData parse:", err instanceof Error ? err.message : String(err));
+        return errorResponse("invalid_multipart", 400);
+      }
+
+      const field = String(formData.get("field") ?? "").trim() as AssetField;
+      const file = formData.get("file") as File | null;
+      if (!ASSET_FIELDS.includes(field)) {
+        return errorResponse(`field must be one of: ${ASSET_FIELDS.join(", ")}`, 400);
+      }
+      if (!file) return errorResponse("file is required", 400);
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        return errorResponse("Only JPEG, PNG, WebP, and SVG are allowed", 400);
+      }
+      if (file.size > MAX_ASSET_BYTES) return errorResponse("File too large (max 10 MB)", 400);
+
+      const { data: game } = await admin.from("games").select("id").eq("id", gameId).single();
+      if (!game) return errorResponse("game_not_found", 404);
+
+      const ext = file.type === "image/svg+xml" ? "svg" : file.type.split("/")[1];
+      const key = `games/${gameId}/${field}-${Date.now()}.${ext}`;
+      const buf = await file.arrayBuffer();
+      console.log(`[admin-games][asset] step=3 uploading key=${key} bytes=${buf.byteLength} type=${file.type}`);
+
+      let publicUrl: string | null;
+      try {
+        const result = await uploadObject(key, buf, file.type, "public-read");
+        publicUrl = result.publicUrl;
+      } catch (err) {
+        const e = err as { name?: string; message?: string; Code?: string };
+        console.log("[admin-games][asset] step=4 FAILED s3:", { name: e?.name, code: e?.Code, message: e?.message });
+        return errorResponse(sanitizeError(err), 500);
+      }
+      if (!publicUrl) return errorResponse("upload_failed", 500);
+
+      const { error: updErr } = await admin
+        .from("games")
+        .update({ [field]: publicUrl, updated_at: new Date().toISOString() })
+        .eq("id", gameId);
+      if (updErr) {
+        console.log("[admin-games][asset] step=5 FAILED game update:", updErr);
+        return errorResponse(sanitizeError(updErr), 500);
+      }
+
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_asset_uploaded", target_type: "game", target_id: gameId, details: { field, key }, created_at: new Date().toISOString() });
+      console.log(`[admin-games][asset] step=6 done field=${field} url=${publicUrl}`);
+      return successResponse({ field, url: publicUrl });
     }
 
     return errorResponse("Not found", 404);

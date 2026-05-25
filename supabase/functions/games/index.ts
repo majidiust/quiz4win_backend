@@ -45,13 +45,17 @@ Deno.serve(async (req: Request) => {
       const offset = (page - 1) * limit;
 
       // Schema: games has max_players, total_participants, scheduled_at,
-      // started_at, ended_at. Alias to the public API shape.
+      // started_at, ended_at. Alias to the public API shape and include the
+      // styling fields the customer app needs to render rich game cards.
       let query = supabase
         .from("games")
         .select(
-          "id, title, mode, status, entry_fee, prize_pool, " +
+          "id, title, subtitle, description, mode, status, " +
+            "entry_fee, prize_pool, category, difficulty, language, " +
             "participant_count:total_participants, max_participants:max_players, " +
-            "start_time:scheduled_at, end_time:ended_at, category",
+            "start_time:scheduled_at, end_time:ended_at, " +
+            "icon, thumbnail_url, accent_color, glow_color, gradient_colors, " +
+            "sponsor, tags, host_name, host_avatar_url, host_title",
           { count: "exact" },
         )
         .order("scheduled_at", { ascending: true })
@@ -109,22 +113,14 @@ Deno.serve(async (req: Request) => {
       return successResponse({ message: "Joined game successfully" }, 201);
     }
 
-    // DELETE /games/:id/join — leave game
+    // DELETE /games/:id/join — leave game (atomic delete + refund via RPC)
     if (gameId && action === "join" && req.method === "DELETE") {
-      const { data: participant } = await supabase.from("game_participants").select("id").eq("game_id", gameId).eq("user_id", user.id).single();
-      if (!participant) return errorResponse("not_joined", 404);
-
-      const { data: game } = await supabase.from("games").select("status, entry_fee").eq("id", gameId).single();
-      if (game?.status !== "open" && game?.status !== "upcoming") {
-        return errorResponse("cannot_leave_started_game", 400);
-      }
-
       const admin = getAdminClient();
-      await admin.from("game_participants").delete().eq("id", participant.id);
-      // Refund entry fee
-      if (game?.entry_fee && game.entry_fee > 0) {
-        await admin.rpc("credit_wallet", { p_user_id: user.id, p_amount_cents: game.entry_fee, p_reference_id: gameId, p_type: "refund" });
-      }
+      const { error: leaveErr } = await admin.rpc("leave_game", {
+        p_user_id: user.id,
+        p_game_id: gameId,
+      });
+      if (leaveErr) return errorResponse(sanitizeError(leaveErr), 400);
       return successResponse({ message: "Left game and entry fee refunded" });
     }
 
@@ -143,20 +139,38 @@ Deno.serve(async (req: Request) => {
       return successResponse({ participants: data ?? [], pagination: { page, limit, total: count ?? 0 } });
     }
 
-    // GET /games/:id/question — current question for user
+    // GET /games/:id/question — current question for the participant.
+    // Schema: game_questions("order"), questions(options), games.time_per_question.
+    // The "current" index is derived from how many answers this participant has
+    // already submitted (zero-based -> next "order" to ask).
     if (gameId && action === "question" && req.method === "GET") {
-      const { data: participant } = await supabase.from("game_participants").select("current_question_index").eq("game_id", gameId).eq("user_id", user.id).single();
+      const { data: participant } = await supabase
+        .from("game_participants")
+        .select("id")
+        .eq("game_id", gameId).eq("user_id", user.id).single();
       if (!participant) return errorResponse("not_joined", 403);
+
+      const { count: answeredCount } = await supabase
+        .from("game_answers")
+        .select("id", { count: "exact", head: true })
+        .eq("participant_id", participant.id);
+
+      const nextOrder = answeredCount ?? 0;
+      const { data: game } = await supabase
+        .from("games").select("time_per_question").eq("id", gameId).single();
 
       const { data: gq } = await supabase
         .from("game_questions")
-        .select("question_order, questions(id, text, options, time_limit_sec, category, difficulty)")
+        .select("order, questions(id, text, options, category, difficulty)")
         .eq("game_id", gameId)
-        .eq("question_order", (participant.current_question_index ?? 0) + 1)
-        .single();
+        .eq("order", nextOrder)
+        .maybeSingle();
 
       if (!gq) return errorResponse("no_active_question", 404);
-      return successResponse({ question: gq });
+      return successResponse({
+        question: gq,
+        time_per_question_sec: game?.time_per_question ?? 15,
+      });
     }
 
     // POST /games/:id/answer — submit answer
@@ -210,8 +224,15 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
       if (priorTx) return errorResponse("prize_already_credited", 409);
 
-      const prizeCents = Math.round(prizeDollars * 100);
-      await admin.rpc("credit_wallet", { p_user_id: user.id, p_amount_cents: prizeCents, p_reference_id: gameId, p_type: "prize" });
+      // Money columns are NUMERIC dollars (see R-02 note in database.types.ts).
+      // credit_wallet adds straight to wallet_balance, so we pass dollars too.
+      const { error: credErr } = await admin.rpc("credit_wallet", {
+        p_user_id: user.id,
+        p_amount_cents: prizeDollars,
+        p_reference_id: gameId,
+        p_type: "prize",
+      });
+      if (credErr) return errorResponse(sanitizeError(credErr), 400);
 
       // Fire branded win notification (non-blocking — never fail the claim on email error)
       try {
@@ -224,7 +245,7 @@ Deno.serve(async (req: Request) => {
             name: profile.full_name ?? "there",
             gameTitle: game.title,
             rank: participant.rank ?? null,
-            prizeAmountCents: prizeCents,
+            prizeAmountCents: Math.round(prizeDollars * 100),
           });
           sendEmail({ to: { email: profile.email, name: profile.full_name ?? undefined }, subject: tpl.subject, html: tpl.html, text: tpl.text })
             .catch((e) => console.error("[games] win email failed:", e));
@@ -233,7 +254,7 @@ Deno.serve(async (req: Request) => {
         console.error("[games] win email lookup failed:", e);
       }
 
-      return successResponse({ message: "Prize credited to wallet", amount_cents: prizeCents });
+      return successResponse({ message: "Prize credited to wallet", amount: prizeDollars });
     }
 
     // GET /games/:id/leaderboard
