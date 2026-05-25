@@ -64,6 +64,53 @@ services:
     networks:
       - quiz4win
 
+  db-maintainer:
+    # Applies pending SQL migrations on every startup, runs a consistency
+    # check, then schedules a daily pg_dump → gzip → upload to the S3
+    # bucket. See deploy/db-maintainer/*.sh for the full logic.
+    build:
+      context: ./deploy/db-maintainer
+      dockerfile: Dockerfile
+    image: quiz4win-db-maintainer:latest
+    container_name: quiz4win-db-maintainer
+    restart: unless-stopped
+    environment:
+      # Direct Postgres connection string for psql / pg_dump.
+      # Format: postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
+      MIGRATIONS_DIR: /migrations
+      # Cron expression in UTC. Default: 02:00 every day.
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      # Run a backup immediately on container start (in addition to the cron).
+      RUN_BACKUP_ON_START: ${RUN_BACKUP_ON_START:-false}
+      # Days of history to keep both locally and in S3.
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      # S3-compatible storage (DigitalOcean Spaces) — reused from the api/admin services.
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET: ${S3_SECRET}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BACKUP_PREFIX: ${S3_BACKUP_PREFIX:-backups/postgres}
+      TZ: UTC
+    volumes:
+      # Migrations are baked-in at deploy time. Mounted read-only so the
+      # container cannot mutate them.
+      - ./supabase/migrations:/migrations:ro
+      # Local backup cache (also pruned daily by retention policy).
+      - quiz4win-db-backups:/var/backups/quiz4win
+    healthcheck:
+      # /tmp/db-maintainer-ready is written by entrypoint.sh after the
+      # migration + consistency steps complete successfully. The api
+      # service waits on this via service_healthy.
+      test: ["CMD", "test", "-f", "/tmp/db-maintainer-ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks:
+      - quiz4win
+
   api:
     build:
       context: ./supabase/functions
@@ -75,6 +122,9 @@ services:
     # Change to `unless-stopped` once the service is confirmed stable.
     restart: on-failure:5
     stop_grace_period: 15s
+    depends_on:
+      db-maintainer:
+        condition: service_healthy
     ports:
       - "127.0.0.1:5802:8000"
     environment:
@@ -115,3 +165,9 @@ services:
 networks:
   quiz4win:
     driver: bridge
+
+volumes:
+  quiz4win-db-backups:
+    # Local backup cache for db-maintainer. Daily dumps are also uploaded
+    # to S3; this volume just keeps a short window for fast local restore.
+    driver: local
