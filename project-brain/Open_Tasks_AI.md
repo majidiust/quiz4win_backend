@@ -105,5 +105,9 @@ Owner: A-01 (Augment Code Agent)
 ## Completed Tasks
 
 - [P1] [DONE] [A-01] **Add quiz4win-app static container for app.quiz4win.com** — Created `app/` module (Dockerfile + nginx.conf + public/) serving Universal Link manifests + password-reset web fallback; wired into `docker-compose.yml` on port 5801; simplified host nginx config + setup script. Resolves 502 on Supabase recovery links opened in browser. — 2026-05-24
+- [P1] [DONE] [A-01] **Extend Admin Panel game styling & asset uploads** — Added color pickers, gradient builder, and S3-backed asset upload (Icon/Thumbnail/Host Avatar) to Create Game dialog and Game Detail page; updated grid layout. — 2026-05-25
+- [P1] [DONE] [A-01] **Fix db-maintainer Postgres version mismatch** — Updated Dockerfile to `postgres:17-alpine` to support `pg_dump` against Supabase Postgres 17. — 2026-05-25
+- [P1] [DONE] [A-01] **API Reference Documentation** — Created `docs/api-reference.md` with complete customer & admin game-related API specs. — 2026-05-25
+
 - [P0] [DONE] [HUMAN] Supabase project credentials added to `.env`. — 2026-05-22
 - [P0] [DONE] [A-02] Bootstrap multi-agent coordination framework — Created agents.md, /project-brain/ (7 files), /agents/ (5 files). — 2026-05-22
