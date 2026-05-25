@@ -166,6 +166,33 @@ ${otpBlock}
   return { subject, html, text };
 }
 
+/** Sent when a user requests an email 2FA code (setup / enable / disable). */
+export function twoFactorCodeTemplate(opts: {
+  name: string;
+  code: string;
+  purpose: "enable" | "disable";
+  ttlMinutes?: number;
+}): { subject: string; html: string; text: string } {
+  const ttl = opts.ttlMinutes ?? 10;
+  const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const action = opts.purpose === "enable" ? "turn on" : "turn off";
+  const subject = `Your Quiz4Win verification code: ${opts.code}`;
+  const codeBlock = `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:20px auto"><tr><td align="center" bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:18px 28px">
+<p style="margin:0;font-family:Menlo,Consolas,monospace;font-size:30px;letter-spacing:.35em;color:${BRAND.textDark};font-weight:700">${escapeHtml(opts.code)}</p>
+</td></tr></table>`;
+  const { html, text } = renderBrandEmail({
+    preheader: `Your Quiz4Win verification code expires in ${ttl} minutes.`,
+    heroTitle: "Your verification code",
+    heroSubtitle: `Use this code to ${action} email-based two-factor authentication.`,
+    bodyHtml: `<p style="margin:0 0 12px">${greeting} enter the code below in the Quiz4Win app to ${action} email two-factor authentication on your account.</p>
+${codeBlock}
+<p style="margin:8px 0 0;text-align:center;color:${BRAND.textFaint};font-size:12px">This code expires in ${ttl} minutes.</p>
+<p style="margin:24px 0 0;color:${BRAND.textMuted}">If you didn't request this, you can ignore this email — your security settings will remain unchanged.</p>`,
+    text: `${opts.name ? `Hi ${opts.name}, ` : ""}your Quiz4Win verification code is ${opts.code}. It expires in ${ttl} minutes. If you didn't request it, you can ignore this email.`,
+  });
+  return { subject, html, text };
+}
+
 /** Sent when a player wins a prize and it is credited to their wallet. */
 export function winTemplate(opts: {
   name: string;

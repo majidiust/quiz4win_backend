@@ -9,6 +9,7 @@
  *   POST /auth/forgot-password   — Send OTP email (API #5)
  *   POST /auth/verify-otp        — Verify password-reset OTP (API #6)
  *   POST /auth/update-password   — Set new password post-OTP (API #7)
+ *   POST /auth/change-password   — Logged-in password change (verifies current pwd)
  *
  * Rule compliance: R-01 (no secrets in code), R-03 (JWT validated before writes)
  */
@@ -251,6 +252,47 @@ Deno.serve(async (req: Request) => {
         const msg = error.message.toLowerCase();
         if (msg.includes("password")) return errorResponse("weak_password", 400);
         return errorResponse(error.message, 400);
+      }
+      return successResponse({ message: "Password updated" });
+    }
+
+    // ── POST /auth/change-password ─────────────────────────────────────────
+    // For a signed-in user who knows their current password. Verifies the
+    // current password by attempting a sign-in (no session is established —
+    // we discard the returned tokens), then updates via the admin client.
+    if (path === "change-password" && req.method === "POST") {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+
+      const { current_password, new_password } = await req.json();
+      if (!current_password || !new_password) {
+        return errorResponse("current_password and new_password are required", 400);
+      }
+      if (new_password.length < 8) return errorResponse("weak_password", 400);
+      if (current_password === new_password) {
+        return errorResponse("new_password_same_as_current", 400);
+      }
+      if (!user.email) return errorResponse("account_missing_email", 400);
+
+      const supabase = getAnonClient(req);
+      const { error: verifyErr } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: current_password,
+      });
+      if (verifyErr) {
+        console.warn(`[auth] change-password — current_password verify failed user=${user.id}`);
+        return errorResponse("invalid_current_password", 401);
+      }
+
+      const admin = getAdminClient();
+      const { error: updErr } = await admin.auth.admin.updateUserById(user.id, {
+        password: new_password,
+      });
+      if (updErr) {
+        const msg = updErr.message.toLowerCase();
+        if (msg.includes("password")) return errorResponse("weak_password", 400);
+        console.error(`[auth] change-password — updateUserById failed user=${user.id}: ${updErr.message}`);
+        return errorResponse(updErr.message, 400);
       }
       return successResponse({ message: "Password updated" });
     }

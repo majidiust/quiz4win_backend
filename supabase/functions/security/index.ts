@@ -1,19 +1,41 @@
 /**
  * Security Edge Function — Quiz4Win
  *
- * POST /security/verify-recaptcha — Server-side reCAPTCHA v3 verification (API #9)
+ * POST /security/verify-recaptcha       — Server-side reCAPTCHA v3 verification
+ * GET  /security/settings               — Current 2FA state for the user
+ * POST /security/2fa/email/setup        — Email a 6-digit code to the user
+ * POST /security/2fa/email/enable       — Verify code → enable email 2FA
+ * POST /security/2fa/email/disable      — Verify code → disable email 2FA
+ * POST /security/2fa/totp/setup         — Generate TOTP secret + otpauth URL
+ * POST /security/2fa/totp/enable        — Verify TOTP code → enable TOTP
+ * POST /security/2fa/totp/disable       — Verify TOTP code → disable TOTP
  *
  * Rule compliance:
- *   R-01: the secret and the user token are NEVER logged — only their presence
- *         and length. The full Google response body is logged because it does
- *         not contain the secret.
+ *   R-01: secrets, TOTP secrets and email OTPs are never logged. Email codes
+ *         are stored as SHA-256 hashes; the plaintext is mailed and discarded.
+ *   R-03: every 2FA endpoint validates the JWT before any DB write.
+ *   R-04: writes go through the admin client; the user_security table grants
+ *         SELECT only to the row owner via RLS.
  */
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
+import { validateJWT } from "../_shared/auth.ts";
+import { getAdminClient } from "../_shared/supabase.ts";
+import { sendEmail, twoFactorCodeTemplate } from "../_shared/email.ts";
+import {
+  buildOtpAuthUrl,
+  generateNumericCode,
+  generateTotpSecret,
+  sha256Hex,
+  verifyTotp,
+} from "../_shared/totp.ts";
 
 const RECAPTCHA_SECRET = Deno.env.get("RECAPTCHA_SECRET_KEY") ?? "";
 const MIN_SCORE = Number(Deno.env.get("RECAPTCHA_MIN_SCORE") ?? "0.5");
+
+const EMAIL_CODE_TTL_MIN = 10;
+const EMAIL_CODE_MAX_ATTEMPTS = 5;
 
 // One-shot startup banner so we can see, the moment the dispatcher boots, whether
 // the secret is configured at all.
@@ -26,6 +48,51 @@ console.log(
 /** Short request id for correlating log lines of a single call. */
 function rid(): string {
   return Math.random().toString(36).slice(2, 10);
+}
+
+/**
+ * Fetch the user_security row for `userId`, creating it on first access so
+ * downstream UPDATE statements always have a target row.
+ */
+// deno-lint-ignore no-explicit-any
+async function getOrCreateSecurityRow(admin: any, userId: string) {
+  const { data } = await admin
+    .from("user_security")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (data) return data;
+  const { data: created, error } = await admin
+    .from("user_security")
+    .insert({ user_id: userId })
+    .select("*")
+    .single();
+  if (error) throw new Error(`user_security_init_failed: ${error.message}`);
+  return created;
+}
+
+/** Validate a 6-digit email OTP against the stored hash + expiry. */
+async function verifyEmailCode(
+  row: {
+    email_code_hash: string | null;
+    email_code_expires_at: string | null;
+    email_code_attempts: number;
+  },
+  code: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (!row.email_code_hash || !row.email_code_expires_at) {
+    return { ok: false, reason: "code_not_requested" };
+  }
+  if (new Date(row.email_code_expires_at).getTime() < Date.now()) {
+    return { ok: false, reason: "code_expired" };
+  }
+  if (row.email_code_attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
+    return { ok: false, reason: "code_locked" };
+  }
+  if (!/^\d{6}$/.test(code)) return { ok: false, reason: "code_invalid" };
+  const incoming = await sha256Hex(code);
+  if (incoming !== row.email_code_hash) return { ok: false, reason: "code_invalid" };
+  return { ok: true };
 }
 
 Deno.serve(async (req: Request) => {
@@ -145,6 +212,149 @@ Deno.serve(async (req: Request) => {
         `[security ${id}] OK — score=${score} action=${result.action ?? "-"} hostname=${result.hostname ?? "-"}`,
       );
       return successResponse({ success: true, score });
+    }
+
+    // ── 2FA & account-security routes ──────────────────────────────────────
+    // All require a valid JWT (R-03). The user id always comes from the JWT
+    // (never the body).
+    if (
+      path === "settings" ||
+      path.startsWith("2fa/")
+    ) {
+      const { user, error: authErr } = await validateJWT(req);
+      if (authErr || !user) return errorResponse("unauthorized", 401);
+
+      const admin = getAdminClient();
+      const row = await getOrCreateSecurityRow(admin, user.id);
+
+      // GET /security/settings
+      if (path === "settings" && req.method === "GET") {
+        return successResponse({
+          email_2fa_enabled: !!row.email_2fa_enabled,
+          totp_enabled: !!row.totp_enabled,
+        });
+      }
+
+      // POST /security/2fa/email/setup
+      if (path === "2fa/email/setup" && req.method === "POST") {
+        if (!user.email) return errorResponse("account_missing_email", 400);
+        const code = generateNumericCode(6);
+        const hash = await sha256Hex(code);
+        const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MIN * 60_000).toISOString();
+        const { error: updErr } = await admin
+          .from("user_security")
+          .update({
+            email_code_hash: hash,
+            email_code_expires_at: expiresAt,
+            email_code_attempts: 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", user.id);
+        if (updErr) {
+          console.error(`[security ${id}] email/setup update failed: ${updErr.message}`);
+          return errorResponse("internal_error", 500);
+        }
+        // Pull display name for personalisation (best-effort).
+        const { data: profile } = await admin
+          .from("profiles")
+          .select("full_name")
+          .eq("id", user.id)
+          .maybeSingle();
+        const name = (profile?.full_name as string | null | undefined) ?? "";
+        const purpose: "enable" | "disable" = row.email_2fa_enabled ? "disable" : "enable";
+        const tpl = twoFactorCodeTemplate({ name, code, purpose, ttlMinutes: EMAIL_CODE_TTL_MIN });
+        // Fire-and-forget; failure to dispatch is logged but does not break the API.
+        sendEmail({ to: { email: user.email, name: name || undefined }, ...tpl }).catch((err) =>
+          console.warn(`[security ${id}] 2fa email send failed:`, err),
+        );
+        console.log(`[security ${id}] email/setup — user=${user.id} purpose=${purpose} ttl=${EMAIL_CODE_TTL_MIN}m`);
+        return successResponse({ message: "Code sent" });
+      }
+
+      // Shared verify-and-toggle helper for email/{enable,disable}
+      const handleEmailToggle = async (enable: boolean): Promise<Response> => {
+        const body = await req.json().catch(() => ({}));
+        const code = typeof body.code === "string" ? body.code.trim() : "";
+        if (!code) return errorResponse("code is required", 400);
+        const check = await verifyEmailCode(row, code);
+        if (!check.ok) {
+          await admin
+            .from("user_security")
+            .update({
+              email_code_attempts: (row.email_code_attempts ?? 0) + 1,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("user_id", user.id);
+          return errorResponse(check.reason ?? "code_invalid", 400);
+        }
+        const { error: updErr } = await admin
+          .from("user_security")
+          .update({
+            email_2fa_enabled: enable,
+            email_code_hash: null,
+            email_code_expires_at: null,
+            email_code_attempts: 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", user.id);
+        if (updErr) {
+          console.error(`[security ${id}] email toggle failed: ${updErr.message}`);
+          return errorResponse("internal_error", 500);
+        }
+        return successResponse({ enabled: enable });
+      };
+
+      if (path === "2fa/email/enable" && req.method === "POST") return handleEmailToggle(true);
+      if (path === "2fa/email/disable" && req.method === "POST") return handleEmailToggle(false);
+
+      // POST /security/2fa/totp/setup
+      if (path === "2fa/totp/setup" && req.method === "POST") {
+        if (!user.email) return errorResponse("account_missing_email", 400);
+        const secret = generateTotpSecret();
+        const { error: updErr } = await admin
+          .from("user_security")
+          .update({
+            totp_secret: secret,
+            totp_enabled: false, // not active until /enable verifies a code
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", user.id);
+        if (updErr) {
+          console.error(`[security ${id}] totp/setup update failed: ${updErr.message}`);
+          return errorResponse("internal_error", 500);
+        }
+        const otpauth_url = buildOtpAuthUrl(secret, user.email);
+        console.log(`[security ${id}] totp/setup — user=${user.id} (secret stored, not yet enabled)`);
+        return successResponse({ secret, otpauth_url });
+      }
+
+      // Shared verify-and-toggle helper for totp/{enable,disable}
+      const handleTotpToggle = async (enable: boolean): Promise<Response> => {
+        const body = await req.json().catch(() => ({}));
+        const code = typeof body.code === "string" ? body.code.trim() : "";
+        if (!code) return errorResponse("code is required", 400);
+        if (!row.totp_secret) return errorResponse("totp_not_initialised", 400);
+        const ok = await verifyTotp(row.totp_secret, code);
+        if (!ok) return errorResponse("code_invalid", 400);
+        const patch: Record<string, unknown> = {
+          totp_enabled: enable,
+          updated_at: new Date().toISOString(),
+        };
+        // Clear the secret on disable so a future enable requires a fresh setup.
+        if (!enable) patch.totp_secret = null;
+        const { error: updErr } = await admin
+          .from("user_security")
+          .update(patch)
+          .eq("user_id", user.id);
+        if (updErr) {
+          console.error(`[security ${id}] totp toggle failed: ${updErr.message}`);
+          return errorResponse("internal_error", 500);
+        }
+        return successResponse({ enabled: enable });
+      };
+
+      if (path === "2fa/totp/enable" && req.method === "POST") return handleTotpToggle(true);
+      if (path === "2fa/totp/disable" && req.method === "POST") return handleTotpToggle(false);
     }
 
     console.warn(`[security ${id}] no route matched — ${req.method} ${path}`);

@@ -111,6 +111,18 @@ export interface NotificationPreferences {
   updated_at: string;
 }
 
+export interface UserSecurity {
+  user_id: string;
+  email_2fa_enabled: boolean;
+  totp_enabled: boolean;
+  totp_secret: string | null;
+  email_code_hash: string | null;
+  email_code_expires_at: string | null;
+  email_code_attempts: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // ---------- Admin ------------------------------------------------------------
 
 export interface AdminUser {
@@ -515,6 +527,7 @@ export interface Database {
       user_settings:            { Row: UserSettings };
       push_tokens:              { Row: PushToken };
       notification_preferences: { Row: NotificationPreferences };
+      user_security:            { Row: UserSecurity };
       admin_users:              { Row: AdminUser };
       admin_audit_log:          { Row: AdminAuditLog };
       questions:                { Row: Question };
