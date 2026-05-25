@@ -25,6 +25,27 @@ log "db-maintainer starting"
 log "migrations dir: ${MIGRATIONS_DIR:-/migrations}"
 log "backup schedule: $BACKUP_SCHEDULE (UTC)"
 
+# Step 1: pre-flight connectivity check.
+#
+# Supabase's direct connection host (db.<project>.supabase.co) resolves
+# only to IPv6, and the default docker bridge network has no IPv6 route
+# → psql fails with "Network unreachable" and the container restart-
+# loops forever. Detect that up-front and print actionable guidance
+# instead of letting the restart policy mask the real problem.
+DB_HOST="$(printf '%s' "$SUPABASE_DB_URL" | sed -E 's|^[a-z]+://[^@]*@([^:/?]+).*|\1|')"
+log "resolving database host: $DB_HOST"
+if ! getent ahostsv4 "$DB_HOST" >/dev/null 2>&1; then
+  log "ERROR: '$DB_HOST' has no IPv4 address."
+  log "       The docker bridge network is IPv4-only — direct Supabase"
+  log "       hosts (db.<project>.supabase.co) are IPv6-only and will"
+  log "       not work here."
+  log "       Switch SUPABASE_DB_URL to the **Session Pooler** URL:"
+  log "         Supabase dashboard → Project Settings → Database →"
+  log "         Connection string → 'Session pooler' (port 5432)."
+  log "       Username format is: postgres.<project-ref>"
+  exit 2
+fi
+
 # Step 2: migrations.
 /opt/db-maintainer/migrate.sh
 
