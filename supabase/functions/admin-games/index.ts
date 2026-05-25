@@ -72,7 +72,17 @@ Deno.serve(async (req: Request) => {
       const required = ["title", "mode", "entry_fee", "prize_pool", "start_time", "max_participants"];
       for (const f of required) { if (body[f] === undefined) return errorResponse(`${f} is required`, 400); }
 
-      const { data, error } = await admin.from("games").insert({ ...body, status: "upcoming", participant_count: 0, created_by: user.id, created_at: new Date().toISOString() }).select("*").single();
+      const { start_time, max_participants, ...rest } = body;
+      const { data, error } = await admin.from("games").insert({
+        ...rest,
+        scheduled_at: start_time,
+        max_players: max_participants,
+        status: "upcoming",
+        questions_count: 0,
+        created_by: user.id,
+        created_at: new Date().toISOString()
+      }).select("*").single();
+
       if (error) return errorResponse(sanitizeError(error), 400);
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_created", target_type: "game", target_id: data.id, created_at: new Date().toISOString() });
       return successResponse({ game: data }, 201);
@@ -85,7 +95,12 @@ Deno.serve(async (req: Request) => {
       if (!["upcoming", "open"].includes(existing.status)) return errorResponse("Cannot edit a game that has started or ended", 400);
 
       const body = await req.json();
-      const { data, error } = await admin.from("games").update({ ...body, updated_at: new Date().toISOString() }).eq("id", gameId).select("*").single();
+      const { start_time, max_participants, ...rest } = body;
+      const updateData: Record<string, any> = { ...rest, updated_at: new Date().toISOString() };
+      if (start_time !== undefined) updateData.scheduled_at = start_time;
+      if (max_participants !== undefined) updateData.max_players = max_participants;
+
+      const { data, error } = await admin.from("games").update(updateData).eq("id", gameId).select("*").single();
       if (error) return errorResponse(sanitizeError(error), 400);
       return successResponse({ game: data });
     }
@@ -154,7 +169,7 @@ Deno.serve(async (req: Request) => {
 
       const clone: Record<string, unknown> = { ...src };
       // Strip auto-managed fields
-      for (const k of ["id", "created_at", "updated_at", "started_at", "ended_at", "paused_at", "status", "participant_count", "livekit_room_name", "livekit_egress_id", "stream_url", "cancelled_reason"]) delete clone[k];
+      for (const k of ["id", "created_at", "updated_at", "started_at", "ended_at", "paused_at", "status", "total_participants", "livekit_room_name", "livekit_egress_id", "stream_url", "cancelled_reason"]) delete clone[k];
       Object.assign(clone, overrides);
       clone.status = "upcoming";
       clone.created_by = user.id;
@@ -166,9 +181,9 @@ Deno.serve(async (req: Request) => {
 
       // Copy game_questions if requested
       if (overrides.copy_questions !== false) {
-        const { data: qs } = await admin.from("game_questions").select("question_id, question_index, time_limit_sec").eq("game_id", gameId);
+        const { data: qs } = await admin.from("game_questions").select("question_id, order").eq("game_id", gameId);
         if (qs && qs.length) {
-          await admin.from("game_questions").insert(qs.map((q: { question_id: string; question_index: number; time_limit_sec: number | null }) => ({ game_id: created.id, ...q })));
+          await admin.from("game_questions").insert(qs.map((q: { question_id: string; order: number }) => ({ game_id: created.id, ...q })));
         }
       }
 
@@ -199,12 +214,12 @@ Deno.serve(async (req: Request) => {
       const { question_ids, replace = true } = await req.json();
       if (!Array.isArray(question_ids) || question_ids.length === 0) return errorResponse("question_ids array is required", 400);
 
-      const { data: game } = await admin.from("games").select("status, time_per_question").eq("id", gameId).single();
+      const { data: game } = await admin.from("games").select("status").eq("id", gameId).single();
       if (!game) return errorResponse("game_not_found", 404);
       if (!["upcoming", "open"].includes(game.status)) return errorResponse("Cannot assign questions after game started", 400);
 
       if (replace) await admin.from("game_questions").delete().eq("game_id", gameId);
-      const rows = (question_ids as string[]).map((qid, i) => ({ game_id: gameId, question_id: qid, question_index: i, time_limit_sec: game.time_per_question ?? 15 }));
+      const rows = (question_ids as string[]).map((qid, i) => ({ game_id: gameId, question_id: qid, order: i }));
       const { error } = await admin.from("game_questions").insert(rows);
       if (error) return errorResponse(sanitizeError(error), 400);
       await admin.from("games").update({ questions_count: question_ids.length, updated_at: new Date().toISOString() }).eq("id", gameId);
