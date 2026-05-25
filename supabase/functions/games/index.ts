@@ -73,7 +73,10 @@ Deno.serve(async (req: Request) => {
       else query = query.in("status", statuses);
 
       const { data, error, count } = await query;
-      if (error) return errorResponse("Failed to fetch games", 500);
+      if (error) {
+        console.error(`[games] list query failed: ${error.message}`, error);
+        return errorResponse("Failed to fetch games", 500);
+      }
 
       // joined_by_me — single batched lookup of the caller's participation
       // rows for the page of games being returned. Avoids N+1 fetches in the
