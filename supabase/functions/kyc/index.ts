@@ -123,11 +123,13 @@ Deno.serve(async (req: Request) => {
       console.log(`[kyc] step3 all uploads done — id_front=${idFrontPath} selfie=${selfiePath} id_back=${idBackPath ?? "none"}`);
 
       // Step 4 — insert kyc_request row
+      // NB: real DB column names are doc_type / front_image_url / back_image_url
+      // (see 20260522120000_initial_schema.sql). Form field stays document_type.
       const insertPayload = {
         user_id: user.id,
-        document_type: documentType,
-        id_front_url: idFrontPath,
-        id_back_url: idBackPath,
+        doc_type: documentType,
+        front_image_url: idFrontPath,
+        back_image_url: idBackPath,
         selfie_url: selfiePath,
         status: "pending",
         submitted_at: new Date().toISOString(),

@@ -37,7 +37,7 @@ Deno.serve(async (req: Request) => {
       const { data, error, count } = await admin
         .from("kyc_requests")
         .select(
-          "id, user_id, document_type, id_front_url, id_back_url, selfie_url, submitted_at, profiles!user_id(name, email, nationality, date_of_birth)",
+          "id, user_id, document_type:doc_type, id_front_url:front_image_url, id_back_url:back_image_url, selfie_url, submitted_at, profiles!user_id(name, email, nationality, date_of_birth)",
           { count: "exact" },
         )
         .eq("status", "pending")
@@ -64,7 +64,7 @@ Deno.serve(async (req: Request) => {
       const to = url.searchParams.get("to");
       let q = admin
         .from("kyc_requests")
-        .select("id, user_id, document_type, status, rejection_reason, submitted_at, reviewed_at, reviewed_by, profiles!user_id(name, email, nationality, date_of_birth)")
+        .select("id, user_id, document_type:doc_type, status, rejection_reason, submitted_at, reviewed_at, reviewed_by, profiles!user_id(name, email, nationality, date_of_birth)")
         .order("submitted_at", { ascending: false })
         .limit(10000);
       if (status) q = q.eq("status", status);
