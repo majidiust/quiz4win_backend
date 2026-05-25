@@ -99,13 +99,22 @@ Deno.serve(async (req: Request) => {
 
     // POST /profile/avatar
     if (path === "avatar" && req.method === "POST") {
+      console.log("[avatar] step=1 enter");
       const contentType = req.headers.get("content-type") ?? "";
       if (!contentType.includes("multipart/form-data")) {
         return errorResponse("Content-Type must be multipart/form-data", 400);
       }
 
-      const formData = await req.formData();
+      console.log("[avatar] step=2 parsing formData");
+      let formData: FormData;
+      try {
+        formData = await req.formData();
+      } catch (err) {
+        console.log("[avatar] step=2 FAILED formData parse:", err instanceof Error ? err.message : String(err));
+        return errorResponse("invalid_multipart", 400);
+      }
       const file = formData.get("avatar") as File | null;
+      console.log("[avatar] step=3 file present:", !!file, "type:", file?.type, "size:", file?.size);
       if (!file) return errorResponse("avatar file is required", 400);
 
       const allowedTypes = ["image/jpeg", "image/png", "image/webp"];
@@ -119,15 +128,26 @@ Deno.serve(async (req: Request) => {
       const ext = file.type.split("/")[1];
       const key = `avatars/${user.id}/avatar.${ext}`;
       const arrayBuffer = await file.arrayBuffer();
+      console.log("[avatar] step=4 about to s3 upload key=", key, "bytes=", arrayBuffer.byteLength);
+
+      // S3 env snapshot (no secret values — only presence/length).
+      console.log("[avatar] step=4b env presence:", {
+        S3_BUCKET: (Deno.env.get("S3_BUCKET") ?? "").length,
+        S3_REGION: (Deno.env.get("S3_REGION") ?? "").length,
+        S3_ACCESS_KEY: (Deno.env.get("S3_ACCESS_KEY") ?? "").length,
+        S3_SECRET: (Deno.env.get("S3_SECRET") ?? "").length,
+        S3_ENDPOINT: (Deno.env.get("S3_ENDPOINT") ?? "").length,
+      });
 
       let publicUrl: string | null;
       try {
         const result = await uploadObject(key, arrayBuffer, file.type, "public-read");
         publicUrl = result.publicUrl;
+        console.log("[avatar] step=5 s3 upload OK url=", publicUrl);
       } catch (err) {
         // R-01: log full error server-side for ops; return sanitized to client.
         const e = err as { name?: string; message?: string; Code?: string; $metadata?: unknown };
-        console.error("[profile/avatar] s3 upload failed", {
+        console.log("[avatar] step=5 FAILED s3:", {
           name: e?.name, code: e?.Code, message: e?.message, meta: e?.$metadata,
         });
         return errorResponse(sanitizeError(err), 500);
@@ -141,10 +161,11 @@ Deno.serve(async (req: Request) => {
         .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
         .eq("id", user.id);
       if (updErr) {
-        console.error("[profile/avatar] profile update failed", updErr);
+        console.log("[avatar] step=6 FAILED profile update:", updErr);
         return errorResponse(sanitizeError(updErr), 500);
       }
 
+      console.log("[avatar] step=7 done");
       return successResponse({ avatar_url: publicUrl });
     }
 
@@ -170,7 +191,8 @@ Deno.serve(async (req: Request) => {
 
     return errorResponse("Not found", 404);
   } catch (err) {
-    console.error("[profile] unhandled error:", err);
+    const e = err as { name?: string; message?: string; stack?: string };
+    console.log("[profile] OUTER CATCH", { name: e?.name, message: e?.message, stack: e?.stack });
     return errorResponse("Internal server error", 500);
   }
 });
