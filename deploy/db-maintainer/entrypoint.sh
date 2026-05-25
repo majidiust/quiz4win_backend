@@ -88,6 +88,10 @@ ENV_FILE=/etc/profile.d/db-maintainer-env.sh
 chmod 0600 "$ENV_FILE"
 
 mkdir -p /var/spool/cron/crontabs /var/log/db-maintainer
+# Pre-create the cron log so `tail -F` below doesn't print an error on
+# first start (busybox tail emits "cannot open ... No such file" even
+# with -F when the file is missing at startup).
+touch /var/log/db-maintainer/backup.log
 cat > /var/spool/cron/crontabs/root <<EOF
 # Quiz4Win — daily database backup
 $BACKUP_SCHEDULE . $ENV_FILE; /opt/db-maintainer/backup.sh >> /var/log/db-maintainer/backup.log 2>&1
