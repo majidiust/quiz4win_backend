@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { uploadObject } from "@/lib/s3";
 
 export interface ActionResult {
   ok: boolean;
@@ -90,6 +91,8 @@ export async function advanceQuestion(gameId: string): Promise<ActionResult> {
 /* Create / Update                                                      */
 /* ------------------------------------------------------------------ */
 
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a valid hex color #RRGGBB").optional();
+
 const GameSchema = z.object({
   title: z.string().trim().min(1).max(200),
   mode: z.enum(["timed", "battle", "daily", "tournament", "live"]),
@@ -100,6 +103,17 @@ const GameSchema = z.object({
   max_players: z.number().int().positive().optional(),
   scheduled_at: z.string().optional(),
   description: z.string().trim().max(1000).optional(),
+  // Styling fields
+  accent_color: hexColor,
+  glow_color: hexColor,
+  gradient_colors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+  // Meta fields
+  sponsor: z.string().trim().max(200).optional(),
+  tags: z.array(z.string().trim().max(50)).optional(),
+  // Host fields
+  host_name: z.string().trim().max(200).optional(),
+  host_title: z.string().trim().max(200).optional(),
+  rules: z.array(z.string().trim().max(500)).optional(),
 });
 
 export async function createGame(input: z.infer<typeof GameSchema>): Promise<ActionResult & { id?: string }> {
@@ -151,4 +165,67 @@ export async function removeParticipant(gameId: string, userId: string): Promise
   await db.from("admin_audit_log").insert({ admin_id: admin.id, action: "participant_removed", target_type: "game", target_id: `${gameId}:${userId}`, created_at: new Date().toISOString() });
   revalidatePath(`/games/${gameId}`);
   return { ok: true, message: "Participant removed" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Asset Upload                                                          */
+/* ------------------------------------------------------------------ */
+
+const ASSET_FIELDS = ["icon", "thumbnail_url", "host_avatar_url"] as const;
+type AssetField = typeof ASSET_FIELDS[number];
+
+export async function uploadGameAsset(
+  gameId: string,
+  field: AssetField,
+  formData: FormData,
+): Promise<ActionResult & { url?: string }> {
+  const admin = await requireAdmin(["super_admin", "admin"]);
+
+  if (!ASSET_FIELDS.includes(field)) {
+    return { ok: false, message: `Invalid field. Allowed: ${ASSET_FIELDS.join(", ")}` };
+  }
+
+  const file = formData.get("file");
+  if (!file || !(file instanceof Blob)) {
+    return { ok: false, message: "No file provided" };
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    return { ok: false, message: "File exceeds 10 MB limit" };
+  }
+
+  const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"];
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    return { ok: false, message: "Invalid file type. Allowed: JPEG, PNG, WebP, SVG" };
+  }
+
+  const ext = file.type.split("/")[1].replace("svg+xml", "svg");
+  const key = `games/${gameId}/${field}-${Date.now()}.${ext}`;
+
+  let uploadResult;
+  try {
+    const buffer = await file.arrayBuffer();
+    uploadResult = await uploadObject(key, buffer, file.type, "public-read");
+  } catch (err) {
+    return { ok: false, message: `Upload failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  const db = createSupabaseAdminClient();
+  const { error } = await db
+    .from("games")
+    .update({ [field]: uploadResult.publicUrl, updated_at: new Date().toISOString() } as Record<string, unknown>)
+    .eq("id", gameId);
+
+  if (error) return { ok: false, message: `DB update failed: ${error.message}` };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id,
+    action: "game_asset_uploaded",
+    target_type: "game",
+    target_id: gameId,
+    details: { field, url: uploadResult.publicUrl },
+    created_at: new Date().toISOString(),
+  });
+
+  revalidatePath(`/games/${gameId}`);
+  return { ok: true, message: `${field} updated`, url: uploadResult.publicUrl ?? undefined };
 }

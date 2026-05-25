@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Trophy, Users } from "lucide-react";
+import { ArrowLeft, Trophy, Users, Palette, Image as ImageIcon, User } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { PageHeader } from "@/components/shell/page-header";
@@ -9,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, formatNumber } from "@/lib/utils";
-import { GameLifecycleActions, RemoveParticipantButton } from "./game-actions";
+import { GameLifecycleActions, RemoveParticipantButton, AssetUploadButton, EditStylingDialog } from "./game-actions";
 import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Game detail" };
@@ -43,6 +44,7 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
               <Link href="/games"><ArrowLeft className="size-4" /> All games</Link>
             </Button>
             <ExportButton href={`/api/exports/games/${game.id}`} label="Export results" />
+            <EditStylingDialog gameId={game.id} game={game} />
             <GameLifecycleActions gameId={game.id} status={game.status} />
           </div>
         }
@@ -63,6 +65,14 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
             {game.scheduled_at ? <Row label="Scheduled">{formatDateTime(game.scheduled_at)}</Row> : null}
             {game.started_at ? <Row label="Started">{formatDateTime(game.started_at)}</Row> : null}
             {game.ended_at ? <Row label="Ended">{formatDateTime(game.ended_at)}</Row> : null}
+            {game.sponsor ? <Row label="Sponsor">{game.sponsor}</Row> : null}
+            {Array.isArray(game.tags) && game.tags.length > 0 ? (
+              <Row label="Tags">
+                <div className="flex flex-wrap gap-1 justify-end">
+                  {(game.tags as string[]).map((t) => <Badge key={t} variant="muted" className="text-xs">{t}</Badge>)}
+                </div>
+              </Row>
+            ) : null}
             {game.cancelled_reason ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
                 Cancelled: {game.cancelled_reason}
@@ -71,7 +81,72 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        {/* Styling & Assets card */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Palette className="size-4" /> Styling &amp; Assets
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            {/* Colors */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Colors</p>
+              <Row label="Accent">
+                {game.accent_color ? (
+                  <span className="flex items-center gap-1.5 font-mono text-xs">
+                    <span className="inline-block size-4 rounded-sm border" style={{ background: game.accent_color }} />
+                    {game.accent_color}
+                  </span>
+                ) : "—"}
+              </Row>
+              <Row label="Glow">
+                {game.glow_color ? (
+                  <span className="flex items-center gap-1.5 font-mono text-xs">
+                    <span className="inline-block size-4 rounded-sm border" style={{ background: game.glow_color }} />
+                    {game.glow_color}
+                  </span>
+                ) : "—"}
+              </Row>
+              {Array.isArray(game.gradient_colors) && game.gradient_colors.length > 0 ? (
+                <Row label="Gradient">
+                  <div className="flex gap-1">
+                    {(game.gradient_colors as string[]).map((c) => (
+                      <span key={c} title={c} className="inline-block size-4 rounded-sm border" style={{ background: c }} />
+                    ))}
+                  </div>
+                </Row>
+              ) : null}
+            </div>
+            {/* Assets */}
+            <div className="space-y-3">
+              <p className="text-xs font-medium text-muted-foreground">Assets</p>
+              <div className="flex items-start gap-4">
+                <div className="flex flex-col items-center gap-1">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ImageIcon className="size-3" /> Icon</p>
+                  <AssetUploadButton gameId={game.id} field="icon" label="Icon" currentUrl={game.icon} />
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ImageIcon className="size-3" /> Thumbnail</p>
+                  <AssetUploadButton gameId={game.id} field="thumbnail_url" label="Thumbnail" currentUrl={game.thumbnail_url} />
+                </div>
+              </div>
+            </div>
+            {/* Host info */}
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1"><User className="size-3" /> Host</p>
+              <div className="flex items-start gap-3">
+                <AssetUploadButton gameId={game.id} field="host_avatar_url" label="Host avatar" currentUrl={game.host_avatar_url} />
+                <div className="space-y-1">
+                  <p className="font-medium">{game.host_name ?? <span className="text-muted-foreground">—</span>}</p>
+                  <p className="text-xs text-muted-foreground">{game.host_title ?? ""}</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Users className="size-4" />

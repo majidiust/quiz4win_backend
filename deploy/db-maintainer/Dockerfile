@@ -11,9 +11,11 @@
 # All actions log to stdout/stderr so `docker compose logs db-maintainer`
 # shows the full history.
 
-FROM postgres:16-alpine
+FROM postgres:17-alpine
 
-# postgres:16-alpine ships psql + pg_dump.
+# postgres:17-alpine ships psql + pg_dump matching Supabase's Postgres 17 server.
+# Using an older client (e.g. 16) causes pg_dump to abort with
+# "server version mismatch" against a 17.x server.
 # aws-cli (community repo) is used for S3-compatible uploads (Spaces).
 # tini gives us PID 1 signal handling so crond exits cleanly on SIGTERM.
 RUN apk add --no-cache \
