@@ -17,5 +17,6 @@ CMD ["deno", "run", \
      "--allow-net", \
      "--allow-env", \
      "--allow-read", \
+     "--allow-sys=osRelease", \
      "--config", "/app/functions/deno.json", \
      "/app/functions/_server.ts"]
