@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { uploadObject } from "@/lib/s3";
+import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
 
 export interface ActionResult {
   ok: boolean;
@@ -93,10 +94,9 @@ export async function advanceQuestion(gameId: string): Promise<ActionResult> {
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a valid hex color #RRGGBB").optional();
 
-// Common currency codes surfaced in the picker. ISO-4217 except where a
-// local symbol is more recognisable (e.g. AED). The DB column is plain TEXT
-// so any code is accepted, but the UI is constrained to this list.
-export const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "AED", "SAR", "TRY", "IRR"] as const;
+// SUPPORTED_CURRENCIES lives in @/lib/games-constants because non-function
+// exports are not allowed from a "use server" module — they get rewritten to
+// server-action refs in the client bundle and break `Array.map` at render time.
 
 const GameSchema = z.object({
   title: z.string().trim().min(1).max(200),

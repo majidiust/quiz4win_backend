@@ -17,7 +17,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
-import { createGame, SUPPORTED_CURRENCIES } from "@/lib/actions/games";
+import { createGame } from "@/lib/actions/games";
+import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
 
 export function CreateGameDialog() {
   const router = useRouter();

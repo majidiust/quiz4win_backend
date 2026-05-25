@@ -14,7 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { startGame, endGame, cancelGame, advanceQuestion, removeParticipant, uploadGameAsset, updateGame, SUPPORTED_CURRENCIES } from "@/lib/actions/games";
+import { startGame, endGame, cancelGame, advanceQuestion, removeParticipant, uploadGameAsset, updateGame } from "@/lib/actions/games";
+import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
 
 interface Props { gameId: string; status: string }
 
