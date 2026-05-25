@@ -85,6 +85,9 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       # User-facing app base URL (Expo Universal Link target for password-reset email).
       APP_URL: ${APP_URL:-https://app.quiz4win.com}
+      # Email (Brevo transactional API).
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@quiz4win.com}
       # Optional integrations — leave empty if unused.
       RECAPTCHA_SECRET_KEY: ${GOOGLE_RECAPTCHA_SECRET_KEY:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
