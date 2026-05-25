@@ -93,6 +93,11 @@ export async function advanceQuestion(gameId: string): Promise<ActionResult> {
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a valid hex color #RRGGBB").optional();
 
+// Common currency codes surfaced in the picker. ISO-4217 except where a
+// local symbol is more recognisable (e.g. AED). The DB column is plain TEXT
+// so any code is accepted, but the UI is constrained to this list.
+export const SUPPORTED_CURRENCIES = ["USD", "EUR", "GBP", "AED", "SAR", "TRY", "IRR"] as const;
+
 const GameSchema = z.object({
   title: z.string().trim().min(1).max(200),
   mode: z.enum(["timed", "battle", "daily", "tournament", "live"]),
@@ -100,6 +105,8 @@ const GameSchema = z.object({
   difficulty: z.enum(["Easy", "Medium", "Hard"]).optional(),
   entry_fee: z.number().min(0),
   prize_pool: z.number().min(0),
+  prize_pool_currency: z.enum(SUPPORTED_CURRENCIES).optional(),
+  is_featured: z.boolean().optional(),
   max_players: z.number().int().positive().optional(),
   scheduled_at: z.string().optional(),
   description: z.string().trim().max(1000).optional(),

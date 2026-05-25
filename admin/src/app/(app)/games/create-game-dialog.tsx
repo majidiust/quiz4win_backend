@@ -16,7 +16,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { createGame } from "@/lib/actions/games";
+import { Switch } from "@/components/ui/switch";
+import { createGame, SUPPORTED_CURRENCIES } from "@/lib/actions/games";
 
 export function CreateGameDialog() {
   const router = useRouter();
@@ -30,6 +31,8 @@ export function CreateGameDialog() {
   const [difficulty, setDifficulty] = useState("Medium");
   const [entryFee, setEntryFee] = useState("0");
   const [prizePool, setPrizePool] = useState("0");
+  const [prizePoolCurrency, setPrizePoolCurrency] = useState<string>("USD");
+  const [isFeatured, setIsFeatured] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
   const [description, setDescription] = useState("");
@@ -47,7 +50,8 @@ export function CreateGameDialog() {
 
   function reset() {
     setTitle(""); setMode("timed"); setCategory(""); setDifficulty("Medium");
-    setEntryFee("0"); setPrizePool("0"); setMaxPlayers(""); setScheduledAt(""); setDescription("");
+    setEntryFee("0"); setPrizePool("0"); setPrizePoolCurrency("USD"); setIsFeatured(false);
+    setMaxPlayers(""); setScheduledAt(""); setDescription("");
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1");
     setSponsor(""); setTagsInput(""); setHostName(""); setHostTitle("");
   }
@@ -69,6 +73,8 @@ export function CreateGameDialog() {
         difficulty: difficulty as "Easy" | "Medium" | "Hard" | undefined,
         entry_fee: parseFloat(entryFee) || 0,
         prize_pool: parseFloat(prizePool) || 0,
+        prize_pool_currency: prizePoolCurrency as (typeof SUPPORTED_CURRENCIES)[number],
+        is_featured: isFeatured,
         max_players: maxPlayers ? parseInt(maxPlayers, 10) : undefined,
         scheduled_at: scheduledAt || undefined,
         description: description.trim() || undefined,
@@ -148,12 +154,27 @@ export function CreateGameDialog() {
                 <Input id="cg-fee" type="number" min="0" step="0.01" value={entryFee} onChange={(e) => setEntryFee(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="cg-pool">Prize pool ($)</Label>
-                <Input id="cg-pool" type="number" min="0" step="0.01" value={prizePool} onChange={(e) => setPrizePool(e.target.value)} />
+                <Label htmlFor="cg-pool">Prize pool</Label>
+                <div className="flex gap-2">
+                  <Input id="cg-pool" type="number" min="0" step="0.01" value={prizePool} onChange={(e) => setPrizePool(e.target.value)} className="flex-1" />
+                  <Select value={prizePoolCurrency} onValueChange={setPrizePoolCurrency}>
+                    <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {SUPPORTED_CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="cg-schedule">Scheduled at</Label>
                 <Input id="cg-schedule" type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="cg-featured" className="cursor-pointer">Featured game</Label>
+                  <p className="text-xs text-muted-foreground">Show in the home-screen hero carousel.</p>
+                </div>
+                <Switch id="cg-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
               </div>
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="cg-desc">Description</Label>

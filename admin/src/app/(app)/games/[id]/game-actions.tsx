@@ -12,7 +12,9 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { startGame, endGame, cancelGame, advanceQuestion, removeParticipant, uploadGameAsset, updateGame } from "@/lib/actions/games";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { startGame, endGame, cancelGame, advanceQuestion, removeParticipant, uploadGameAsset, updateGame, SUPPORTED_CURRENCIES } from "@/lib/actions/games";
 
 interface Props { gameId: string; status: string }
 
@@ -190,6 +192,8 @@ interface StylingFields {
   tags?: string[] | null;
   host_name?: string | null;
   host_title?: string | null;
+  prize_pool_currency?: string | null;
+  is_featured?: boolean | null;
 }
 
 export function EditStylingDialog({ gameId, game }: { gameId: string; game: StylingFields }) {
@@ -205,6 +209,8 @@ export function EditStylingDialog({ gameId, game }: { gameId: string; game: Styl
   const [tagsInput, setTagsInput] = useState((game.tags ?? []).join(", "));
   const [hostName, setHostName] = useState(game.host_name ?? "");
   const [hostTitle, setHostTitle] = useState(game.host_title ?? "");
+  const [prizePoolCurrency, setPrizePoolCurrency] = useState<string>(game.prize_pool_currency ?? "USD");
+  const [isFeatured, setIsFeatured] = useState<boolean>(game.is_featured ?? false);
 
   function addGradient() {
     if (gradientInput && !gradientColors.includes(gradientInput)) {
@@ -223,6 +229,8 @@ export function EditStylingDialog({ gameId, game }: { gameId: string; game: Styl
         tags: tags.length ? tags : undefined,
         host_name: hostName.trim() || undefined,
         host_title: hostTitle.trim() || undefined,
+        prize_pool_currency: prizePoolCurrency as (typeof SUPPORTED_CURRENCIES)[number],
+        is_featured: isFeatured,
       });
       if (res.ok) { toast.success(res.message); setOpen(false); router.refresh(); }
       else toast.error(res.message);
@@ -293,6 +301,22 @@ export function EditStylingDialog({ gameId, game }: { gameId: string; game: Styl
           <div className="space-y-1.5">
             <Label>Host title</Label>
             <Input value={hostTitle} onChange={(e) => setHostTitle(e.target.value)} placeholder="e.g. Live Host" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Prize pool currency</Label>
+            <Select value={prizePoolCurrency} onValueChange={setPrizePoolCurrency}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SUPPORTED_CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center justify-between rounded-md border border-input px-3 py-2">
+            <div className="space-y-0.5">
+              <Label htmlFor="es-featured" className="cursor-pointer">Featured</Label>
+              <p className="text-xs text-muted-foreground">Hero carousel</p>
+            </div>
+            <Switch id="es-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
           </div>
         </div>
         <DialogFooter>

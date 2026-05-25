@@ -58,7 +58,15 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
             <Row label="Mode"><span className="capitalize">{game.mode}</span></Row>
             <Row label="Difficulty">{game.difficulty ?? "—"}</Row>
             <Row label="Entry fee"><span className="font-mono">{formatMoneyDecimal(game.entry_fee)}</span></Row>
-            <Row label="Prize pool"><span className="font-mono text-success">{formatMoneyDecimal(game.prize_pool)}</span></Row>
+            <Row label="Prize pool">
+              <span className="font-mono text-success">{formatMoneyDecimal(game.prize_pool)}</span>
+              <span className="ml-1 text-xs text-muted-foreground">{game.prize_pool_currency ?? "USD"}</span>
+            </Row>
+            <Row label="Featured">
+              {game.is_featured
+                ? <Badge variant="default" className="text-xs">Featured</Badge>
+                : <span className="text-muted-foreground">No</span>}
+            </Row>
             <Row label="Max players">{game.max_players ?? "Unlimited"}</Row>
             <Row label="Questions">{game.questions_count}</Row>
             <Row label="Time/question">{game.time_per_question}s</Row>
