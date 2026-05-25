@@ -2,10 +2,10 @@
  * Auth Edge Function — Quiz4Win
  *
  * Handles all authentication routes for the customer app:
- *   POST /auth/signup            — Register new user (API #1)
- *   POST /auth/signin            — Email + password sign in (API #2)
- *   POST /auth/token             — Refresh access token (API #3)
- *   POST /auth/signout           — Revoke current session (API #4)
+ *   POST /auth/signup   (alias /auth/register) — Register new user (API #1)
+ *   POST /auth/signin   (alias /auth/login)    — Email + password sign in (API #2)
+ *   POST /auth/token                           — Refresh access token (API #3)
+ *   POST /auth/signout  (alias /auth/logout)   — Revoke current session (API #4)
  *   POST /auth/forgot-password   — Send OTP email (API #5)
  *   POST /auth/verify-otp        — Verify password-reset OTP (API #6)
  *   POST /auth/update-password   — Set new password post-OTP (API #7)
@@ -20,11 +20,21 @@ import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
 import { sendEmail, welcomeTemplate, recoveryTemplate } from "../_shared/email.ts";
 
+// Common frontend naming aliases → canonical backend paths. Lets the iOS
+// and admin apps call either `/auth/login` or `/auth/signin` etc. without
+// the customer team having to track which spelling we picked.
+const PATH_ALIASES: Record<string, string> = {
+  login: "signin",
+  logout: "signout",
+  register: "signup",
+};
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
 
   const url = new URL(req.url);
-  const path = url.pathname.replace(/^\/auth/, "").replace(/^\//, "");
+  const rawPath = url.pathname.replace(/^\/auth/, "").replace(/^\//, "");
+  const path = PATH_ALIASES[rawPath] ?? rawPath;
 
   try {
     // ── POST /auth/signup ──────────────────────────────────────────────────
