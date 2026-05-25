@@ -75,15 +75,29 @@ export async function uploadObject(
 
   const acl: ObjectCannedACL | undefined = visibility === "public-read" ? "public-read" : undefined;
 
-  await getClient().send(
-    new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-      Body,
-      ContentType: contentType,
-      ACL: acl,
-    }),
+  console.log(
+    `[s3] PUT start — bucket=${S3_BUCKET} key=${key} size=${Body.byteLength}B ` +
+    `contentType=${contentType} visibility=${visibility} endpoint=${S3_ENDPOINT}`,
   );
+
+  try {
+    await getClient().send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: key,
+        Body,
+        ContentType: contentType,
+        ACL: acl,
+      }),
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const code = (err as Record<string, unknown>)?.Code ?? (err as Record<string, unknown>)?.code ?? "unknown";
+    console.error(`[s3] PUT FAILED — key=${key} errorCode=${code} message=${msg}`);
+    throw err; // re-throw so the caller's step log catches it
+  }
+
+  console.log(`[s3] PUT OK — key=${key}`);
 
   return {
     key,
