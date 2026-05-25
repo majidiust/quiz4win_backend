@@ -35,10 +35,14 @@ All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }
 |-------|------|---------|-------------|
 | `status` | string | `open` | Filter by status. Pipe-delimit for OR: `open|upcoming` |
 | `mode` | string | — | Filter by mode: `timed`, `battle`, `daily`, `tournament`, `live` |
+| `featured` | string | — | If `true`, returns only games where `is_featured = true` (powers the home-screen hero carousel) |
 | `page` | number | `1` | Pagination page |
 | `limit` | number | `20` | Results per page (max 50) |
 
-**Response**
+**Response (`GameSummary[]`)**
+
+> `GameSummary` and `GameDetail` share the **same key set** — see field reference below the example. Aliases: `max_participants` (← `max_players`), `participant_count` (← `total_participants`), `start_time` (← `scheduled_at`), `end_time` (← `ended_at`).
+
 ```json
 {
   "data": {
@@ -52,42 +56,71 @@ All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }
         "status": "open",
         "entry_fee": 5.00,
         "prize_pool": 500.00,
+        "prize_pool_currency": "USD",
         "category": "Sports",
         "difficulty": "Medium",
         "language": "en",
+        "questions_count": 10,
+        "time_per_question": 15,
+        "allowed_wrong_answers": 3,
         "participant_count": 42,
         "max_participants": 100,
         "start_time": "2026-05-25T20:00:00Z",
         "end_time": null,
+        "is_featured": true,
+        "joined_by_me": false,
         "icon": "https://cdn.example.com/games/uuid/icon.png",
         "thumbnail_url": "https://cdn.example.com/games/uuid/thumbnail.jpg",
         "accent_color": "#EF4444",
         "glow_color": "#FF6B6B",
-        "gradient_colors": ["#EF4444", "#B91C1C"],
+        "gradient_colors": ["#0A0518", "#13082E"],
         "sponsor": "Sponsor Name",
         "tags": ["football", "champions"],
         "host_name": "Alex Johnson",
         "host_avatar_url": "https://cdn.example.com/games/uuid/host_avatar.jpg",
-        "host_title": "Live Host"
+        "host_title": "Live Host",
+        "rules": ["Each question has one correct answer", "No skipping"]
       }
     ],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 5,
-      "total_pages": 1
-    }
+    "pagination": { "page": 1, "limit": 20, "total": 5, "total_pages": 1 }
   }
 }
 ```
+
+**Field Reference (shared by `GameSummary` and `GameDetail`)**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string (uuid) | |
+| `title`, `subtitle`, `description` | string\|null | |
+| `mode` | enum | `timed` \| `battle` \| `daily` \| `tournament` \| `live` |
+| `status` | enum | `upcoming` \| `open` \| `live` \| `completed` \| `cancelled` |
+| `entry_fee`, `prize_pool` | number | NUMERIC dollars |
+| `prize_pool_currency` | string | ISO-4217 (or local) code — `USD`, `AED`, `EUR`, etc. UI uses this to pick the symbol |
+| `category`, `difficulty`, `language` | string\|null | |
+| `questions_count` | integer | Total questions in the game |
+| `time_per_question` | integer | Seconds per question (countdown) |
+| `allowed_wrong_answers` | integer\|null | "Lives" before elimination (null = unlimited) |
+| `participant_count` | integer | Alias of `total_participants` |
+| `max_participants` | integer\|null | Alias of `max_players` (null = uncapped) |
+| `start_time` | timestamptz\|null | Alias of `scheduled_at` |
+| `end_time` | timestamptz\|null | Alias of `ended_at` |
+| `is_featured` | boolean | Drives the hero/carousel slot |
+| `joined_by_me` | boolean | True when the authenticated user is already a participant — lets the UI show "✓ Joined" without a detail fetch |
+| `icon`, `thumbnail_url`, `host_avatar_url` | string\|null | Public S3 URLs |
+| `accent_color`, `glow_color` | string\|null | Hex (e.g. `#EF4444`) — glow may include alpha (`#EF444440`) |
+| `gradient_colors` | string[]\|null | Hex array for backgrounds, e.g. `["#0A0518", "#13082E"]` |
+| `sponsor`, `host_name`, `host_title` | string\|null | |
+| `tags`, `rules` | string[]\|null | |
 
 ---
 
 ### `GET /games/:id` — Game Detail
 
-Returns all columns from the `games` table including all styling fields.
+Returns the same object shape as a `GameSummary` row (see field reference above) plus `joined_by_me`.
 
-**Response**
+**Response (`GameDetail`)**
+
 ```json
 {
   "data": {
@@ -98,16 +131,19 @@ Returns all columns from the `games` table including all styling fields.
       "mode": "live",
       "entry_fee": 5.00,
       "prize_pool": 500.00,
+      "prize_pool_currency": "USD",
       "questions_count": 10,
       "time_per_question": 15,
-      "scheduled_at": "2026-05-25T20:00:00Z",
-      "started_at": null,
-      "ended_at": null,
-      "max_players": 100,
-      "total_participants": 42,
+      "allowed_wrong_answers": 3,
+      "max_participants": 100,
+      "participant_count": 42,
+      "start_time": "2026-05-25T20:00:00Z",
+      "end_time": null,
+      "is_featured": true,
+      "joined_by_me": true,
       "accent_color": "#EF4444",
       "glow_color": "#FF6B6B",
-      "gradient_colors": ["#EF4444", "#B91C1C"],
+      "gradient_colors": ["#0A0518", "#13082E"],
       "icon": "https://cdn.example.com/...",
       "thumbnail_url": "https://cdn.example.com/...",
       "host_name": "Alex Johnson",
@@ -115,10 +151,7 @@ Returns all columns from the `games` table including all styling fields.
       "host_title": "Live Host",
       "sponsor": null,
       "tags": [],
-      "rules": [],
-      "prize_breakdown": null,
-      "livekit_room_name": null,
-      "stream_url": null
+      "rules": []
     }
   }
 }

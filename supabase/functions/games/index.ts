@@ -36,50 +36,81 @@ Deno.serve(async (req: Request) => {
   const supabase = getAnonClient(req);
 
   try {
+    // Single SELECT projection reused by both /games and /games/:id so the
+    // GameSummary and GameDetail shapes stay in lock-step (R-06 cohesion).
+    // DB columns max_players / total_participants / scheduled_at are aliased
+    // to the public-API keys max_participants / participant_count / start_time.
+    const GAME_FIELDS =
+      "id, title, subtitle, description, mode, status, " +
+      "entry_fee, prize_pool, prize_pool_currency, " +
+      "category, difficulty, language, " +
+      "questions_count, time_per_question, allowed_wrong_answers, " +
+      "participant_count:total_participants, max_participants:max_players, " +
+      "start_time:scheduled_at, end_time:ended_at, " +
+      "is_featured, " +
+      "icon, thumbnail_url, accent_color, glow_color, gradient_colors, " +
+      "sponsor, tags, host_name, host_avatar_url, host_title, rules";
+
     // GET /games — list available games
     if (!gameId && req.method === "GET") {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
       const limit = Math.min(50, parseInt(url.searchParams.get("limit") ?? "20"));
       const mode = url.searchParams.get("mode");
       const status = url.searchParams.get("status") ?? "open";
+      const featured = url.searchParams.get("featured");
       const offset = (page - 1) * limit;
 
-      // Schema: games has max_players, total_participants, scheduled_at,
-      // started_at, ended_at. Alias to the public API shape and include the
-      // styling fields the customer app needs to render rich game cards.
       let query = supabase
         .from("games")
-        .select(
-          "id, title, subtitle, description, mode, status, " +
-            "entry_fee, prize_pool, category, difficulty, language, " +
-            "participant_count:total_participants, max_participants:max_players, " +
-            "start_time:scheduled_at, end_time:ended_at, " +
-            "icon, thumbnail_url, accent_color, glow_color, gradient_colors, " +
-            "sponsor, tags, host_name, host_avatar_url, host_title",
-          { count: "exact" },
-        )
+        .select(GAME_FIELDS, { count: "exact" })
         .order("scheduled_at", { ascending: true })
         .range(offset, offset + limit - 1);
 
       if (mode) query = query.eq("mode", mode);
+      if (featured === "true") query = query.eq("is_featured", true);
       const statuses = status.split("|");
       if (statuses.length === 1) query = query.eq("status", statuses[0]);
       else query = query.in("status", statuses);
 
       const { data, error, count } = await query;
       if (error) return errorResponse("Failed to fetch games", 500);
-      return successResponse({ games: data ?? [], pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) } });
+
+      // joined_by_me — single batched lookup of the caller's participation
+      // rows for the page of games being returned. Avoids N+1 fetches in the
+      // UI which would otherwise need a per-card request.
+      const rows = data ?? [];
+      let joined = new Set<string>();
+      if (rows.length > 0) {
+        const ids = rows.map((g: { id: string }) => g.id);
+        const { data: parts } = await supabase
+          .from("game_participants")
+          .select("game_id")
+          .eq("user_id", user.id)
+          .in("game_id", ids);
+        joined = new Set((parts ?? []).map((p: { game_id: string }) => p.game_id));
+      }
+      const games = rows.map((g: { id: string }) => ({ ...g, joined_by_me: joined.has(g.id) }));
+
+      return successResponse({ games, pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) } });
     }
 
-    // GET /games/:id — game detail
+    // GET /games/:id — game detail (same shape as GameSummary + joined_by_me)
     if (gameId && !action && req.method === "GET") {
       const { data, error } = await supabase
         .from("games")
-        .select("*")
+        .select(GAME_FIELDS)
         .eq("id", gameId)
         .single();
       if (error || !data) return errorResponse("game_not_found", 404);
-      return successResponse({ game: data });
+
+      const { data: participant } = await supabase
+        .from("game_participants")
+        .select("id")
+        .eq("game_id", gameId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      return successResponse({ game: { ...data, joined_by_me: !!participant } });
     }
 
     // POST /games/:id/join — join game (R-09: atomic debit + join)
