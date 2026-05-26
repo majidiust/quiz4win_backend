@@ -33,7 +33,7 @@ All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `status` | string | `open` | Filter by status. Pipe-delimit for OR: `open|upcoming` |
+| `status` | string | `upcoming|open|live` | Filter by status. Pipe-delimit for OR. Pass an explicit value (e.g. `open`) to narrow. Allowed: `upcoming`, `open`, `live`, `completed`, `cancelled`. |
 | `mode` | string | — | Filter by mode: `timed`, `battle`, `daily`, `tournament`, `live` |
 | `featured` | string | — | If `true`, returns only games where `is_featured = true` (powers the home-screen hero carousel) |
 | `page` | number | `1` | Pagination page |

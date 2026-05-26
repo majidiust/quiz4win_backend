@@ -56,7 +56,11 @@ Deno.serve(async (req: Request) => {
       const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
       const limit = Math.min(50, parseInt(url.searchParams.get("limit") ?? "20"));
       const mode = url.searchParams.get("mode");
-      const status = url.searchParams.get("status") ?? "open";
+      // Default surfaces everything a customer could care about on the home
+      // screen: games scheduled in the future (upcoming), open for joining
+      // (open) and currently running (live). Caller can override with
+      // ?status=open or ?status=upcoming|live etc.
+      const status = url.searchParams.get("status") ?? "upcoming|open|live";
       const featured = url.searchParams.get("featured");
       const offset = (page - 1) * limit;
 
