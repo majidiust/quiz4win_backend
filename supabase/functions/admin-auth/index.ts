@@ -21,7 +21,7 @@
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
-import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { getAnonClient, getAdminClient, getPublicClient } from "../_shared/supabase.ts";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -39,7 +39,7 @@ Deno.serve(async (req: Request) => {
       const { email, password } = await req.json();
       if (!email || !password) return errorResponse("email and password are required", 400);
 
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) return errorResponse("invalid_credentials", 401);
 
@@ -62,7 +62,7 @@ Deno.serve(async (req: Request) => {
     if (resource === "token" && req.method === "POST") {
       const { refresh_token } = await req.json();
       if (!refresh_token) return errorResponse("refresh_token is required", 400);
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { data, error } = await supabase.auth.refreshSession({ refresh_token });
       if (error) return errorResponse("token_invalid", 401);
       return successResponse({ access_token: data.session?.access_token, refresh_token: data.session?.refresh_token });
@@ -122,7 +122,7 @@ Deno.serve(async (req: Request) => {
       if (typeof new_password !== "string" || new_password.length < 8) return errorResponse("new_password must be at least 8 characters", 400);
 
       // Re-authenticate with the current password.
-      const verify = getAnonClient(req);
+      const verify = getPublicClient();
       const { error: signInErr } = await verify.auth.signInWithPassword({
         email: adminUser.email as string,
         password: current_password,

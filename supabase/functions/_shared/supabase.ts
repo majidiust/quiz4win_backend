@@ -27,11 +27,37 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 /**
  * Returns a Supabase client that operates in the authenticated user's
  * RLS context. Always prefer this client over the admin client.
+ *
+ * NOTE: only call this when the request actually carries a valid user
+ * JWT. For unauthenticated endpoints (signin/signup/refresh/verify-otp,
+ * and any current-password verification step) use `getPublicClient()`
+ * instead — forwarding a stale/invalid Bearer into supabase.auth.* makes
+ * gotrue reply with the misleading "Invalid API key" error.
  */
 export function getAnonClient(req: Request) {
   const authHeader = req.headers.get("Authorization") ?? "";
   return createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false },
+  });
+}
+
+/**
+ * Returns a Supabase client using only the anon key — no forwarded
+ * Authorization header. Use this for any unauthenticated call:
+ *   - auth.signInWithPassword / signUp / refreshSession / verifyOtp
+ *   - re-verifying a user's current password before a password change
+ *
+ * Why this exists: `getAnonClient()` forwards the incoming request's
+ * `Authorization` header into the Supabase JS client's `global.headers`,
+ * which overrides the SDK's default `Bearer <anon_key>` on the call to
+ * `/auth/v1/*`. When the caller (typically a mobile client) retries
+ * signin while still carrying a revoked/expired user JWT, gotrue rejects
+ * the call and returns `Invalid API key` — manifesting as intermittent
+ * "sometimes works, sometimes fails" sign-in errors.
+ */
+export function getPublicClient() {
+  return createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: { persistSession: false },
   });
 }

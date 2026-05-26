@@ -17,7 +17,7 @@
 import { corsHeaders, handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
-import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
+import { getAnonClient, getAdminClient, getPublicClient } from "../_shared/supabase.ts";
 import { sendEmail, welcomeTemplate, recoveryTemplate } from "../_shared/email.ts";
 
 // Common frontend naming aliases → canonical backend paths. Lets the iOS
@@ -44,7 +44,7 @@ Deno.serve(async (req: Request) => {
         return errorResponse("Missing required fields: name, email, password", 400);
       }
 
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
 
       // Validate referral code if provided (no `is_active` column in schema).
       if (referral_code) {
@@ -108,7 +108,7 @@ Deno.serve(async (req: Request) => {
       const { email, password } = await req.json();
       if (!email || !password) return errorResponse("Missing email or password", 400);
 
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
         console.warn(`[auth] signin failed for ${email}: ${error.message}`);
@@ -143,7 +143,7 @@ Deno.serve(async (req: Request) => {
       if (grant_type !== "refresh_token" || !refresh_token) {
         return errorResponse("grant_type must be refresh_token and refresh_token is required", 400);
       }
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { data, error } = await supabase.auth.refreshSession({ refresh_token });
       if (error) {
         const code = error.message.toLowerCase().includes("expired") ? "token_expired" : "token_revoked";
@@ -223,7 +223,7 @@ Deno.serve(async (req: Request) => {
       if (!email || !token || type !== "recovery") {
         return errorResponse("email, token, and type=recovery are required", 400);
       }
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "recovery" });
       if (error) {
         const code = error.message.toLowerCase().includes("expired") ? "otp_expired" : "otp_invalid";
@@ -284,7 +284,7 @@ Deno.serve(async (req: Request) => {
       }
       if (!user.email) return errorResponse("account_missing_email", 400);
 
-      const supabase = getAnonClient(req);
+      const supabase = getPublicClient();
       const { error: verifyErr } = await supabase.auth.signInWithPassword({
         email: user.email,
         password: current_password,
