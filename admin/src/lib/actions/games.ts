@@ -112,6 +112,7 @@ const GameSchema = z.object({
   max_players: z.number().int().positive().optional(),
   time_per_question: z.number().int().min(3).max(300).optional(),
   allowed_wrong_answers: z.number().int().min(0).max(100).optional(),
+  questions_count: z.number().int().min(1).max(1000).optional(),
   scheduled_at: z.string().optional(),
   description: z.string().trim().max(1000).optional(),
   // Styling fields

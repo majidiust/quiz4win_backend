@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Trophy, Users, Palette, Image as ImageIcon, User } from "lucide-react";
+import { ArrowLeft, Trophy, Users, Palette, Image as ImageIcon, User, Pencil } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatRelative, formatNumber } from "@/lib/utils";
-import { GameLifecycleActions, RemoveParticipantButton, AssetUploadButton, EditGameDialog } from "./game-actions";
+import { GameLifecycleActions, RemoveParticipantButton, AssetUploadButton } from "./game-actions";
 import { ExportButton } from "@/components/export-button";
 
 export const metadata = { title: "Game detail" };
@@ -45,7 +45,9 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
             </Button>
             <ExportButton href={`/api/exports/games/${game.id}`} label="Export results" />
             {["upcoming", "open"].includes(game.status) ? (
-              <EditGameDialog gameId={game.id} game={game} />
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/games/${game.id}/edit`}><Pencil className="size-3.5" /> Edit</Link>
+              </Button>
             ) : null}
             <GameLifecycleActions gameId={game.id} status={game.status} />
           </div>
