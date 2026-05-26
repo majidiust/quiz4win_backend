@@ -100,14 +100,18 @@ const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a valid hex colo
 
 const GameSchema = z.object({
   title: z.string().trim().min(1).max(200),
+  subtitle: z.string().trim().max(300).optional(),
   mode: z.enum(["timed", "battle", "daily", "tournament", "live"]),
   category: z.string().trim().max(80).optional(),
   difficulty: z.enum(["Easy", "Medium", "Hard"]).optional(),
+  language: z.enum(["en", "ar", "fa", "tr"]).optional(),
   entry_fee: z.number().min(0),
   prize_pool: z.number().min(0),
   prize_pool_currency: z.enum(SUPPORTED_CURRENCIES).optional(),
   is_featured: z.boolean().optional(),
   max_players: z.number().int().positive().optional(),
+  time_per_question: z.number().int().min(3).max(300).optional(),
+  allowed_wrong_answers: z.number().int().min(0).max(100).optional(),
   scheduled_at: z.string().optional(),
   description: z.string().trim().max(1000).optional(),
   // Styling fields
