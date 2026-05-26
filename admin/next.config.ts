@@ -4,6 +4,14 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   typedRoutes: false,
   output: "standalone",
+  // Server actions are used to forward image uploads (icon / thumbnail /
+  // host avatar) to the api. Next.js caps server-action payloads at 1MB by
+  // default, which 413s any real-world photo. Match the nginx 50M cap.
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "50mb",
+    },
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "*.supabase.co" },
