@@ -71,7 +71,8 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
             </Row>
             <Row label="Max players">{game.max_players ?? "Unlimited"}</Row>
             <Row label="Questions">{game.questions_count}</Row>
-            <Row label="Time/question">{game.time_per_question}s</Row>
+            <Row label="Per question">{game.time_per_question}s</Row>
+            <Row label="Lives">{game.allowed_wrong_answers ?? "Unlimited"}</Row>
             {game.scheduled_at ? <Row label="Scheduled">{formatDateTime(game.scheduled_at)}</Row> : null}
             {game.started_at ? <Row label="Started">{formatDateTime(game.started_at)}</Row> : null}
             {game.ended_at ? <Row label="Ended">{formatDateTime(game.ended_at)}</Row> : null}

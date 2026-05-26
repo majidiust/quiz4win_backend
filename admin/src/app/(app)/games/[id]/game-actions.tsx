@@ -364,7 +364,7 @@ export function EditGameDialog({ gameId, game }: { gameId: string; game: Editabl
                 <Input id="eg-max" type="number" min="1" value={maxPlayers} onChange={(e) => setMaxPlayers(e.target.value)} placeholder="Unlimited" />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="eg-tpq">Time/question (s)</Label>
+                <Label htmlFor="eg-tpq">Per question (s)</Label>
                 <Input id="eg-tpq" type="number" min="3" max="300" value={timePerQuestion} onChange={(e) => setTimePerQuestion(e.target.value)} />
               </div>
               <div className="space-y-1.5">
@@ -384,7 +384,7 @@ export function EditGameDialog({ gameId, game }: { gameId: string; game: Editabl
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="eg-allowed-wrong">Allowed wrong answers</Label>
+                <Label htmlFor="eg-allowed-wrong">Lives</Label>
                 <Input id="eg-allowed-wrong" type="number" min="0" max="100" value={allowedWrong} onChange={(e) => setAllowedWrong(e.target.value)} placeholder="Unlimited" />
               </div>
               <div className="col-span-2 space-y-1.5">

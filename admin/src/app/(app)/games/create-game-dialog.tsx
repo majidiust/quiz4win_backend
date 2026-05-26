@@ -35,6 +35,8 @@ export function CreateGameDialog() {
   const [prizePoolCurrency, setPrizePoolCurrency] = useState<string>("USD");
   const [isFeatured, setIsFeatured] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState("");
+  const [timePerQuestion, setTimePerQuestion] = useState("15");
+  const [allowedWrong, setAllowedWrong] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
   const [description, setDescription] = useState("");
   // Styling fields
@@ -52,7 +54,7 @@ export function CreateGameDialog() {
   function reset() {
     setTitle(""); setMode("timed"); setCategory(""); setDifficulty("Medium");
     setEntryFee("0"); setPrizePool("0"); setPrizePoolCurrency("USD"); setIsFeatured(false);
-    setMaxPlayers(""); setScheduledAt(""); setDescription("");
+    setMaxPlayers(""); setTimePerQuestion("15"); setAllowedWrong(""); setScheduledAt(""); setDescription("");
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1");
     setSponsor(""); setTagsInput(""); setHostName(""); setHostTitle("");
   }
@@ -77,6 +79,8 @@ export function CreateGameDialog() {
         prize_pool_currency: prizePoolCurrency as (typeof SUPPORTED_CURRENCIES)[number],
         is_featured: isFeatured,
         max_players: maxPlayers ? parseInt(maxPlayers, 10) : undefined,
+        time_per_question: timePerQuestion ? parseInt(timePerQuestion, 10) : undefined,
+        allowed_wrong_answers: allowedWrong !== "" ? parseInt(allowedWrong, 10) : undefined,
         scheduled_at: scheduledAt || undefined,
         description: description.trim() || undefined,
         accent_color: accentColor || undefined,
@@ -149,6 +153,14 @@ export function CreateGameDialog() {
               <div className="space-y-1.5">
                 <Label htmlFor="cg-max">Max players</Label>
                 <Input id="cg-max" type="number" min="1" value={maxPlayers} onChange={(e) => setMaxPlayers(e.target.value)} placeholder="Unlimited" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cg-tpq">Per question (s)</Label>
+                <Input id="cg-tpq" type="number" min="3" max="300" value={timePerQuestion} onChange={(e) => setTimePerQuestion(e.target.value)} placeholder="15" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cg-lives">Lives</Label>
+                <Input id="cg-lives" type="number" min="0" max="100" value={allowedWrong} onChange={(e) => setAllowedWrong(e.target.value)} placeholder="Unlimited" />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="cg-fee">Entry fee ($)</Label>
