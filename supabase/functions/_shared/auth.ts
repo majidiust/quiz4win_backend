@@ -115,3 +115,157 @@ export async function requireAdminRole(
 
   return { adminUser: data as Record<string, unknown>, error: null };
 }
+
+/* =========================================================================== *
+ *  X-API-Key path — server-to-server admin access via long-lived keys.
+ *  Companion to validateJWT(). Both paths converge in validateAdminAccess().
+ * =========================================================================== */
+
+export type AdminAccessSource = "jwt" | "api_key";
+
+export interface AdminAccess {
+  /** "jwt" if authenticated by an admin user session, "api_key" otherwise. */
+  source: AdminAccessSource;
+  /** Effective role for authorisation checks. */
+  role: string;
+  /** admin_users.id for JWT path; api_keys.created_by for API-key path. */
+  actorId: string;
+  /** api_keys.id when source === "api_key", else null. Useful for audit logs. */
+  apiKeyId: string | null;
+}
+
+export interface AdminAccessResult {
+  access: AdminAccess | null;
+  /** HTTP status to return when access is null. */
+  status: number;
+  error: string | null;
+}
+
+/** Hex SHA-256 of `input` using the Web Crypto API (Deno-native). */
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Length-equal, constant-time comparison of two hex strings. */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Best-effort client IP from common proxy headers. */
+function ipFromReq(req: Request): string | null {
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0]!.trim();
+  return req.headers.get("x-real-ip") ?? null;
+}
+
+/**
+ * Validates an X-API-Key header (`key_id.secret` format) against api_keys.
+ * On success, updates last_used_at/last_used_ip best-effort and returns the
+ * key's role. On any failure, returns a generic "Invalid API key" message —
+ * never leaks whether the key_id existed.
+ */
+async function validateApiKeyHeader(req: Request, raw: string): Promise<AdminAccessResult> {
+  const url = new URL(req.url);
+  const trimmed = raw.trim();
+  const dot = trimmed.indexOf(".");
+  if (dot <= 0 || dot === trimmed.length - 1) {
+    console.warn(`[auth] ${req.method} ${url.pathname} — malformed X-API-Key`);
+    return { access: null, status: 401, error: "Invalid API key" };
+  }
+  const keyId = trimmed.slice(0, dot);
+  const secret = trimmed.slice(dot + 1);
+
+  const { getAdminClient } = await import("./supabase.ts");
+  const db = getAdminClient();
+  const { data, error } = await db
+    .from("api_keys")
+    .select("id, secret_hash, role, allowed_domains, expires_at, revoked_at, created_by")
+    .eq("key_id", keyId)
+    .maybeSingle();
+
+  if (error || !data) {
+    console.warn(`[auth] ${req.method} ${url.pathname} — api key lookup miss key_id=${keyId}`);
+    return { access: null, status: 401, error: "Invalid API key" };
+  }
+
+  const row = data as {
+    id: string; secret_hash: string; role: string; allowed_domains: string[] | null;
+    expires_at: string | null; revoked_at: string | null; created_by: string;
+  };
+
+  const candidate = await sha256Hex(secret);
+  if (!constantTimeEqual(candidate, row.secret_hash)) {
+    console.warn(`[auth] ${req.method} ${url.pathname} — api key secret mismatch key_id=${keyId}`);
+    return { access: null, status: 401, error: "Invalid API key" };
+  }
+
+  if (row.revoked_at) {
+    return { access: null, status: 401, error: "API key has been revoked" };
+  }
+  if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
+    return { access: null, status: 401, error: "API key has expired" };
+  }
+
+  const allowed = (row.allowed_domains ?? []).filter(Boolean);
+  if (allowed.length > 0) {
+    const origin = (req.headers.get("origin") ?? "").toLowerCase();
+    const ok = origin && allowed.some((d) => d.toLowerCase() === origin);
+    if (!ok) {
+      console.warn(`[auth] ${req.method} ${url.pathname} — api key origin '${origin}' not allowed for key_id=${keyId}`);
+      return { access: null, status: 403, error: "Origin not allowed for this API key" };
+    }
+  }
+
+  // Best-effort usage stamp — never blocks request on failure.
+  db.from("api_keys")
+    .update({ last_used_at: new Date().toISOString(), last_used_ip: ipFromReq(req) })
+    .eq("id", row.id)
+    .then(({ error: uErr }) => {
+      if (uErr) console.warn(`[auth] api_keys last_used update failed: ${uErr.message}`);
+    });
+
+  console.log(`[auth] ${req.method} ${url.pathname} — api key OK key_id=${keyId} role=${row.role}`);
+  return {
+    access: { source: "api_key", role: row.role, actorId: row.created_by, apiKeyId: row.id },
+    status: 200,
+    error: null,
+  };
+}
+
+/**
+ * Unified admin-auth gate: accepts either a Bearer JWT (admin user session)
+ * or an X-API-Key header. Enforces the supplied role allow-list against the
+ * resolved role.
+ *
+ * Usage:
+ *   const auth = await validateAdminAccess(req, ["super_admin", "admin"]);
+ *   if (!auth.access) return errorResponse(auth.error!, auth.status);
+ */
+export async function validateAdminAccess(
+  req: Request,
+  allowedRoles: string[] = ["super_admin", "admin", "moderator", "finance", "support"],
+): Promise<AdminAccessResult> {
+  const apiKeyHeader = req.headers.get("x-api-key");
+  if (apiKeyHeader) {
+    const res = await validateApiKeyHeader(req, apiKeyHeader);
+    if (!res.access) return res;
+    if (!allowedRoles.includes(res.access.role)) {
+      return { access: null, status: 403, error: `Forbidden — role '${res.access.role}' is not permitted for this action` };
+    }
+    return res;
+  }
+
+  const { user, error: authErr } = await validateJWT(req);
+  if (authErr || !user) return { access: null, status: 401, error: authErr ?? "Unauthorized" };
+  const { adminUser, error: roleErr } = await requireAdminRole(user.id, allowedRoles);
+  if (roleErr || !adminUser) return { access: null, status: 403, error: roleErr ?? "Forbidden" };
+  return {
+    access: { source: "jwt", role: adminUser.role as string, actorId: user.id, apiKeyId: null },
+    status: 200,
+    error: null,
+  };
+}

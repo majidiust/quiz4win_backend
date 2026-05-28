@@ -65,5 +65,6 @@ export const ROUTE_ROLES: Record<string, AdminRole[]> = {
   "/referrals": ["super_admin", "admin"],
   "/config": ["super_admin", "admin"],
   "/admins": ["super_admin"],
+  "/api-keys": ["super_admin"],
   "/audit": ["super_admin"],
 };

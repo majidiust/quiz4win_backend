@@ -19,6 +19,7 @@ import {
   UserCog,
   Video,
   LineChart,
+  KeyRound,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -82,6 +83,7 @@ export const navSections: NavSection[] = [
     items: [
       { title: "App Config", href: "/config", icon: Settings2, roles: ["super_admin", "admin"] },
       { title: "Admin Users", href: "/admins", icon: UserCog, roles: ["super_admin"] },
+      { title: "API Keys", href: "/api-keys", icon: KeyRound, roles: ["super_admin"] },
       { title: "Audit Log", href: "/audit", icon: History, roles: ["super_admin"] },
     ],
   },

@@ -103,6 +103,9 @@ Owner: A-01 (Augment Code Agent)
 ---
 
 ## Completed Tasks
+- [P1] [DONE] [A-01] **Admin API Keys management** — Migration `20260528000000_api_keys.sql` (RLS, service-role only), `validateAdminAccess` helper in `_shared/auth.ts` supporting `X-API-Key: key_id.secret`, server actions + `/api-keys` UI page with create/revoke + one-time secret reveal, nav + ROUTE_ROLES entry for super_admin. — 2026-05-28
+- [P1] [DONE] [A-01] **Dedicated Game Edit Page** — Converted `EditGameDialog` modal to a full-screen internal page; added `questions_count` field support. — 2026-05-26
+
 
 - [P1] [DONE] [A-01] **Add quiz4win-app static container for app.quiz4win.com** — Created `app/` module (Dockerfile + nginx.conf + public/) serving Universal Link manifests + password-reset web fallback; wired into `docker-compose.yml` on port 5801; simplified host nginx config + setup script. Resolves 502 on Supabase recovery links opened in browser. — 2026-05-24
 - [P1] [DONE] [A-01] **Extend Admin Panel game styling & asset uploads** — Added color pickers, gradient builder, and S3-backed asset upload (Icon/Thumbnail/Host Avatar) to Create Game dialog and Game Detail page; updated grid layout. — 2026-05-25
