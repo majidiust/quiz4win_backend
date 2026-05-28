@@ -14,10 +14,12 @@
 | `GET` | `/public-games/:id` | Single game detail |
 | `GET` | `/public-winners` | Aggregate winner stats per completed game run |
 | `GET` | `/public-leaderboard` | Ranked players by survivor finishes + credits over a window |
+| `GET` | `/public-featured-host` | Host of the closest active featured game (Host Spotlight) |
 | `OPTIONS` | `/public-games` | CORS preflight |
 | `OPTIONS` | `/public-games/:id` | CORS preflight |
 | `OPTIONS` | `/public-winners` | CORS preflight |
 | `OPTIONS` | `/public-leaderboard` | CORS preflight |
+| `OPTIONS` | `/public-featured-host` | CORS preflight |
 
 ---
 
@@ -348,6 +350,68 @@ For `period=all_time`, `window.from` is `null` and `window.to` is the current se
 
 ---
 
+## GET /public-featured-host
+
+Returns the host of the **closest active featured game** for the homepage "Host Spotlight" card. A game qualifies when `is_featured = true` AND `status ∈ ('upcoming','open','live')`. Selection is by `scheduled_at` ascending — currently-live shows naturally sort first.
+
+When no qualifying game has a linked host record, the endpoint returns `{ "host": null }` so the front-end can hide the section.
+
+### Query Parameters
+
+None.
+
+### Success Response — `200 OK`
+
+```json
+{
+  "host": {
+    "name": "Daniel Reyes",
+    "title": "Live Show Host",
+    "avatar_url": "https://cdn.quiz4win.com/hosts/daniel.jpg",
+    "bio": "Five-time award-winning trivia presenter.",
+    "years_on_air": 7,
+    "shows_hosted": 412,
+    "rating": 4.9,
+    "next_show_title": "Saturday Night Live",
+    "next_show_pool_credits": 50000,
+    "next_show_start_time": "2026-05-30T21:00:00Z"
+  }
+}
+```
+
+### Empty Response — `200 OK`
+
+Returned when no active featured game exists or the matching game has no `host_id` set:
+
+```json
+{ "host": null }
+```
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `404` | `not_found` | Path is not exactly `/public-featured-host` |
+| `500` | `failed_to_fetch_featured_host` | Database query failure |
+| `500` | `internal_server_error` | Unexpected server error |
+
+### Response Field Reference — `host`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | `show_hosts.name` |
+| `title` | string | From the matching game's `host_title`; falls back to `"Show Host"` if unset |
+| `avatar_url` | URL string \| null | `show_hosts.avatar_url`, falls back to the game's inline `host_avatar_url` |
+| `bio` | string \| null | `show_hosts.bio` |
+| `years_on_air` | integer \| null | `show_hosts.years_on_air` |
+| `shows_hosted` | integer | `show_hosts.shows_hosted`; `0` if null |
+| `rating` | number \| null | `show_hosts.avg_rating` (`NUMERIC(3,2)`) |
+| `next_show_title` | string | The featured game's `title` |
+| `next_show_pool_credits` | integer | The featured game's `prize_pool`, rounded |
+| `next_show_start_time` | ISO 8601 string \| null | The featured game's `scheduled_at` |
+
+---
+
 ## What These Endpoints Do NOT Return
 
 - `joined_by_me` — requires a user JWT; available only on the authenticated `GET /games` endpoint
@@ -392,4 +456,7 @@ curl "https://api.quiz4win.com/public-leaderboard?period=weekly"
 
 # All-time top 50, English-language games only
 curl "https://api.quiz4win.com/public-leaderboard?period=all_time&limit=50&language=en"
+
+# Host Spotlight — closest active featured game's host (homepage card)
+curl "https://api.quiz4win.com/public-featured-host"
 ```
