@@ -1,7 +1,7 @@
-# Public Games API — Reference
+# Public API — Reference
 
-**Base URL:** `https://api.quiz4win.com`  
-**Authentication:** None required — no `Authorization` header, no API key.  
+**Base URL:** `https://api.quiz4win.com`
+**Authentication:** None required — no `Authorization` header, no API key.
 **CORS:** Open (`Access-Control-Allow-Origin: *`). Preflight (`OPTIONS`) returns `204 No Content`.
 
 ---
@@ -12,8 +12,10 @@
 |--------|------|-------------|
 | `GET` | `/public-games` | List games (filterable, paginated) |
 | `GET` | `/public-games/:id` | Single game detail |
+| `GET` | `/public-winners` | Aggregate winner stats per completed game run |
 | `OPTIONS` | `/public-games` | CORS preflight |
 | `OPTIONS` | `/public-games/:id` | CORS preflight |
+| `OPTIONS` | `/public-winners` | CORS preflight |
 
 ---
 
@@ -196,11 +198,88 @@ Returns a single game by its UUID.
 
 ---
 
+---
+
+## GET /public-winners
+
+Returns aggregate results per **completed** game run plus rolling totals for the Winners page. Each row in `runs` represents one finished game — NOT one row per player (a single Saturday show may have 10,000+ survivors).
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | `20` | Max runs to return. Min `1`, max `100`. |
+| `game_id` | string | — | Optional. UUID → filters `games.id`. Slug (non-UUID) → filters `games.show_id`. |
+| `language` | string | — | Optional. Accepted: `en`, `ar`, `fa`, `tr`. Filters both `runs` and `totals`. |
+
+### Success Response — `200 OK`
+
+```json
+{
+  "runs": [
+    {
+      "run_id": "550e8400-e29b-41d4-a716-446655440000",
+      "date": "2026-05-24",
+      "game_id": "saturday-mega",
+      "game_title": "Saturday Night Live · Flagship Show",
+      "game_tag": "Weekly",
+      "participants": 84210,
+      "survivors": 12480,
+      "pool_credits": 50000,
+      "share_per_survivor_credits": 4
+    }
+  ],
+  "totals": {
+    "credits_distributed": 1845000,
+    "runs_listed": 312,
+    "survivors_paid_total": 462910,
+    "active_shows": 6,
+    "avg_weekly_pool_credits": 50000
+  }
+}
+```
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `400` | `invalid_language` | `language` is not one of `en`, `ar`, `fa`, `tr` |
+| `404` | `not_found` | Path is not exactly `/public-winners` |
+| `500` | `failed_to_fetch_winners` | Database query failure |
+| `500` | `internal_server_error` | Unexpected server error |
+
+### Response Field Reference — `runs[]`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `run_id` | UUID string | The game's `id` in the database |
+| `date` | date string \| null | `ended_at` date (YYYY-MM-DD); falls back to `scheduled_at` |
+| `game_id` | string | The game's `show_id` slug (falls back to UUID if no slug set) |
+| `game_title` | string | Game title |
+| `game_tag` | string \| null | First tag, or category, or mode — whichever is first non-null |
+| `participants` | integer | Total joined participants (`total_participants`) |
+| `survivors` | integer | Players who finished as survivors (`total_winners`) |
+| `pool_credits` | integer | Prize pool in credits (integer, R-02 compliant) |
+| `share_per_survivor_credits` | integer | `floor(pool_credits / survivors)`; `0` if no survivors |
+
+### Response Field Reference — `totals`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `credits_distributed` | integer | Sum of `prize_pool` across all matching completed runs |
+| `runs_listed` | integer | Total completed runs matching the filter (not capped by `limit`) |
+| `survivors_paid_total` | integer | Sum of `total_winners` across all matching completed runs |
+| `active_shows` | integer | Games currently in `upcoming`, `open`, or `live` status |
+| `avg_weekly_pool_credits` | integer | `credits_distributed / runs_listed`; `0` if no runs |
+
+---
+
 ## What These Endpoints Do NOT Return
 
 - `joined_by_me` — requires a user JWT; available only on the authenticated `GET /games` endpoint
 - Any user profile or PII data
 - Questions, answers, or results — those require authentication via `GET /games/:id/question`
+- Per-player winner rows — `/public-winners` returns only run-level aggregates
 - Admin-only fields (internal flags, audit info)
 
 ---
@@ -222,4 +301,13 @@ curl "https://api.quiz4win.com/public-games?status=upcoming&category=sports&sort
 
 # Single game detail
 curl "https://api.quiz4win.com/public-games/550e8400-e29b-41d4-a716-446655440000"
+
+# Recent 20 completed game runs (winners summary)
+curl "https://api.quiz4win.com/public-winners"
+
+# Last 5 runs for a specific show slug
+curl "https://api.quiz4win.com/public-winners?game_id=saturday-mega&limit=5"
+
+# Arabic-language winners only
+curl "https://api.quiz4win.com/public-winners?language=ar&limit=50"
 ```
