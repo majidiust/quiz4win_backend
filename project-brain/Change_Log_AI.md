@@ -138,3 +138,9 @@ Owner: A-02 (Project Memory Guardian)
 [2026-05-28] [A-01] [BUILD] Email templates: Added earlyBirdWelcomeTemplate(name, platform) and hostApplicationReceivedTemplate(name) to supabase/functions/_shared/email.ts. Both use the existing brand shell (logo, indigo CTA, responsible-play footer). Early-bird email lists launch perks; host-application email outlines the 3-step review flow.
 
 [2026-05-28] [A-01] [BUILD] public-host-applications: Now sends a branded "Thanks for applying" confirmation email to the applicant immediately after a successful submission (best-effort, async — does not block the HTTP response). Uses hostApplicationReceivedTemplate.
+
+[2026-05-28] [A-01] [BUILD] Admin panel - Early Birds: Added full management section for mobile early-access sign-ups.
+- admin/src/app/(app)/early-birds/page.tsx: List view with platform, country, and email-sent status.
+- admin/src/lib/actions/early-birds.ts & resend-button.tsx: Admin action to resend the branded welcome email.
+- admin/src/lib/nav.ts: Added "Early Birds" (Smartphone icon) to the Content section.
+- supabase/functions/admin-early-birds/index.ts: New admin Edge Function for listing, filtering, and resending emails. Guarded by requireAdminRole.
