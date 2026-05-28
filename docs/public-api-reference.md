@@ -64,6 +64,7 @@ Returns a paginated list of games. By default returns only `upcoming`, `open`, a
       "is_featured": true,
       "icon": "https://cdn.example.com/icon.png",
       "thumbnail_url": "https://cdn.example.com/thumb.jpg",
+      "poster_url": "https://cdn.example.com/poster.jpg",
       "accent_color": "#FF6B00",
       "glow_color": "#FF6B0066",
       "gradient_colors": ["#FF6B00", "#FFD700"],
@@ -133,6 +134,7 @@ Returns a single game by its UUID.
     "is_featured": true,
     "icon": "https://cdn.example.com/icon.png",
     "thumbnail_url": "https://cdn.example.com/thumb.jpg",
+    "poster_url": "https://cdn.example.com/poster.jpg",
     "accent_color": "#FF6B00",
     "glow_color": "#FF6B0066",
     "gradient_colors": ["#FF6B00", "#FFD700"],
@@ -181,6 +183,7 @@ Returns a single game by its UUID.
 | `is_featured` | boolean | Whether the game is promoted/featured |
 | `icon` | URL string \| null | Small icon image |
 | `thumbnail_url` | URL string \| null | Larger card thumbnail |
+| `poster_url` | URL string \| null | Large promotional poster image (full-bleed hero) |
 | `accent_color` | hex string \| null | Brand accent color, e.g. `#FF6B00` |
 | `glow_color` | hex string \| null | Glow/shadow color, e.g. `#FF6B0066` |
 | `gradient_colors` | string[] \| null | Ordered array of hex colors for gradient background |

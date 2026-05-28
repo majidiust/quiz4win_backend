@@ -17,7 +17,7 @@
  * POST   /admin/games/:id/duplicate            — Duplicate game (row 123)
  * GET    /admin/games/:id/result               — Final rankings + prize breakdown (row 124)
  * POST   /admin/games/:id/questions            — Assign question set (row 127)
- * POST   /admin/games/:id/asset                — Upload icon/thumbnail/host_avatar to S3
+ * POST   /admin/games/:id/asset                — Upload icon/thumbnail/poster/host_avatar to S3
  *
  * Rule compliance: R-01, R-02, R-03, R-05
  */
@@ -30,7 +30,7 @@ import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 import { uploadObject } from "../_shared/s3.ts";
 
 /** Fields on `games` that store a public asset URL and can be uploaded via /asset. */
-const ASSET_FIELDS = ["icon", "thumbnail_url", "host_avatar_url"] as const;
+const ASSET_FIELDS = ["icon", "thumbnail_url", "poster_url", "host_avatar_url"] as const;
 type AssetField = typeof ASSET_FIELDS[number];
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/svg+xml"];
 const MAX_ASSET_BYTES = 10 * 1024 * 1024; // 10 MB

@@ -139,7 +139,7 @@ export function RemoveParticipantButton({ gameId, userId, name }: { gameId: stri
 /* ------------------------------------------------------------------ */
 /* Asset Upload Button                                                   */
 /* ------------------------------------------------------------------ */
-type AssetField = "icon" | "thumbnail_url" | "host_avatar_url";
+type AssetField = "icon" | "thumbnail_url" | "poster_url" | "host_avatar_url";
 
 export function AssetUploadButton({
   gameId, field, label, currentUrl,

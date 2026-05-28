@@ -143,6 +143,10 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
                   <p className="text-xs text-muted-foreground flex items-center gap-1"><ImageIcon className="size-3" /> Thumbnail</p>
                   <AssetUploadButton gameId={game.id} field="thumbnail_url" label="Thumbnail" currentUrl={game.thumbnail_url} />
                 </div>
+                <div className="flex flex-col items-center gap-1">
+                  <p className="text-xs text-muted-foreground flex items-center gap-1"><ImageIcon className="size-3" /> Poster</p>
+                  <AssetUploadButton gameId={game.id} field="poster_url" label="Poster" currentUrl={game.poster_url} />
+                </div>
               </div>
             </div>
             {/* Host info */}

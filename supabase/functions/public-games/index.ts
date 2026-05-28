@@ -40,7 +40,7 @@ const GAME_FIELDS =
   "participant_count:total_participants, max_participants:max_players, " +
   "start_time:scheduled_at, end_time:ended_at, " +
   "is_featured, " +
-  "icon, thumbnail_url, accent_color, glow_color, gradient_colors, " +
+  "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
   "sponsor, tags, host_name, host_avatar_url, host_title, rules";
 
 const ALLOWED_STATUSES = new Set(["upcoming", "open", "live", "closed", "completed", "cancelled"]);

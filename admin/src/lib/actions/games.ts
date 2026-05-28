@@ -183,7 +183,7 @@ export async function removeParticipant(gameId: string, userId: string): Promise
 /* Asset Upload                                                          */
 /* ------------------------------------------------------------------ */
 
-const ASSET_FIELDS = ["icon", "thumbnail_url", "host_avatar_url"] as const;
+const ASSET_FIELDS = ["icon", "thumbnail_url", "poster_url", "host_avatar_url"] as const;
 type AssetField = typeof ASSET_FIELDS[number];
 
 export async function uploadGameAsset(
