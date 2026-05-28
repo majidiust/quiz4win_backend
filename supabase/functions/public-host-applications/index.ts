@@ -103,18 +103,22 @@ Deno.serve(async (req: Request) => {
   // fail with a unique violation which we translate to a friendly message.
 
   // ── Insert ─────────────────────────────────────────────────────────────────
-  const { data, error } = await supabase
+  // We generate the row id client-side so we don't need RETURNING — anon
+  // has INSERT but no SELECT policy on this table (PII), and PostgREST's
+  // `.select(...).single()` shape would otherwise force a RETURNING clause
+  // that gets denied by RLS.
+  const applicationId = crypto.randomUUID();
+  const { error } = await supabase
     .from("host_applications")
     .insert({
+      id: applicationId,
       name,
       email,
       country: country || null,
       instagram: instagram || null,
       followers,
       ip_address: clientIp,
-    })
-    .select("id")
-    .single();
+    });
 
   if (error) {
     console.error("[public-host-applications] insert error:", error.message);
@@ -140,5 +144,5 @@ Deno.serve(async (req: Request) => {
     }
   })();
 
-  return successResponse({ ok: true, application_id: data.id }, 201);
+  return successResponse({ ok: true, application_id: applicationId }, 201);
 });

@@ -108,18 +108,22 @@ Deno.serve(async (req: Request) => {
   }
 
   // ── Insert ─────────────────────────────────────────────────────────────────
-  const { data, error } = await supabase
+  // We generate the row id client-side so we don't need RETURNING — anon
+  // has INSERT but no SELECT policy on this table (PII), and PostgREST's
+  // `.select(...).single()` shape would otherwise force a RETURNING clause
+  // that gets denied by RLS.
+  const earlyBirdId = crypto.randomUUID();
+  const { error } = await supabase
     .from("early_birds")
     .insert({
+      id: earlyBirdId,
       platform,
       name,
       email,
       ip_address: clientIp,
       country: countryName,
       country_code: countryCode,
-    })
-    .select("id")
-    .single();
+    });
 
   if (error) {
     console.error("[public-early-birds] insert error:", error.message);
@@ -151,5 +155,5 @@ Deno.serve(async (req: Request) => {
     }
   })();
 
-  return successResponse({ ok: true, early_bird_id: data.id }, 201);
+  return successResponse({ ok: true, early_bird_id: earlyBirdId }, 201);
 });

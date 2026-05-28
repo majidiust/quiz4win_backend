@@ -144,3 +144,9 @@ Owner: A-02 (Project Memory Guardian)
 - admin/src/lib/actions/early-birds.ts & resend-button.tsx: Admin action to resend the branded welcome email.
 - admin/src/lib/nav.ts: Added "Early Birds" (Smartphone icon) to the Content section.
 - supabase/functions/admin-early-birds/index.ts: New admin Edge Function for listing, filtering, and resending emails. Guarded by requireAdminRole.
+
+[2026-05-28] [A-01] [FIX] public-host-applications + public-early-birds: RLS rejection on INSERT.
+- Root cause: Edge Functions used .insert(...).select("id").single() which compiles to INSERT ... RETURNING id. PostgreSQL requires the inserted row to pass a SELECT policy for the RETURNING clause; we only granted INSERT to anon, so every submission was rejected with "new row violates row-level security policy for table".
+- Fix:
+  - supabase/migrations/20260528340000_public_inserts_rls_fix.sql: recreates both INSERT policies as TO anon, authenticated and adds explicit GRANT INSERT.
+  - supabase/functions/public-host-applications/index.ts & public-early-birds/index.ts: generate the row UUID client-side via crypto.randomUUID() and drop the .select(...).single() chain - no RETURNING means no SELECT policy needed. The returned application_id / early_bird_id matches the inserted row.
