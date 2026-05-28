@@ -19,6 +19,7 @@
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
 import { getPublicClient } from "../_shared/supabase.ts";
+import { sendEmail, hostApplicationReceivedTemplate } from "../_shared/email.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -122,6 +123,22 @@ Deno.serve(async (req: Request) => {
     }
     return errorResponse("failed_to_submit_application", 500);
   }
+
+  // ── Confirmation email (best-effort) ───────────────────────────────────────
+  // Sent asynchronously so a slow email provider doesn't delay the response.
+  (async () => {
+    try {
+      const tpl = hostApplicationReceivedTemplate({ name });
+      await sendEmail({
+        to: { email, name },
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+      });
+    } catch (e) {
+      console.error("[public-host-applications] confirmation email error:", (e as Error).message);
+    }
+  })();
 
   return successResponse({ ok: true, application_id: data.id }, 201);
 });

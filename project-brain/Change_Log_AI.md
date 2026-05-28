@@ -130,3 +130,11 @@ Owner: A-02 (Project Memory Guardian)
 [2026-05-28] [A-01] [BUILD] host_applications table: Added migration 20260528310000_host_applications.sql. Table with status CHECK (pending|accepted|rejected|info_requested), RLS anon INSERT only, SECURITY DEFINER rate-limit RPC, indexes on ip+created_at, status+created_at, email.
 
 [2026-05-28] [A-01] [BUILD] admin host-applications UI: Added admin/src/app/(app)/host-applications/ pages (list + detail) and admin/src/lib/actions/host-applications.ts server actions (updateApplicationStatus, sendCustomEmailToApplicant). Nav item added under Content section.
+
+[2026-05-28] [A-01] [BUILD] public-early-birds: Added POST /public-early-birds public endpoint (supabase/functions/public-early-birds/index.ts) for mobile app early-access sign-ups (iOS + Android). Body: {platform, name, email}. For iOS, email is the Apple ID identifier from Sign in with Apple. IP-based rate limiting: 5/10min and 10/hr via SECURITY DEFINER RPC check_early_bird_rate_limit(). Unique on (platform, lower(email)). Sends branded welcome email asynchronously (best-effort). R-01: ip_address never returned. R-04: anon client only.
+
+[2026-05-28] [A-01] [BUILD] early_birds table: Added migration 20260528320000_early_birds.sql. Table with platform CHECK (ios|android), unique partial index on (platform, lower(email)), RLS anon INSERT only, SECURITY DEFINER rate-limit RPC, indexes on ip+created_at and platform+created_at.
+
+[2026-05-28] [A-01] [BUILD] Email templates: Added earlyBirdWelcomeTemplate(name, platform) and hostApplicationReceivedTemplate(name) to supabase/functions/_shared/email.ts. Both use the existing brand shell (logo, indigo CTA, responsible-play footer). Early-bird email lists launch perks; host-application email outlines the 3-step review flow.
+
+[2026-05-28] [A-01] [BUILD] public-host-applications: Now sends a branded "Thanks for applying" confirmation email to the applicant immediately after a successful submission (best-effort, async — does not block the HTTP response). Uses hostApplicationReceivedTemplate.

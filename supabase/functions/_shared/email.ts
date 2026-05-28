@@ -193,6 +193,78 @@ ${codeBlock}
   return { subject, html, text };
 }
 
+/** Sent to mobile early-access sign-ups (iOS + Android). */
+export function earlyBirdWelcomeTemplate(opts: {
+  name: string;
+  platform: "ios" | "android";
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = (opts.appUrl ?? Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "");
+  const platformLabel = opts.platform === "ios" ? "iOS" : "Android";
+  const subject = `You're in, ${opts.name} — Quiz4Win early access on ${platformLabel} 🎉`;
+  const perksBlock = `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0 8px">
+<tr><td bgcolor="#F4F5FB" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:20px 22px">
+  <p style="margin:0 0 12px;font-size:13px;color:${BRAND.textMuted};text-transform:uppercase;letter-spacing:.08em;font-weight:700">What early access gets you</p>
+  <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+    <tr><td style="padding:6px 0;font-size:14px;color:${BRAND.textDark}"><span style="display:inline-block;width:22px;color:${BRAND.primary};font-weight:800">★</span>First access when the ${platformLabel} app launches</td></tr>
+    <tr><td style="padding:6px 0;font-size:14px;color:${BRAND.textDark}"><span style="display:inline-block;width:22px;color:${BRAND.primary};font-weight:800">★</span>Exclusive launch-day bonus credits</td></tr>
+    <tr><td style="padding:6px 0;font-size:14px;color:${BRAND.textDark}"><span style="display:inline-block;width:22px;color:${BRAND.primary};font-weight:800">★</span>Behind-the-scenes updates from the team</td></tr>
+    <tr><td style="padding:6px 0;font-size:14px;color:${BRAND.textDark}"><span style="display:inline-block;width:22px;color:${BRAND.primary};font-weight:800">★</span>Invite-only early shows with bigger prize pools</td></tr>
+  </table>
+</td></tr></table>`;
+  const { html, text } = renderBrandEmail({
+    preheader: `You're on the Quiz4Win ${platformLabel} early-access list, ${opts.name}.`,
+    heroTitle: `You're on the list, ${escapeHtml(opts.name)}! 🚀`,
+    heroSubtitle: `You'll be first in line when Quiz4Win launches on ${platformLabel}.`,
+    bodyHtml: `<p style="margin:0 0 12px">Thanks for signing up for early access. The Quiz4Win ${platformLabel} app is almost here — and as an early bird, you get the best seat in the house.</p>
+${perksBlock}
+<p style="margin:16px 0 0;color:${BRAND.textMuted}">In the meantime, you can play right now in your browser. See you on the leaderboard.</p>`,
+    cta: { label: "Play in browser →", url: `${app}/play` },
+    ctaNote: "We'll email you the moment the mobile app drops.",
+    text: `You're on the Quiz4Win ${platformLabel} early-access list. We'll email you the moment the app launches.\n\nEarly access perks:\n• First access when the ${platformLabel} app launches\n• Exclusive launch-day bonus credits\n• Behind-the-scenes updates\n• Invite-only early shows with bigger prize pools\n\nIn the meantime, play in your browser: ${app}/play`,
+  });
+  return { subject, html, text };
+}
+
+/** Sent to a host applicant immediately after they submit the public form. */
+export function hostApplicationReceivedTemplate(opts: {
+  name: string;
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = (opts.appUrl ?? Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "");
+  const subject = `Thanks for applying to host on Quiz4Win, ${opts.name} 🎤`;
+  const stepsBlock = `<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:18px 0 8px">
+<tr><td bgcolor="#F4F5FB" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:22px 24px">
+  <p style="margin:0 0 14px;font-size:13px;color:${BRAND.textMuted};text-transform:uppercase;letter-spacing:.08em;font-weight:700">What happens next</p>
+  <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+    <tr>
+      <td valign="top" width="34" style="padding:0 0 12px"><div style="width:26px;height:26px;line-height:26px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:13px;font-weight:800">1</div></td>
+      <td valign="top" style="padding:2px 0 12px;font-size:14px;color:${BRAND.textDark}"><strong style="color:${BRAND.textDark}">Review</strong><br><span style="color:${BRAND.textMuted}">Our team reviews your application within 5 business days.</span></td>
+    </tr>
+    <tr>
+      <td valign="top" width="34" style="padding:0 0 12px"><div style="width:26px;height:26px;line-height:26px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:13px;font-weight:800">2</div></td>
+      <td valign="top" style="padding:2px 0 12px;font-size:14px;color:${BRAND.textDark}"><strong style="color:${BRAND.textDark}">Screen test</strong><br><span style="color:${BRAND.textMuted}">If you're a fit, we'll invite you to a short video call.</span></td>
+    </tr>
+    <tr>
+      <td valign="top" width="34" style="padding:0"><div style="width:26px;height:26px;line-height:26px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:13px;font-weight:800">3</div></td>
+      <td valign="top" style="padding:2px 0 0;font-size:14px;color:${BRAND.textDark}"><strong style="color:${BRAND.textDark}">Go live</strong><br><span style="color:${BRAND.textMuted}">Onboarding, scheduling, and your first Quiz4Win show.</span></td>
+    </tr>
+  </table>
+</td></tr></table>`;
+  const { html, text } = renderBrandEmail({
+    preheader: `We've received your host application, ${opts.name}. We'll be in touch within 5 business days.`,
+    heroTitle: `Thanks for applying, ${escapeHtml(opts.name)}! 🎤`,
+    heroSubtitle: "Your host application is in — here's what happens next.",
+    bodyHtml: `<p style="margin:0 0 12px">We're thrilled you want to host on Quiz4Win. Live trivia is what we do best, and great hosts are at the heart of every show.</p>
+${stepsBlock}
+<p style="margin:16px 0 0;color:${BRAND.textMuted}">If we need anything else, we'll reach out to this email directly. Please don't reply to this message.</p>`,
+    cta: { label: "Watch a live show →", url: `${app}/live`, bg: BRAND.primary },
+    ctaNote: "See what hosting on Quiz4Win looks like.",
+    text: `Thanks for applying to host on Quiz4Win, ${opts.name}.\n\nWhat happens next:\n1. Review — our team reviews your application within 5 business days.\n2. Screen test — if you're a fit, we'll invite you to a short video call.\n3. Go live — onboarding, scheduling, and your first Quiz4Win show.\n\nIf we need anything else, we'll reach out to this email directly.\n\nWatch a live show: ${app}/live`,
+  });
+  return { subject, html, text };
+}
+
 /** Sent when a player wins a prize and it is credited to their wallet. */
 export function winTemplate(opts: {
   name: string;
