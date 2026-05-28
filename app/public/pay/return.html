@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Quiz4Win — Payment Verification</title>
+  <style>
+    :root {
+      --primary: #5B6BF5;
+      --primary-dark: #4452E8;
+      --success: #22C55E;
+      --error: #EF4444;
+      --dark: #0F172A;
+      --darker: #0B1124;
+      --text-muted: #475569;
+      --bg: #F4F5FB;
+      --surface: #FFFFFF;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; font-family: -apple-system, sans-serif; background: var(--bg); color: var(--dark); min-height: 100vh; display: flex; flex-direction: column; }
+    header { background: var(--darker); padding: 20px; text-align: center; }
+    header img { height: 28px; }
+    main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { background: var(--surface); max-width: 440px; width: 100%; padding: 40px 32px; border-radius: 16px; box-shadow: 0 10px 40px rgba(15, 23, 42, 0.08); text-align: center; }
+    .icon { font-size: 64px; margin-bottom: 24px; display: block; }
+    .success { color: var(--success); }
+    .error { color: var(--error); }
+    .pending { color: var(--primary); }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    p { color: var(--text-muted); line-height: 1.5; margin-bottom: 32px; }
+    .btn { display: inline-block; width: 100%; padding: 14px; border-radius: 10px; font-weight: 600; text-decoration: none; font-size: 16px; transition: background 0.2s; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .spinner { border: 4px solid rgba(0,0,0,.1); width: 40px; height: 40px; border-radius: 50%; border-left-color: var(--primary); animate: spin 1s linear infinite; margin: 0 auto 24px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header><img src="/q4w_text_logo.png" alt="Quiz4Win" /></header>
+  <main>
+    <div id="app" class="card">
+      <div class="spinner"></div>
+      <h1>Verifying Payment...</h1>
+      <p>Please wait while we confirm your transaction with the provider.</p>
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = "https://api.quiz4win.com";
+    const APP_DEEP_LINK = "quiz4win://payment/return";
+    
+    async function verify() {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get("id");
+      const appEl = document.getElementById("app");
+
+      if (!id) {
+        showError("Invalid payment ID.");
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/payments/${id}/verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        const data = await res.json();
+        
+        if (data.status === "succeeded") {
+          showSuccess("Payment Successful", "Your wallet has been credited. You can now return to the app and join games.");
+        } else if (data.status === "pending") {
+          showPending("Still Processing", "The gateway hasn't confirmed your payment yet. It might take a few minutes.");
+        } else {
+          showError("Payment Failed", data.error || `Status: ${data.status || 'unknown'}`);
+        }
+      } catch (err) {
+        showError("Network Error", "We couldn't connect to our servers to verify your payment. Please try again.");
+      }
+    }
+
+    function showSuccess(title, msg) {
+      render('✅', 'success', title, msg, 'succeeded');
+    }
+    function showError(title, msg) {
+      render('❌', 'error', title, msg, 'failed');
+    }
+    function showPending(title, msg) {
+      render('⏳', 'pending', title, msg, 'pending');
+    }
+
+    function render(icon, colorClass, title, msg, status) {
+      const id = new URLSearchParams(window.location.search).get("id");
+      const deepLink = `${APP_DEEP_LINK}?id=${id}&status=${status}`;
+      
+      document.getElementById("app").innerHTML = `
+        <span class="icon ${colorClass}">${icon}</span>
+        <h1 class="${colorClass}">${title}</h1>
+        <p>${msg}</p>
+        <a href="${deepLink}" class="btn btn-primary">Return to App</a>
+      `;
+      
+      // Auto-redirect to app after 3 seconds on success
+      if (status === 'succeeded') {
+        setTimeout(() => { window.location.href = deepLink; }, 3000);
+      }
+    }
+
+    verify();
+  </script>
+</body>
+</html>
