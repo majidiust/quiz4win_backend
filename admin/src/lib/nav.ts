@@ -20,6 +20,7 @@ import {
   Video,
   LineChart,
   KeyRound,
+  Star,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -56,6 +57,7 @@ export const navSections: NavSection[] = [
     items: [
       { title: "Games", href: "/games", icon: Gamepad2, roles: ["super_admin", "admin", "moderator"] },
       { title: "Live Shows", href: "/shows", icon: Radio, roles: ["super_admin", "admin", "moderator"] },
+      { title: "Host Applications", href: "/host-applications", icon: Star, roles: ["super_admin", "admin", "moderator"] },
       { title: "LiveKit Rooms", href: "/livekit", icon: Video, roles: ["super_admin", "admin"] },
       { title: "Questions", href: "/questions", icon: BookOpen, roles: ["super_admin", "admin", "moderator"] },
     ],

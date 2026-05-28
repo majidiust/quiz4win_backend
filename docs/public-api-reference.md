@@ -459,4 +459,64 @@ curl "https://api.quiz4win.com/public-leaderboard?period=all_time&limit=50&langu
 
 # Host Spotlight — closest active featured game's host (homepage card)
 curl "https://api.quiz4win.com/public-featured-host"
+
+# Submit a host application
+curl -X POST "https://api.quiz4win.com/public-host-applications" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Sarah Chen","email":"sarah@example.com","country":"Canada","instagram":"@sarahplays","followers":48000}'
 ```
+
+---
+
+## `POST /public-host-applications`
+
+Submit a host application from the public website. No authentication required.
+
+### Request body (JSON)
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | `string` | ✅ | 2–120 characters |
+| `email` | `string` | ✅ | Valid email, 5–254 characters |
+| `country` | `string` | — | Up to 80 characters |
+| `instagram` | `string` | — | Handle with or without `@`, up to 80 characters |
+| `followers` | `integer` | — | Non-negative integer |
+
+### Success response `201 Created`
+
+```json
+{
+  "ok": true,
+  "application_id": "b7e4c2a1-9f3d-4d8e-a5b0-1234567890ab"
+}
+```
+
+### Error responses
+
+| Status | `error` | Meaning |
+|--------|---------|---------|
+| `400` | `invalid_json` | Body is not valid JSON |
+| `400` | `name_invalid` | Name missing or out of range |
+| `400` | `email_invalid` | Email missing, malformed, or too long |
+| `404` | `not_found` | Wrong HTTP method or path |
+| `409` | `application_already_pending` | Email already has a pending application |
+| `429` | `rate_limited` | Too many requests from this IP (see limits below) |
+| `500` | `failed_to_submit_application` | Unexpected server error |
+
+### Rate limits
+
+To protect against abuse:
+
+- **3 submissions per IP per 10 minutes**
+- **5 submissions per IP per hour**
+
+On `429`, the response includes a `Retry-After: 600` header (10 minutes).
+
+### Admin management
+
+Submitted applications are visible in the Quiz4Win Admin Panel under **Content → Host Applications**. Admins can:
+
+- **Accept** — approve the applicant and add internal notes.
+- **Reject** — dismiss with an optional reason note.
+- **Request more info** — flag the application for follow-up.
+- **Send custom email** — compose and send an email directly to the applicant's provided address.
