@@ -465,15 +465,15 @@ curl -X POST "https://api.quiz4win.com/public-host-applications" \
   -H "Content-Type: application/json" \
   -d '{"name":"Sarah Chen","email":"sarah@example.com","country":"Canada","instagram":"@sarahplays","followers":48000}'
 
-# Mobile early-access sign-up (Android)
+# Mobile early-access sign-up (Android, with country)
 curl -X POST "https://api.quiz4win.com/public-early-birds" \
   -H "Content-Type: application/json" \
-  -d '{"platform":"android","name":"Alex Rivera","email":"alex@example.com"}'
+  -d '{"platform":"android","name":"Alex Rivera","email":"alex@example.com","country_name":"Canada","country_code":"CA"}'
 
 # Mobile early-access sign-up (iOS — email is the Apple ID identifier)
 curl -X POST "https://api.quiz4win.com/public-early-birds" \
   -H "Content-Type: application/json" \
-  -d '{"platform":"ios","name":"Mia Tanaka","email":"mia@privaterelay.appleid.com"}'
+  -d '{"platform":"ios","name":"Mia Tanaka","email":"mia@privaterelay.appleid.com","country_name":"Japan","country_code":"JP"}'
 ```
 
 ---
@@ -548,6 +548,8 @@ Mobile app early-access sign-up — collects the user's name and email (or Apple
 | `platform` | `"ios" \| "android"` | ✅ | Must be exactly one of these literal strings. |
 | `name` | `string` | ✅ | 1–120 characters. |
 | `email` | `string` | ✅ | For Android: regular email address. For iOS: the user's Apple ID identifier (email-format, possibly `@privaterelay.appleid.com`) as returned by Sign in with Apple. 5–254 characters. |
+| `country_name` | `string` | — | Full country name, e.g. `"Canada"`. Up to 100 characters. |
+| `country_code` | `string` | — | ISO 3166-1 alpha-2 country code, e.g. `"CA"`. Exactly 2 characters. Stored uppercase. |
 
 ### Success response `201 Created`
 
@@ -566,6 +568,8 @@ Mobile app early-access sign-up — collects the user's name and email (or Apple
 | `400` | `platform_invalid` | `platform` missing or not `"ios" \| "android"` |
 | `400` | `name_invalid` | Name missing or > 120 chars |
 | `400` | `email_invalid` | Email/Apple-ID missing, malformed, or > 254 chars |
+| `400` | `country_name_invalid` | `country_name` provided but exceeds 100 characters |
+| `400` | `country_code_invalid` | `country_code` provided but is not exactly 2 characters |
 | `404` | `not_found` | Wrong HTTP method or path |
 | `409` | `already_signed_up` | This `(platform, email)` is already on the early-access list |
 | `429` | `rate_limited` | Too many requests from this IP (see limits below) |

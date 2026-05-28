@@ -6,11 +6,13 @@
  *   No authentication required.
  *
  *   Body:
- *     platform: "ios" | "android"   (required)
- *     name:     string              (required, 1–120 chars)
- *     email:    string              (required) — for iOS this is the user's
- *                                      Apple ID (email-format identifier)
- *                                      shared via Sign in with Apple.
+ *     platform:     "ios" | "android"   (required)
+ *     name:         string              (required, 1–120 chars)
+ *     email:        string              (required) — for iOS this is the user's
+ *                                          Apple ID (email-format identifier)
+ *                                          shared via Sign in with Apple.
+ *     country_name: string              (optional, ≤ 100 chars) full country name
+ *     country_code: string              (optional, exactly 2 chars) ISO 3166-1 alpha-2
  *
  * Behaviour:
  *   1. Validate + rate-limit per IP (5/10min, 10/hr) via SECURITY DEFINER RPC.
@@ -43,6 +45,8 @@ interface EarlyBirdBody {
   platform?: unknown;
   name?: unknown;
   email?: unknown;
+  country_name?: unknown;
+  country_code?: unknown;
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────
@@ -68,6 +72,8 @@ Deno.serve(async (req: Request) => {
   const platform = typeof body.platform === "string" ? body.platform.trim().toLowerCase() : "";
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const countryName = typeof body.country_name === "string" ? body.country_name.trim() : null;
+  const countryCode = typeof body.country_code === "string" ? body.country_code.trim().toUpperCase() : null;
 
   if (!PLATFORMS.has(platform)) {
     return errorResponse("platform_invalid", 400);
@@ -77,6 +83,12 @@ Deno.serve(async (req: Request) => {
   }
   if (!email || !EMAIL_RE.test(email) || email.length > 254) {
     return errorResponse("email_invalid", 400);
+  }
+  if (countryName !== null && countryName.length > 100) {
+    return errorResponse("country_name_invalid", 400);
+  }
+  if (countryCode !== null && countryCode.length !== 2) {
+    return errorResponse("country_code_invalid", 400);
   }
 
   // ── Rate limiting ──────────────────────────────────────────────────────────
@@ -103,6 +115,8 @@ Deno.serve(async (req: Request) => {
       name,
       email,
       ip_address: clientIp,
+      country: countryName,
+      country_code: countryCode,
     })
     .select("id")
     .single();
