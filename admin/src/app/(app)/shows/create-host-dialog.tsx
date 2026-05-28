@@ -12,6 +12,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { FileUploadInput } from "@/components/file-upload-input";
 import { createHost } from "@/lib/actions/shows";
 
 export function CreateHostDialog() {
@@ -57,8 +58,8 @@ export function CreateHostDialog() {
             <Textarea id="host-bio" value={bio} onChange={(e) => setBio(e.target.value)} rows={3} maxLength={500} placeholder="Short biography…" />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="host-avatar">Avatar URL</Label>
-            <Input id="host-avatar" type="url" value={avatarUrl} onChange={(e) => setAvatarUrl(e.target.value)} placeholder="https://…" />
+            <Label>Avatar</Label>
+            <FileUploadInput kind="host-avatar" value={avatarUrl} onChange={setAvatarUrl} label="Avatar" />
           </div>
         </div>
         <DialogFooter>
