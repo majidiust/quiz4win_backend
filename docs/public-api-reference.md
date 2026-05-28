@@ -13,9 +13,11 @@
 | `GET` | `/public-games` | List games (filterable, paginated) |
 | `GET` | `/public-games/:id` | Single game detail |
 | `GET` | `/public-winners` | Aggregate winner stats per completed game run |
+| `GET` | `/public-leaderboard` | Ranked players by survivor finishes + credits over a window |
 | `OPTIONS` | `/public-games` | CORS preflight |
 | `OPTIONS` | `/public-games/:id` | CORS preflight |
 | `OPTIONS` | `/public-winners` | CORS preflight |
+| `OPTIONS` | `/public-leaderboard` | CORS preflight |
 
 ---
 
@@ -274,10 +276,84 @@ Returns aggregate results per **completed** game run plus rolling totals for the
 
 ---
 
+## GET /public-leaderboard
+
+Ranks players by how many games they finished as a survivor and total credits earned over a window. **This is the only public endpoint that exposes individual players.** Names are rendered server-side as `"<First> <Initial>."` (e.g. `"Aram K."`); no emails, wallet balances, or other PII are returned.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | **required** | `weekly` (rolling 7 days) or `all_time` |
+| `limit` | integer | `20` | Max players to return. Min `1`, max `100`. |
+| `language` | string | — | Optional. Accepted: `en`, `ar`, `fa`, `tr`. Filters by `games.language`. |
+
+### Success Response — `200 OK`
+
+```json
+{
+  "period": "weekly",
+  "window": {
+    "from": "2026-05-21T00:00:00.000Z",
+    "to":   "2026-05-28T00:00:00.000Z"
+  },
+  "players": [
+    {
+      "rank": 1,
+      "player_name": "Aram K.",
+      "avatar_url": null,
+      "games_won": 6,
+      "games_played": 11,
+      "total_credits": 4280,
+      "favourite_show": "Saturday Night Live"
+    }
+  ],
+  "totals": {
+    "players_listed": 20,
+    "credits_distributed_in_window": 92800
+  }
+}
+```
+
+For `period=all_time`, `window.from` is `null` and `window.to` is the current server time.
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `400` | `invalid_period` | `period` missing or not `weekly` / `all_time` |
+| `400` | `invalid_language` | `language` is not one of `en`, `ar`, `fa`, `tr` |
+| `404` | `not_found` | Path is not exactly `/public-leaderboard` |
+| `500` | `failed_to_fetch_leaderboard` | Database query failure |
+| `500` | `internal_server_error` | Unexpected server error |
+
+### Response Field Reference — `players[]`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `rank` | integer | Cross-game ranking within this response. Ordered by `games_won DESC`, then `total_credits DESC`. |
+| `player_name` | string | Display-safe `"<First> <Initial>."` rendered from `profiles.full_name`. Never the full name. Falls back to `"Player"` if no name on file. |
+| `avatar_url` | URL string \| null | `profiles.avatar_url` if set |
+| `games_won` | integer | Games in the window where the player ended as a survivor (`status=completed AND eliminated=false`) |
+| `games_played` | integer | Total games the player completed in the window (`role='player'` participations with `completed_at` set) |
+| `total_credits` | integer | Sum of `prize_earned` across the window, rounded to nearest integer |
+| `favourite_show` | string \| null | Most-played show title within the window. Ties broken alphabetically. |
+
+### Response Field Reference — `totals`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `players_listed` | integer | Number of players in the `players` array (≤ `limit`) |
+| `credits_distributed_in_window` | integer | Sum of `prize_earned` across **all** matching participants in the window (NOT capped by `limit`) |
+
+---
+
 ## What These Endpoints Do NOT Return
 
 - `joined_by_me` — requires a user JWT; available only on the authenticated `GET /games` endpoint
-- Any user profile or PII data
+- Email, wallet balance, KYC status, or any other PII
+- Full player names — `/public-leaderboard` only returns `"<First> <Initial>."`
+- Player UUIDs / user IDs
 - Questions, answers, or results — those require authentication via `GET /games/:id/question`
 - Per-player winner rows — `/public-winners` returns only run-level aggregates
 - Admin-only fields (internal flags, audit info)
@@ -310,4 +386,10 @@ curl "https://api.quiz4win.com/public-winners?game_id=saturday-mega&limit=5"
 
 # Arabic-language winners only
 curl "https://api.quiz4win.com/public-winners?language=ar&limit=50"
+
+# Weekly leaderboard, top 20 players (default)
+curl "https://api.quiz4win.com/public-leaderboard?period=weekly"
+
+# All-time top 50, English-language games only
+curl "https://api.quiz4win.com/public-leaderboard?period=all_time&limit=50&language=en"
 ```
