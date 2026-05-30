@@ -166,6 +166,15 @@ Owner: A-02 (Project Memory Guardian)
 - docs/payments-api-reference.md: Endpoints, request/response schemas, error codes, env vars, redirect flow.
 - Env vars required: REMITATION_ACCESS_KEY, REMITATION_SECRET_KEY, REMITATION_BASE_URL (optional, defaults to https://api.merchant.remitation.com/api/plugin/payment-gateway), APP_URL (used to build the redirect URL).
 
+[2026-05-30] [A-01] [BUILD] Firebase Cloud Messaging push notifications — per-user and broadcast fan-out
+- admin/src/lib/fcm.ts: new server-only helper. RS256 JWT signing via Web Crypto API, OAuth2 access-token cache, sendFcmToTokens() with bounded concurrency (20 parallel), invalid-token pruning. isFcmConfigured() guard. R-01: private key never logged.
+- admin/src/lib/actions/users.ts sendNotification: fetches push_tokens for the target user, calls sendFcmToTokens, prunes invalid tokens from push_tokens table, inserts in-app inbox row (notifications, type=system, read=false, sent_via_push flag). Returns human-friendly message with delivered/failed counts.
+- admin/src/lib/actions/broadcasts.ts sendBroadcast: resolved target user IDs once; inserts inbox rows in 500-row batches into notifications (fixing previous admin_notifications schema mismatch); fetches all push tokens for segment, FCM fan-out via sendFcmToTokens; updates notification_broadcasts.delivered_count / failed_count; prunes invalid tokens.
+- docker-compose.yml: added FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY to admin container environment block.
+- .env.docker.example: documented Firebase env vars with instructions for extracting from service-account JSON.
+- admin/package.json: added server-only package (^0.0.1).
+- .gitignore: already blocks configs/*.json (service-account JSON).
+
 [2026-05-30] [A-01] [BUILD] Payments API v1 — Crypto extension & webhook
 - supabase/migrations/20260528360000_payments_crypto.sql: Adds pay_address, pay_amount, pay_currency, qr_url, expires_at columns to payments table for crypto-specific gateway data.
 - supabase/functions/payments/index.ts: Refactored — separate MasterCard and Crypto gateway helpers, added initiateCrypto (POST crypto-payment-gateway with REMITATION_CRYPTO_ACCESS_KEY / REMITATION_CRYPTO_SECRET_KEY), webhook handler (POST /payments/webhook/:method), enriched verify response with crypto fields (address/QR for pending display). applyOutcome shared by verify and webhook.
