@@ -19,6 +19,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { createTemplate } from "@/lib/actions/templates";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { AvatarPicker } from "./[id]/edit/avatar-picker";
+import { VoicePicker } from "./[id]/edit/voice-picker";
 
 const LANG_OPTIONS = [
   { value: "en", label: "English" },
@@ -137,7 +139,7 @@ export function CreateTemplateDialog() {
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="size-3.5" /> Create template</Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create game template</DialogTitle>
           <DialogDescription>
@@ -292,14 +294,16 @@ export function CreateTemplateDialog() {
                 </div>
                 <Switch id="ct-ai" checked={aiEnabled} onCheckedChange={setAiEnabled} />
               </div>
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="ct-ai-avatar">Avatar ID</Label>
-                <Input id="ct-ai-avatar" value={aiAvatarId} onChange={(e) => setAiAvatarId(e.target.value)} disabled={!aiEnabled} placeholder="LiveAvatar avatar UUID" className="font-mono" />
-              </div>
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="ct-ai-voice">Voice ID</Label>
-                <Input id="ct-ai-voice" value={aiSoundId} onChange={(e) => setAiSoundId(e.target.value)} disabled={!aiEnabled} placeholder="LiveAvatar voice UUID" className="font-mono" />
-              </div>
+              {aiEnabled && (
+                <>
+                  <div className="col-span-2">
+                    <AvatarPicker value={aiAvatarId} onChange={setAiAvatarId} disabled={pending} />
+                  </div>
+                  <div className="col-span-2">
+                    <VoicePicker value={aiSoundId} onChange={setAiSoundId} disabled={pending} />
+                  </div>
+                </>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="ct-ai-dur">Show duration (s)</Label>
                 <Input id="ct-ai-dur" type="number" min="60" max="1800" value={aiDuration} onChange={(e) => setAiDuration(e.target.value)} disabled={!aiEnabled} />
