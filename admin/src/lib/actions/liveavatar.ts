@@ -1,34 +1,59 @@
 "use server";
 
 import { requireAdmin } from "@/lib/auth";
+import { readSessionCookie } from "@/lib/admin-auth";
 
-const PROVIDER_URL = process.env.LIVEAVATAR_API_URL ?? "";
-const PROVIDER_KEY = process.env.LIVEAVATAR_API_KEY ?? "";
+/**
+ * LiveAvatar catalog fetchers — proxied through the backend Edge Function
+ * (admin-liveavatar) at ${API_URL}/admin/liveavatar/*. The provider's API
+ * credentials live only on the api container; the admin panel forwards its
+ * admin_sessions cookie token via the X-Admin-Session-Token header so the
+ * backend can re-validate the caller as an active admin.
+ *
+ * Rule compliance:
+ *  - R-01: provider key never leaves the api container, never logged here.
+ *  - R-03/R-04: requireAdmin() gates the action; backend re-validates the
+ *    session token before contacting the provider.
+ */
 
-function configured() {
-  return !!(PROVIDER_URL && PROVIDER_KEY);
-}
+const API_URL =
+  process.env.API_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  "https://api.quiz4win.com";
 
-async function callProvider<T = unknown>(
+async function callBackend<T = unknown>(
   path: string,
   query?: Record<string, string>,
 ): Promise<{ ok: boolean; data?: T; notConfigured?: boolean; error?: string }> {
-  if (!configured()) return { ok: false, notConfigured: true };
+  const sessionToken = await readSessionCookie();
+  if (!sessionToken) return { ok: false, error: "Unauthorized" };
+
   const qs = query && Object.keys(query).length > 0 ? `?${new URLSearchParams(query)}` : "";
-  const url = `${PROVIDER_URL.replace(/\/$/, "")}${path}${qs}`;
+  const url = `${API_URL.replace(/\/$/, "")}${path}${qs}`;
   try {
     const res = await fetch(url, {
       headers: {
         Accept: "application/json",
-        "X-Api-Key": PROVIDER_KEY,
-        Authorization: `Bearer ${PROVIDER_KEY}`,
+        "X-Admin-Session-Token": sessionToken,
       },
       // Cache avatar/voice lists for 5 minutes server-side
       next: { revalidate: 300 },
     });
-    if (!res.ok) return { ok: false, error: `Provider error ${res.status}` };
-    const data = (await res.json()) as T;
-    return { ok: true, data };
+    const body = await res.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(body); } catch { parsed = body; }
+
+    if (res.status === 503) {
+      // Provider not configured on the backend
+      return { ok: false, notConfigured: true };
+    }
+    if (!res.ok) {
+      const msg = (parsed && typeof parsed === "object" && "error" in parsed)
+        ? String((parsed as { error: unknown }).error)
+        : `Backend error ${res.status}`;
+      return { ok: false, error: msg };
+    }
+    return { ok: true, data: parsed as T };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Network error" };
   }
@@ -68,12 +93,15 @@ export async function fetchAvatars(): Promise<{
   error?: string;
 }> {
   await requireAdmin(["super_admin", "admin"]);
-  if (!configured()) return { ok: false, notConfigured: true };
 
   const [privateRes, publicRes] = await Promise.all([
-    callProvider<Record<string, unknown>>("/avatars"),
-    callProvider<Record<string, unknown>>("/avatars/public"),
+    callBackend<Record<string, unknown>>("/admin/liveavatar/avatars"),
+    callBackend<Record<string, unknown>>("/admin/liveavatar/avatars/public"),
   ]);
+
+  if (privateRes.notConfigured || publicRes.notConfigured) {
+    return { ok: false, notConfigured: true };
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const toArr = (res: typeof privateRes): LiveAvatar[] => (res.data as any)?.data?.avatars ?? [];
@@ -89,6 +117,9 @@ export async function fetchAvatars(): Promise<{
     }
   }
 
+  if (!privateRes.ok && !publicRes.ok && merged.length === 0) {
+    return { ok: false, error: privateRes.error ?? publicRes.error ?? "Failed to load avatars" };
+  }
   return { ok: true, avatars: merged };
 }
 
@@ -107,14 +138,13 @@ export async function fetchVoices(params?: {
   error?: string;
 }> {
   await requireAdmin(["super_admin", "admin"]);
-  if (!configured()) return { ok: false, notConfigured: true };
 
   const query: Record<string, string> = {};
   if (params?.voice_type) query.voice_type = params.voice_type;
   if (params?.page != null) query.page = String(params.page);
   if (params?.page_size != null) query.page_size = String(params.page_size);
 
-  const res = await callProvider<Record<string, unknown>>("/voices", query);
+  const res = await callBackend<Record<string, unknown>>("/admin/liveavatar/voices", query);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const voices: LiveAvatarVoice[] = (res.data as any)?.data?.voices ?? [];
   return { ok: res.ok, voices, notConfigured: res.notConfigured, error: res.error };
@@ -130,10 +160,9 @@ export async function fetchVoicePreview(voiceId: string): Promise<{
   error?: string;
 }> {
   await requireAdmin(["super_admin", "admin"]);
-  if (!configured()) return { ok: false, error: "Provider not configured" };
 
-  const res = await callProvider<Record<string, unknown>>(
-    `/voices/${encodeURIComponent(voiceId)}/preview`,
+  const res = await callBackend<Record<string, unknown>>(
+    `/admin/liveavatar/voices/${encodeURIComponent(voiceId)}/preview`,
   );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const audio: string | undefined = (res.data as any)?.data?.audio_base64;

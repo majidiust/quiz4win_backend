@@ -248,3 +248,12 @@ Owner: A-02 (Project Memory Guardian)
   • admin/playwright.config.ts — Playwright config (auth setup project + chromium runner)
   • admin/e2e/auth.setup.ts — login helper saving session to .auth/admin.json
   • admin/e2e/templates.spec.ts — 7-step smoke test: list/create/detail/edit/  • admin/e2e/templates.spec.ts — 7-step smoke test: list/create/detail/edit/  • admin/e2e/templates.spec.ts — 7-step smoke test: list/createtalled)
+
+[2026-05-30] [A-01] [BUILD] LiveAvatar catalog proxied through backend; provider key removed from admin
+  • supabase/functions/_shared/auth.ts — added validateAdminSessionToken() that re-hashes the panel's q4w_admin_session cookie token against admin_sessions.session_token_hash and resolves to an active admin_users row.
+  • supabase/functions/admin-liveavatar/index.ts — accepts X-Admin-Session-Token (preferred) with Authorization: Bearer JWT as fallback; same allowed roles (super_admin/admin/moderator).
+  • admin/src/lib/actions/liveavatar.ts — server actions no longer call api.liveavatar.com directly; they fetch ${API_URL}/admin/liveavatar/avatars(+/public), /voices, /voices/:id/preview and forward the admin session cookie token via X-Admin-Session-Token.
+  • docker-compose.yml — dropped LIVEAVATAR_API_URL/KEY from admin service (now only the api container needs them); added API_URL with internal default http://api:8000.
+  • .env.docker.example — documented API_URL near the top.
+  • Rule compliance: R-01 (provider key never leaves api container), R-03/R-04 (backend re-validates admin session before contacting provider).
+

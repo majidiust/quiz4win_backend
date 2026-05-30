@@ -117,6 +117,76 @@ export async function requireAdminRole(
 }
 
 /* =========================================================================== *
+ *  Admin-session token path — used by the trusted Next.js admin panel.
+ *
+ *  The panel issues its own session tokens (random base64url) and stores a
+ *  SHA-256 hex digest in admin_sessions.session_token_hash. When the panel's
+ *  server actions need to call the API (e.g. admin-liveavatar to fetch the
+ *  provider's avatar/voice catalog), they forward the raw token in the
+ *  X-Admin-Session-Token header. This avoids needing a Supabase user JWT —
+ *  the admin panel does not log admins in via Supabase Auth.
+ * =========================================================================== */
+
+/** Hex SHA-256 of `input` using Web Crypto. */
+async function sha256HexInternal(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Validate an X-Admin-Session-Token header against the admin_sessions table.
+ * Mirrors the logic in admin/src/lib/admin-auth/session-validator.ts.
+ *
+ * Returns the matching admin_users row or an error string.
+ */
+export async function validateAdminSessionToken(
+  token: string,
+  allowedRoles: string[] = ["super_admin", "admin", "moderator", "finance", "support"],
+): Promise<{ adminUser: Record<string, unknown> | null; error: string | null }> {
+  if (!token) return { adminUser: null, error: "Missing admin session token" };
+
+  const { getAdminClient } = await import("./supabase.ts");
+  const db = getAdminClient();
+
+  const tokenHash = await sha256HexInternal(token);
+  const { data: session, error: sessErr } = await db
+    .from("admin_sessions")
+    .select("id, admin_id, expires_at, revoked_at")
+    .eq("session_token_hash", tokenHash)
+    .maybeSingle();
+
+  if (sessErr || !session) {
+    return { adminUser: null, error: "Invalid admin session" };
+  }
+  if (session.revoked_at) return { adminUser: null, error: "Admin session revoked" };
+  if (new Date(session.expires_at).getTime() < Date.now()) {
+    return { adminUser: null, error: "Admin session expired" };
+  }
+
+  const { data: admin, error: adminErr } = await db
+    .from("admin_users")
+    .select("id, role, status, name, email, mfa_enabled, last_login_at")
+    .eq("id", session.admin_id)
+    .maybeSingle();
+
+  if (adminErr || !admin) return { adminUser: null, error: "Admin not found" };
+  if (admin.status !== "active") {
+    return { adminUser: null, error: "Forbidden — admin account is disabled" };
+  }
+  if (!allowedRoles.includes(admin.role as string)) {
+    return { adminUser: null, error: `Forbidden — role '${admin.role}' is not permitted for this action` };
+  }
+
+  // Best-effort last_used_at update — never blocks request.
+  void db
+    .from("admin_sessions")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("id", session.id);
+
+  return { adminUser: admin as Record<string, unknown>, error: null };
+}
+
+/* =========================================================================== *
  *  X-API-Key path — server-to-server admin access via long-lived keys.
  *  Companion to validateJWT(). Both paths converge in validateAdminAccess().
  * =========================================================================== */

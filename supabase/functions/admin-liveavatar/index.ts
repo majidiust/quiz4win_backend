@@ -25,7 +25,7 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
-import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
+import { validateJWT, requireAdminRole, validateAdminSessionToken } from "../_shared/auth.ts";
 
 const PROVIDER_URL = Deno.env.get("LIVEAVATAR_API_URL") ?? "";
 const PROVIDER_KEY = Deno.env.get("LIVEAVATAR_API_KEY") ?? "";
@@ -67,10 +67,22 @@ Deno.serve(async (req: Request) => {
   const segment = parts[1] ?? null;              // "public" | <id>
   const subAction = parts[2] ?? null;            // "preview"
 
-  const { user, error: authErr } = await validateJWT(req);
-  if (authErr || !user) return errorResponse("unauthorized", 401);
-  const { error: adminErr } = await requireAdminRole(user.id, ["super_admin", "admin", "moderator"]);
-  if (adminErr) return errorResponse(adminErr, 403);
+  // Two auth paths:
+  //   1. X-Admin-Session-Token (preferred — sent by the trusted Next.js admin
+  //      panel server actions, which authenticate admins via cookie session
+  //      tokens, not Supabase Auth JWTs).
+  //   2. Authorization: Bearer <jwt> (fallback — for any Supabase-Auth client).
+  const ALLOWED_ROLES = ["super_admin", "admin", "moderator"];
+  const sessionToken = req.headers.get("X-Admin-Session-Token");
+  if (sessionToken) {
+    const { adminUser, error: sessErr } = await validateAdminSessionToken(sessionToken, ALLOWED_ROLES);
+    if (sessErr || !adminUser) return errorResponse(sessErr ?? "unauthorized", 401);
+  } else {
+    const { user, error: authErr } = await validateJWT(req);
+    if (authErr || !user) return errorResponse("unauthorized", 401);
+    const { error: adminErr } = await requireAdminRole(user.id, ALLOWED_ROLES);
+    if (adminErr) return errorResponse(adminErr, 403);
+  }
 
   if (!providerConfigured()) {
     return errorResponse("liveavatar_provider_not_configured", 503);
