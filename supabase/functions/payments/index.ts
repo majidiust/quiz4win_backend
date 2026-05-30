@@ -22,10 +22,8 @@ import { getAdminClient } from "../_shared/supabase.ts";
 const REMITATION_BASE = Deno.env.get("REMITATION_BASE_URL")
   ?? "https://api.merchant.remitation.com/api/plugin";
 
-const MC_ACCESS_KEY     = Deno.env.get("REMITATION_ACCESS_KEY") ?? "";
-const MC_SECRET_KEY     = Deno.env.get("REMITATION_SECRET_KEY") ?? "";
-const CRYPTO_ACCESS_KEY = Deno.env.get("REMITATION_CRYPTO_ACCESS_KEY") ?? "";
-const CRYPTO_SECRET_KEY = Deno.env.get("REMITATION_CRYPTO_SECRET_KEY") ?? "";
+const ACCESS_KEY = Deno.env.get("REMITATION_ACCESS_KEY") ?? "";
+const SECRET_KEY = Deno.env.get("REMITATION_SECRET_KEY") ?? "";
 
 const APP_URL = Deno.env.get("APP_URL") ?? "https://app.quiz4win.com";
 const API_URL = Deno.env.get("API_URL") ?? "https://api.quiz4win.com";
@@ -33,8 +31,9 @@ const API_URL = Deno.env.get("API_URL") ?? "https://api.quiz4win.com";
 const MC_URL     = `${REMITATION_BASE}/payment-gateway`;
 const CRYPTO_URL = `${REMITATION_BASE}/crypto-payment-gateway`;
 
-const SUCCESS_STATES = new Set(["successful", "success", "paid", "completed", "finished", "settled", "confirmed"]);
+const SUCCESS_STATES = new Set(["successful", "success", "paid", "completed", "finished", "settled", "confirmed", "confirming", "sending"]);
 const FAILURE_STATES = new Set(["failed", "cancelled", "canceled", "expired", "refunded"]);
+const PENDING_STATES = new Set(["waiting", "partially_paid", "init", "pending"]);
 
 function classify(state: string | undefined): "succeeded" | "failed" | "pending" {
   const s = (state ?? "").toLowerCase();
@@ -94,12 +93,12 @@ async function initiateMastercard(args: {
   paymentId: string; user: { id: string; email?: string }; admin: ReturnType<typeof getAdminClient>;
   amount_cents: number; currency: string; productName?: string; desc?: string; extData?: unknown; ip: string | null;
 }): Promise<Response> {
-  if (!MC_ACCESS_KEY || !MC_SECRET_KEY) return errorResponse("payment_gateway_not_configured", 503);
+  if (!ACCESS_KEY || !SECRET_KEY) return errorResponse("payment_gateway_not_configured", 503);
 
   const redirectUrl = `${APP_URL}/pay/return?id=${args.paymentId}`;
   const res = await fetch(`${MC_URL}/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-access-key": MC_ACCESS_KEY, "x-secret-key": MC_SECRET_KEY },
+    headers: { "Content-Type": "application/json", "x-access-key": ACCESS_KEY, "x-secret-key": SECRET_KEY },
     body: JSON.stringify({
       amount: args.amount_cents / 100,
       currency: args.currency,
@@ -140,14 +139,14 @@ async function initiateCrypto(args: {
   paymentId: string; user: { id: string; email?: string }; admin: ReturnType<typeof getAdminClient>;
   amount_cents: number; fiat: string; cryptoCoin: string; desc?: string; ip: string | null;
 }): Promise<Response> {
-  if (!CRYPTO_ACCESS_KEY || !CRYPTO_SECRET_KEY) return errorResponse("crypto_gateway_not_configured", 503);
+  if (!ACCESS_KEY || !SECRET_KEY) return errorResponse("crypto_gateway_not_configured", 503);
 
   const amountFiat = args.amount_cents / 100;
   const callbackUrl = `${API_URL}/payments/webhook/crypto`;
 
   const res = await fetch(CRYPTO_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-access-key": CRYPTO_ACCESS_KEY, "x-secret-key": CRYPTO_SECRET_KEY },
+    headers: { "Content-Type": "application/json", "x-access-key": ACCESS_KEY, "x-secret-key": SECRET_KEY },
     body: JSON.stringify({
       amount: String(amountFiat),
       crypto: args.cryptoCoin,
@@ -235,7 +234,7 @@ async function verify(paymentId: string): Promise<Response> {
   if (payment.method === "mastercard") {
     const res = await fetch(`${MC_URL}/${payment.provider_payment_id}`, {
       method: "GET",
-      headers: { "x-access-key": MC_ACCESS_KEY, "x-secret-key": MC_SECRET_KEY },
+      headers: { "x-access-key": ACCESS_KEY, "x-secret-key": SECRET_KEY },
     });
     if (!res.ok) { console.error("[payments][mc] verify failed:", await res.text()); return errorResponse("gateway_verification_failed", 502); }
     providerData = await res.json();
@@ -244,7 +243,7 @@ async function verify(paymentId: string): Promise<Response> {
   } else if (payment.method === "crypto") {
     const res = await fetch(`${CRYPTO_URL}/${payment.provider_payment_id}`, {
       method: "GET",
-      headers: { "x-access-key": CRYPTO_ACCESS_KEY, "x-secret-key": CRYPTO_SECRET_KEY },
+      headers: { "x-access-key": ACCESS_KEY, "x-secret-key": SECRET_KEY },
     });
     if (!res.ok) { console.error("[payments][crypto] verify failed:", await res.text()); return errorResponse("gateway_verification_failed", 502); }
     providerData = await res.json();
