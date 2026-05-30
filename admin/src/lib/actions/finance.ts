@@ -172,6 +172,56 @@ function revalidatePaths(id: string) {
   revalidatePath("/dashboard");
 }
 
+/* ----------------------------- PAYMENTS ------------------------------- */
+
+const ReconcileSchema = z.object({ id: z.string().uuid() });
+
+export async function reconcilePayment(input: z.infer<typeof ReconcileSchema>): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin", "finance"]);
+  const parsed = ReconcileSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Invalid input" };
+
+  const db = createSupabaseAdminClient();
+  const { data: p, error } = await db.from("payments").select("id, status").eq("id", parsed.data.id).maybeSingle();
+  if (error || !p) return { ok: false, message: "Payment not found" };
+  if (p.status === "succeeded") return { ok: false, message: "Payment is already succeeded" };
+
+  // Call the public verify endpoint which re-queries the gateway
+  const apiBase = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://api.quiz4win.com";
+  try {
+    const res = await fetch(`${apiBase}/payments/${parsed.data.id}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const result = await res.json();
+    if (!res.ok) {
+      return { ok: false, message: result.error || "Verification failed at gateway" };
+    }
+
+    await db.from("admin_audit_log").insert({
+      admin_id: admin.id,
+      action: "payment_reconciled",
+      target_type: "payment",
+      target_id: parsed.data.id,
+      details: { outcome: result.data?.status },
+      created_at: new Date().toISOString(),
+    });
+
+    revalidatePath("/finance/payments");
+    revalidatePath(`/finance/payments/${parsed.data.id}`);
+
+    if (result.data?.status === "succeeded") {
+      return { ok: true, message: "Payment verified and credited successfully" };
+    } else {
+      return { ok: true, message: `Status confirmed: ${result.data?.status}` };
+    }
+  } catch (err) {
+    console.error("[finance][reconcile] fetch failed:", err);
+    return { ok: false, message: "Failed to reach payment gateway" };
+  }
+}
+
 /* -------------------------------- AML --------------------------------- */
 
 const AmlReviewSchema = z.object({

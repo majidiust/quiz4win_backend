@@ -8,6 +8,7 @@ import {
   BookOpen,
   Wallet,
   Banknote,
+  CreditCard,
   AlertOctagon,
   LifeBuoy,
   Megaphone,
@@ -67,6 +68,7 @@ export const navSections: NavSection[] = [
   {
     title: "Finance",
     items: [
+      { title: "Payments", href: "/finance/payments", icon: CreditCard, roles: ["super_admin", "admin", "finance"] },
       { title: "Withdrawals", href: "/finance/withdrawals", icon: Wallet, roles: ["super_admin", "admin", "finance"] },
       { title: "Transactions", href: "/finance/transactions", icon: Banknote, roles: ["super_admin", "admin", "finance"] },
       { title: "AML Flags", href: "/finance/aml", icon: AlertOctagon, roles: ["super_admin", "admin", "finance"] },
