@@ -1,3 +1,6 @@
+[2026-05-30] [A-01] [FIX] **Admin panel cache disabled.** Added `Cache-Control: no-cache, no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0` headers to all non-static admin routes in `next.config.ts`. Static assets (`_next/static/*`) remain long-term cached via immutable fingerprinted URLs. Ensures admins always see the latest deployed version without a hard-refresh.
+
+
 [2026-05-30] [A-01] [BUILD] **LiveAvatar Admin UI Integration.** Enhanced game-template editing with a rich selection UI for AI Presenters:
 - Created `admin/src/lib/actions/liveavatar.ts` server actions (`fetchAvatars`, `fetchVoices`, `fetchVoicePreview`) calling the provider directly using `LIVEAVATAR_API_URL` and `LIVEAVATAR_API_KEY`.
 - Built `AvatarPicker` component with a 4-column portrait grid, preview images, and selection highlights.
