@@ -134,16 +134,37 @@ export async function sendNotification(
 
   const { id, title, body } = parsed.data;
   const db = createSupabaseAdminClient();
+  const { sendFcmToTokens, isFcmConfigured } = await import("@/lib/fcm");
 
+  // Push tokens for this user (may be empty).
+  const { data: tokens } = await db.from("push_tokens").select("token").eq("user_id", id);
+  const deviceTokens = (tokens ?? []).map((t) => t.token).filter(Boolean);
+
+  let delivered = 0, failed = 0, invalidTokens: string[] = [];
+  if (deviceTokens.length > 0 && isFcmConfigured()) {
+    try {
+      const res = await sendFcmToTokens(deviceTokens, { title, body, data: { type: "system" } });
+      delivered = res.delivered; failed = res.failed; invalidTokens = res.invalidTokens;
+      if (invalidTokens.length > 0) {
+        await db.from("push_tokens").delete().in("token", invalidTokens);
+      }
+    } catch (err) {
+      console.error("[users][notify] fcm error:", (err as Error).message);
+    }
+  }
+
+  // In-app inbox row (schema column is `read`, type CHECK allows 'system').
   const { error } = await db.from("notifications").insert({
     user_id: id,
-    type: "admin_message",
+    type: "system",
     title,
     body,
-    is_read: false,
+    read: false,
+    sent_via_push: delivered > 0,
     created_at: new Date().toISOString(),
   });
+  if (error) return { ok: false, message: `Push sent (${delivered}/${deviceTokens.length}) but inbox insert failed` };
 
-  if (error) return { ok: false, message: "Failed to send notification" };
-  return { ok: true, message: "Notification sent" };
+  if (deviceTokens.length === 0) return { ok: true, message: "Inbox notification sent (no push devices registered)" };
+  return { ok: true, message: `Notification sent — push delivered to ${delivered}/${deviceTokens.length} devices${failed > 0 ? ` (${failed} failed)` : ""}` };
 }
