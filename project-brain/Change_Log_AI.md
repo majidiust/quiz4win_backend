@@ -1,3 +1,5 @@
+[2026-05-30] [A-01] [FIX] **Admin container missing LiveAvatar/LiveKit env.** The admin service in `docker-compose.yml` did not pass `LIVEAVATAR_API_URL`, `LIVEAVATAR_API_KEY`, `LIVEKIT_SERVER_URL`, `LIVEKIT_API_KEY`, or `LIVEKIT_API_SECRET` through to the container. As a result the new `AvatarPicker`/`VoicePicker` server actions returned `{ notConfigured: true }` and the UI silently fell back to the plain UUID inputs — making the new template editor look unchanged after a rebuild. Added all five vars to the admin service `environment` block (with `${VAR:-}` defaults so a missing value does not break compose). Requires `docker compose up -d admin` to recreate the container with the new env.
+
 [2026-05-30] [A-01] [FIX] **Admin panel cache disabled.** Added `Cache-Control: no-cache, no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0` headers to all non-static admin routes in `next.config.ts`. Static assets (`_next/static/*`) remain long-term cached via immutable fingerprinted URLs. Ensures admins always see the latest deployed version without a hard-refresh.
 
 
