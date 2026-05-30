@@ -42,8 +42,8 @@ async function callProvider(path: string, query?: URLSearchParams): Promise<Resp
       method: "GET",
       headers: {
         "Accept": "application/json",
-        "X-Api-Key": PROVIDER_KEY,
-        "Authorization": `Bearer ${PROVIDER_KEY}`,
+        // LiveAvatar OpenAPI declares APIKeyHeader -> X-API-KEY.
+        "X-API-KEY": PROVIDER_KEY,
       },
     });
     const body = await res.text();
@@ -90,31 +90,34 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "GET") return errorResponse("Method not allowed", 405);
 
   try {
+    // Provider paths are versioned: /v1/avatars, /v1/voices, /v1/users/me/credits
+    // (LiveAvatar OpenAPI: https://docs.liveavatar.com/openapi.json)
+
     // GET /admin/liveavatar/avatars  or  /avatars/public  or  /avatars/:id
     if (resource === "avatars") {
       if (!segment) {
-        return await callProvider("/avatars", url.searchParams);
+        return await callProvider("/v1/avatars", url.searchParams);
       }
       if (segment === "public") {
-        return await callProvider("/avatars/public", url.searchParams);
+        return await callProvider("/v1/avatars/public", url.searchParams);
       }
-      return await callProvider(`/avatars/${encodeURIComponent(segment)}`);
+      return await callProvider(`/v1/avatars/${encodeURIComponent(segment)}`);
     }
 
     // GET /admin/liveavatar/voices  or  /voices/:id  or  /voices/:id/preview
     if (resource === "voices") {
       if (!segment) {
-        return await callProvider("/voices", url.searchParams);
+        return await callProvider("/v1/voices", url.searchParams);
       }
       if (subAction === "preview") {
-        return await callProvider(`/voices/${encodeURIComponent(segment)}/preview`);
+        return await callProvider(`/v1/voices/${encodeURIComponent(segment)}/preview`);
       }
-      return await callProvider(`/voices/${encodeURIComponent(segment)}`);
+      return await callProvider(`/v1/voices/${encodeURIComponent(segment)}`);
     }
 
-    // GET /admin/liveavatar/credits
+    // GET /admin/liveavatar/credits — provider exposes user credit balance.
     if (resource === "credits" && !segment) {
-      return await callProvider("/credits");
+      return await callProvider("/v1/users/me/credits");
     }
 
     return errorResponse("Not found", 404);

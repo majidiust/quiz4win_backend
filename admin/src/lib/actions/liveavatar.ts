@@ -78,13 +78,53 @@ export interface LiveAvatarVoice {
   name: string;
   language: string;
   gender: string | null;
-  support_pause?: boolean;
-  emotion_support?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────
 // fetchAvatars — merges private + public catalogs, deduped
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Shape returned by LiveAvatar (`{ code, data: { count, results: [...] } }`).
+ * AvatarSchema has `id`, `name`, `preview_url`, `default_voice` — we map these
+ * to the picker's expected fields (avatar_id / avatar_name / preview_image_url).
+ */
+interface ProviderEnvelope<T> {
+  code?: number;
+  message?: string;
+  data?: { count?: number; results?: T[] } | null;
+}
+interface ProviderAvatar {
+  id: string;
+  name: string;
+  preview_url?: string | null;
+  default_voice?: { id: string; name: string } | null;
+  type?: string;
+}
+interface ProviderVoice {
+  id: string;
+  name: string;
+  language: string;
+  gender: string | null;
+  description?: string | null;
+  tags?: string[];
+}
+
+function mapAvatar(a: ProviderAvatar, isPublic: boolean): LiveAvatar {
+  // LiveAvatar returns a single preview_url that can be either an image or a
+  // short video (mp4). Best-effort: treat URLs ending in known video
+  // extensions as preview_video_url, everything else as preview_image_url.
+  const url = a.preview_url ?? null;
+  const isVideo = !!url && /\.(mp4|webm|mov)(\?|$)/i.test(url);
+  return {
+    avatar_id: a.id,
+    avatar_name: a.name,
+    preview_image_url: isVideo ? null : url,
+    preview_video_url: isVideo ? url : null,
+    gender: null,
+    is_public: isPublic,
+  };
+}
 
 export async function fetchAvatars(): Promise<{
   ok: boolean;
@@ -95,24 +135,23 @@ export async function fetchAvatars(): Promise<{
   await requireAdmin(["super_admin", "admin"]);
 
   const [privateRes, publicRes] = await Promise.all([
-    callBackend<Record<string, unknown>>("/admin/liveavatar/avatars"),
-    callBackend<Record<string, unknown>>("/admin/liveavatar/avatars/public"),
+    callBackend<ProviderEnvelope<ProviderAvatar>>("/admin/liveavatar/avatars", { page_size: "100" }),
+    callBackend<ProviderEnvelope<ProviderAvatar>>("/admin/liveavatar/avatars/public", { page_size: "100" }),
   ]);
 
   if (privateRes.notConfigured || publicRes.notConfigured) {
     return { ok: false, notConfigured: true };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const toArr = (res: typeof privateRes): LiveAvatar[] => (res.data as any)?.data?.avatars ?? [];
+  const toArr = (res: typeof privateRes): ProviderAvatar[] => res.data?.data?.results ?? [];
 
   const seen = new Set<string>();
   const merged: LiveAvatar[] = [];
   for (const [list, isPublic] of [[toArr(privateRes), false], [toArr(publicRes), true]] as const) {
-    for (const a of list as LiveAvatar[]) {
-      if (!seen.has(a.avatar_id)) {
-        seen.add(a.avatar_id);
-        merged.push({ ...a, is_public: isPublic });
+    for (const a of list) {
+      if (!seen.has(a.id)) {
+        seen.add(a.id);
+        merged.push(mapAvatar(a, isPublic));
       }
     }
   }
@@ -127,8 +166,17 @@ export async function fetchAvatars(): Promise<{
 // fetchVoices — paginated voice list
 // ─────────────────────────────────────────────────────────────
 
+function mapVoice(v: ProviderVoice): LiveAvatarVoice {
+  return {
+    voice_id: v.id,
+    name: v.name,
+    language: v.language,
+    gender: v.gender ?? null,
+  };
+}
+
 export async function fetchVoices(params?: {
-  voice_type?: string;
+  voice_type?: "public" | "private" | string;
   page?: number;
   page_size?: number;
 }): Promise<{
@@ -139,15 +187,43 @@ export async function fetchVoices(params?: {
 }> {
   await requireAdmin(["super_admin", "admin"]);
 
-  const query: Record<string, string> = {};
-  if (params?.voice_type) query.voice_type = params.voice_type;
-  if (params?.page != null) query.page = String(params.page);
-  if (params?.page_size != null) query.page_size = String(params.page_size);
+  // Provider's list-voices defaults to voice_type=public. When the caller
+  // doesn't specify, fetch both public + private and merge so users see all
+  // available voices on their plan. Page size is capped at 100 by the API.
+  const basePageSize = String(Math.min(params?.page_size ?? 100, 100));
+  const targets: Array<"public" | "private"> =
+    params?.voice_type === "public" || params?.voice_type === "private"
+      ? [params.voice_type]
+      : ["public", "private"];
 
-  const res = await callBackend<Record<string, unknown>>("/admin/liveavatar/voices", query);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const voices: LiveAvatarVoice[] = (res.data as any)?.data?.voices ?? [];
-  return { ok: res.ok, voices, notConfigured: res.notConfigured, error: res.error };
+  const results = await Promise.all(
+    targets.map((vt) => {
+      const query: Record<string, string> = { page_size: basePageSize, voice_type: vt };
+      if (params?.page != null) query.page = String(params.page);
+      return callBackend<ProviderEnvelope<ProviderVoice>>("/admin/liveavatar/voices", query);
+    }),
+  );
+
+  if (results.some((r) => r.notConfigured)) {
+    return { ok: false, notConfigured: true };
+  }
+
+  const seen = new Set<string>();
+  const merged: LiveAvatarVoice[] = [];
+  for (const r of results) {
+    for (const v of r.data?.data?.results ?? []) {
+      if (!seen.has(v.id)) {
+        seen.add(v.id);
+        merged.push(mapVoice(v));
+      }
+    }
+  }
+
+  const anyOk = results.some((r) => r.ok);
+  if (!anyOk && merged.length === 0) {
+    return { ok: false, error: results.find((r) => r.error)?.error ?? "Failed to load voices" };
+  }
+  return { ok: true, voices: merged };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -161,10 +237,10 @@ export async function fetchVoicePreview(voiceId: string): Promise<{
 }> {
   await requireAdmin(["super_admin", "admin"]);
 
-  const res = await callBackend<Record<string, unknown>>(
+  const res = await callBackend<ProviderEnvelope<never> & { data?: { audio_base64?: string } | null }>(
     `/admin/liveavatar/voices/${encodeURIComponent(voiceId)}/preview`,
   );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const audio: string | undefined = (res.data as any)?.data?.audio_base64;
+  // Provider envelope: { code, data: { audio_base64 }, message }
+  const audio: string | undefined = (res.data?.data as { audio_base64?: string } | null | undefined)?.audio_base64;
   return { ok: res.ok, audio_base64: audio, error: res.error };
 }

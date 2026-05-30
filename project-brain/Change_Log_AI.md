@@ -257,3 +257,9 @@ Owner: A-02 (Project Memory Guardian)
   • .env.docker.example — documented API_URL near the top.
   • Rule compliance: R-01 (provider key never leaves api container), R-03/R-04 (backend re-validates admin session before contacting provider).
 
+
+[2026-05-30] [A-01] [FIX] admin-liveavatar: align with provider's real /v1 paths and response shape
+  • supabase/functions/admin-liveavatar/index.ts — paths are now /v1/avatars, /v1/avatars/public, /v1/avatars/:id, /v1/voices, /v1/voices/:id, /v1/voices/:id/preview, /v1/users/me/credits (LiveAvatar OpenAPI: docs.liveavatar.com/openapi.json). Auth header normalised to single X-API-KEY (dropped duplicate Authorization: Bearer).
+  • admin/src/lib/actions/liveavatar.ts — provider envelope is { code, data: { count, results: [...] }, message }, not { data: { avatars/voices: [...] } }. Added mapAvatar() (id→avatar_id, name→avatar_name, preview_url→preview_image_url/preview_video_url heuristic) and mapVoice() (id→voice_id). fetchVoices now defaults to merging public+private (capped at 100/page per provider). LiveAvatarVoice type slimmed (dropped unused support_pause/emotion_support).
+  • Root cause: previous build returned upstream 404 for every path; admin UI silently fell back to empty grid/list. Fixed by matching the provider's documented OpenAPI exactly.
+
