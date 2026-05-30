@@ -158,3 +158,9 @@ Owner: A-02 (Project Memory Guardian)
 - app/nginx.conf: Added location = /pay/return -> /pay/return.html.
 - docs/payments-api-reference.md: Endpoints, request/response schemas, error codes, env vars, redirect flow.
 - Env vars required: REMITATION_ACCESS_KEY, REMITATION_SECRET_KEY, REMITATION_BASE_URL (optional, defaults to https://api.merchant.remitation.com/api/plugin/payment-gateway), APP_URL (used to build the redirect URL).
+
+[2026-05-30] [A-01] [BUILD] Payments API v1 — Crypto extension & webhook
+- supabase/migrations/20260528360000_payments_crypto.sql: Adds pay_address, pay_amount, pay_currency, qr_url, expires_at columns to payments table for crypto-specific gateway data.
+- supabase/functions/payments/index.ts: Refactored — separate MasterCard and Crypto gateway helpers, added initiateCrypto (POST crypto-payment-gateway with REMITATION_CRYPTO_ACCESS_KEY / REMITATION_CRYPTO_SECRET_KEY), webhook handler (POST /payments/webhook/:method), enriched verify response with crypto fields (address/QR for pending display). applyOutcome shared by verify and webhook.
+- app/public/pay/return.html: Added showCryptoPending() — renders QR image, pay address, coin amount, expiry when verify returns status=pending + method=crypto.
+- Env vars added: REMITATION_CRYPTO_ACCESS_KEY, REMITATION_CRYPTO_SECRET_KEY, API_URL.

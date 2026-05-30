@@ -66,9 +66,11 @@
         });
 
         const data = await res.json();
-        
+
         if (data.status === "succeeded") {
           showSuccess("Payment Successful", "Your wallet has been credited. You can now return to the app and join games.");
+        } else if (data.status === "pending" && data.method === "crypto") {
+          showCryptoPending(data);
         } else if (data.status === "pending") {
           showPending("Still Processing", "The gateway hasn't confirmed your payment yet. It might take a few minutes.");
         } else {
@@ -88,18 +90,37 @@
     function showPending(title, msg) {
       render('⏳', 'pending', title, msg, 'pending');
     }
+    function showCryptoPending(data) {
+      const id = new URLSearchParams(window.location.search).get("id");
+      const deepLink = `${APP_DEEP_LINK}?id=${id}&status=pending`;
+      const qrHtml = data.qr_url
+        ? `<img src="${data.qr_url}" alt="QR Code" style="width:180px;height:180px;margin:0 auto 16px;display:block;border-radius:8px;" />`
+        : '';
+      const expiresHtml = data.expires_at
+        ? `<p style="font-size:12px;color:#888;margin-top:8px;">Expires: ${new Date(data.expires_at).toLocaleString()}</p>`
+        : '';
+      document.getElementById("app").innerHTML = `
+        <span class="icon pending">⏳</span>
+        <h1 class="pending">Awaiting Crypto Payment</h1>
+        <p>Send exactly <strong>${data.pay_amount ?? ''} ${(data.pay_currency ?? '').toUpperCase()}</strong> to the address below.</p>
+        ${qrHtml}
+        <div style="background:#f4f5fb;border-radius:8px;padding:12px 16px;word-break:break-all;font-family:monospace;font-size:13px;margin-bottom:12px;">${data.pay_address ?? 'Address not available'}</div>
+        ${expiresHtml}
+        <a href="${deepLink}" class="btn btn-primary" style="margin-top:16px;">Return to App</a>
+      `;
+    }
 
     function render(icon, colorClass, title, msg, status) {
       const id = new URLSearchParams(window.location.search).get("id");
       const deepLink = `${APP_DEEP_LINK}?id=${id}&status=${status}`;
-      
+
       document.getElementById("app").innerHTML = `
         <span class="icon ${colorClass}">${icon}</span>
         <h1 class="${colorClass}">${title}</h1>
         <p>${msg}</p>
         <a href="${deepLink}" class="btn btn-primary">Return to App</a>
       `;
-      
+
       // Auto-redirect to app after 3 seconds on success
       if (status === 'succeeded') {
         setTimeout(() => { window.location.href = deepLink; }, 3000);
