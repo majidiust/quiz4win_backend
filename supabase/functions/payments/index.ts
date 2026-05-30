@@ -55,8 +55,9 @@ Deno.serve(async (req: Request) => {
   const parts = url.pathname.split("/").filter(Boolean);
 
   try {
+    if (parts.length === 1 && req.method === "GET")  return await listPayments(req);
     if (parts.length === 1 && req.method === "POST") return await initiate(req);
-    if (parts.length === 2 && req.method === "GET") return await readStatus(req, parts[1]);
+    if (parts.length === 2 && req.method === "GET")  return await readStatus(req, parts[1]);
     if (parts.length === 3 && parts[2] === "verify" && req.method === "POST") return await verify(parts[1]);
     if (parts.length === 3 && parts[1] === "webhook" && req.method === "POST") return await webhook(req, parts[2]);
     return errorResponse("not_found", 404);
@@ -65,6 +66,38 @@ Deno.serve(async (req: Request) => {
     return errorResponse("internal_server_error", 500);
   }
 });
+
+async function listPayments(req: Request): Promise<Response> {
+  const { user, error: authErr } = await validateJWT(req);
+  if (authErr || !user) return errorResponse(authErr ?? "unauthorized", 401);
+
+  const url = new URL(req.url);
+  const page  = Math.max(1, parseInt(url.searchParams.get("page")  ?? "1", 10));
+  const limit = Math.min(50, Math.max(1, parseInt(url.searchParams.get("limit") ?? "20", 10)));
+  const status = url.searchParams.get("status");   // optional filter
+  const method = url.searchParams.get("method");   // optional filter
+  const from = (page - 1) * limit;
+  const to   = from + limit - 1;
+
+  const admin = getAdminClient();
+  let query = admin
+    .from("payments")
+    .select("id,method,status,amount_cents,currency,payment_link,pay_address,pay_amount,pay_currency,qr_url,expires_at,transaction_id,initiated_at,completed_at,created_at", { count: "exact" })
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (status) query = query.eq("status", status);
+  if (method) query = query.eq("method", method);
+
+  const { data, error, count } = await query;
+  if (error) { console.error("[payments][list] query:", error.message); return errorResponse("internal_server_error", 500); }
+
+  return successResponse({
+    payments: data ?? [],
+    pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) },
+  });
+}
 
 async function initiate(req: Request): Promise<Response> {
   const { user, error: authErr } = await validateJWT(req);
