@@ -1,14 +1,45 @@
 import "server-only";
+import fs from "fs";
+import path from "path";
 
 /**
  * Firebase Cloud Messaging v1 sender — Quiz4Win admin panel.
  *
- * Uses the service-account JSON's project_id / client_email / private_key,
- * exposed as env vars FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL,
- * FIREBASE_PRIVATE_KEY (with literal "\n" sequences for newlines).
+ * Credentials are loaded at runtime from the service-account JSON file:
+ *   configs/quiz4win-68443-firebase-adminsdk-fbsvc-24d33392b8.json
+ *
+ * The file is resolved from two candidate locations so the same code works
+ * both inside Docker (/app/configs/…, mounted as a volume) and in local dev
+ * (admin/../configs/…, i.e. the project root configs/ directory).
  *
  * R-01: private key is never logged. Only delivery counts surface to callers.
  */
+
+const SERVICE_ACCOUNT_FILENAME = "quiz4win-68443-firebase-adminsdk-fbsvc-24d33392b8.json";
+
+interface ServiceAccount {
+  project_id: string;
+  client_email: string;
+  private_key: string;
+}
+
+let _sa: ServiceAccount | null = null;
+
+function loadServiceAccount(): ServiceAccount {
+  if (_sa) return _sa;
+  const candidates = [
+    path.join(process.cwd(), "configs", SERVICE_ACCOUNT_FILENAME),       // Docker: /app/configs/…
+    path.join(process.cwd(), "..", "configs", SERVICE_ACCOUNT_FILENAME), // local dev: admin/../configs/…
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      const raw = fs.readFileSync(p, "utf-8");
+      _sa = JSON.parse(raw) as ServiceAccount;
+      return _sa;
+    }
+  }
+  throw new Error("fcm_not_configured: service account file not found at " + candidates.join(" or "));
+}
 
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -37,10 +68,9 @@ function pemToPkcs8(pem: string): ArrayBuffer {
 async function getAccessToken(): Promise<string> {
   if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
 
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const rawKey = process.env.FIREBASE_PRIVATE_KEY;
-  if (!clientEmail || !rawKey) throw new Error("fcm_not_configured");
-  const privateKey = rawKey.replace(/\\n/g, "\n");
+  const sa = loadServiceAccount();
+  const clientEmail = sa.client_email;
+  const privateKey = sa.private_key; // already contains real newlines in the JSON file
 
   const now = Math.floor(Date.now() / 1000);
   const header = b64urlString(JSON.stringify({ alg: "RS256", typ: "JWT" }));
@@ -128,8 +158,7 @@ export async function sendFcmToTokens(
   deviceTokens: string[],
   notification: FcmNotification,
 ): Promise<FcmSendResult> {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId) throw new Error("fcm_not_configured");
+  const projectId = loadServiceAccount().project_id;
   if (deviceTokens.length === 0) return { delivered: 0, failed: 0, invalidTokens: [] };
 
   const accessToken = await getAccessToken();
@@ -149,5 +178,5 @@ export async function sendFcmToTokens(
 }
 
 export function isFcmConfigured(): boolean {
-  return !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
+  try { loadServiceAccount(); return true; } catch { return false; }
 }
