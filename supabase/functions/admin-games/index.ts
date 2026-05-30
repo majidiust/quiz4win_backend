@@ -28,6 +28,7 @@ import { validateJWT, requireAdminRole } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
 import { csvResponse, toCsv, todayStamp } from "../_shared/csv.ts";
 import { uploadObject } from "../_shared/s3.ts";
+import { publishQuizShowStart, isConfigured as rabbitmqConfigured } from "../_shared/rabbitmq.ts";
 
 /** Fields on `games` that store a public asset URL and can be uploaded via /asset. */
 const ASSET_FIELDS = ["icon", "thumbnail_url", "poster_url", "host_avatar_url"] as const;
@@ -137,8 +138,42 @@ Deno.serve(async (req: Request) => {
     // POST /admin/games/:id/start
     if (gameId && action === "start" && req.method === "POST") {
       await admin.from("games").update({ status: "live", started_at: new Date().toISOString() }).eq("id", gameId);
-      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_started", target_type: "game", target_id: gameId, created_at: new Date().toISOString() });
-      return successResponse({ message: "Game started" });
+
+      // Best-effort AI presenter trigger. If this game was generated from a
+      // template with ai_enabled = TRUE, publish quiz.show.start so the
+      // presenter service joins the LiveKit room. A publish failure must
+      // never roll the game start back.
+      let aiNote: string | undefined;
+      try {
+        const { data: g } = await admin.from("games")
+          .select("id, template_id, title, language, livekit_room_name, prize_pool, prize_pool_currency")
+          .eq("id", gameId).single();
+        if (g?.template_id) {
+          const { data: tpl } = await admin.from("game_templates")
+            .select("ai_enabled, ai_avatar_id, ai_sound_id, ai_duration, ai_language")
+            .eq("id", g.template_id).single();
+          if (tpl?.ai_enabled && rabbitmqConfigured()) {
+            const res = await publishQuizShowStart({
+              gameId: g.id,
+              templateId: g.template_id,
+              title: g.title,
+              language: tpl.ai_language ?? g.language ?? "en",
+              avatarId: tpl.ai_avatar_id ?? null,
+              voiceId: tpl.ai_sound_id ?? null,
+              durationSeconds: tpl.ai_duration ?? null,
+              livekitRoomName: g.livekit_room_name ?? null,
+              totalPrize: Number(g.prize_pool ?? 0),
+              currency: g.prize_pool_currency ?? "USD",
+            });
+            aiNote = res.ok ? "ai_show_dispatched" : `ai_show_dispatch_failed:${res.error ?? "unknown"}`;
+          }
+        }
+      } catch (err) {
+        aiNote = `ai_show_dispatch_exception:${err instanceof Error ? err.message : String(err)}`;
+      }
+
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_started", target_type: "game", target_id: gameId, details: aiNote ? { ai: aiNote } : null, created_at: new Date().toISOString() });
+      return successResponse({ message: "Game started", ai: aiNote });
     }
 
     // POST /admin/games/:id/end

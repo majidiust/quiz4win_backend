@@ -155,6 +155,17 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       LIVEKIT_WEBHOOK_SECRET: ${LIVEKIT_WEBHOOK_SECRET:-}
+      # LiveAvatar (AI presenter catalog proxy). Leave empty to disable.
+      LIVEAVATAR_API_URL: ${LIVEAVATAR_API_URL:-}
+      LIVEAVATAR_API_KEY: ${LIVEAVATAR_API_KEY:-}
+      # RabbitMQ — used to publish quiz.show.start when a template-generated
+      # game with ai_enabled=true starts. Single AMQP URI with credentials
+      # embedded (amqps://user:pass@host/vhost). Leave empty to disable the
+      # publish (game start still succeeds — best-effort).
+      RABBITMQ_URL: ${RABBITMQ_URL:-}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
+      MQ_COMMAND_EXCHANGE: ${MQ_COMMAND_EXCHANGE:-}
+      MQ_COMMAND_QUEUE: ${MQ_COMMAND_QUEUE:-quiz.show.start}
       # S3-compatible object storage (DigitalOcean Spaces).
       S3_BUCKET: ${S3_BUCKET}
       S3_REGION: ${S3_REGION}
@@ -167,6 +178,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    networks:
+      - quiz4win
+
+  template-generator:
+    # Wakes every minute and calls generate_games_from_active_templates() so
+    # active game_templates spawn new games on their cron schedule. Depends on
+    # db-maintainer so it never runs before the schema migration that created
+    # the RPC has been applied.
+    build:
+      context: ./deploy/template-generator
+      dockerfile: Dockerfile
+    image: quiz4win-template-generator:latest
+    container_name: quiz4win-template-generator
+    restart: unless-stopped
+    depends_on:
+      db-maintainer:
+        condition: service_healthy
+    environment:
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Override only for tests; production should leave at 60_000ms.
+      TEMPLATE_GEN_INTERVAL_MS: ${TEMPLATE_GEN_INTERVAL_MS:-60000}
+      TZ: UTC
     networks:
       - quiz4win
 

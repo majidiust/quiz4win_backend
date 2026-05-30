@@ -12,6 +12,8 @@
 *.p12
 *.pfx
 /tmp/
+# Provider config blobs (Firebase service-account JSON, etc.) — secrets only.
+/configs/
 
 # Temporary agent scripts (contain service-account keys — delete after use)
 .tmp_*.py

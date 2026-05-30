@@ -1,3 +1,7 @@
+[2026-05-30] [A-01] [FIX] **.env cleanup & validation.** Deleted dead commented-out block (lines 1-35), fixed invalid inline comment in `BACKUP_SCHEDULE`, filled `MONGODB_URL` placeholder, and removed duplicate `LIVEKIT_*` vars.
+[2026-05-30] [A-01] [REFACTOR] **RabbitMQ env consolidation.** Replaced four separate env vars (`RABBITMQ_MGMT_URL`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`, `RABBITMQ_VHOST`) with a single `RABBITMQ_URL` AMQP connection URI (e.g. `amqps://user:pass@host/vhost`). Added `parseRabbitUrl()` helper in `supabase/functions/_shared/rabbitmq.ts` that rewrites `amqp(s)://` to `http(s)://`, strips the AMQP port, and extracts user/password/vhost from the URI; `http(s)://` management URLs are still accepted as-is (preserves explicit ports such as 15672). `RABBITMQ_VHOST` is retained as an optional override only. Updated `_shared/rabbitmq_test.ts` (new parser tests + endpoint URL assertions), `.env.docker.example`, `docker-compose.yml` (api service env block), and `docs/game-templates.md` to reflect the new single-URL contract. No call-site changes required — `publishQuizShowStart()` signature unchanged.
+
+
 [2026-05-30] [A-01] [BUILD] Added Payments management to Admin Panel:
 - Navigation: Added "Payments" under Finance section.
 - List View: Created admin/src/app/(app)/finance/payments/page.tsx with pagination and filters (method, status).
@@ -180,3 +184,54 @@ Owner: A-02 (Project Memory Guardian)
 - supabase/functions/payments/index.ts: Refactored — separate MasterCard and Crypto gateway helpers, added initiateCrypto (POST crypto-payment-gateway with REMITATION_CRYPTO_ACCESS_KEY / REMITATION_CRYPTO_SECRET_KEY), webhook handler (POST /payments/webhook/:method), enriched verify response with crypto fields (address/QR for pending display). applyOutcome shared by verify and webhook.
 - app/public/pay/return.html: Added showCryptoPending() — renders QR image, pay address, coin amount, expiry when verify returns status=pending + method=crypto.
 - Env vars added: REMITATION_CRYPTO_ACCESS_KEY, REMITATION_CRYPTO_SECRET_KEY, API_URL.
+
+[2026-05-30] [A-03] [ARCH] Game Templates Engine v1 — module boundary approved
+- New top-level module: Game Template Engine. Spans schema (game_templates), Edge Functions (admin-game-templates, admin-liveavatar), shared helper (_shared/rabbitmq.ts), Docker service (deploy/template-generator), admin UI (admin/src/app/(app)/templates/).
+- Import direction: template-generator → Postgres RPCs only (no Edge Function dependency). admin-games → _shared/rabbitmq.ts (best-effort publish, no hard dep on broker).
+- Mutual FK between games.template_id and game_templates.current_game_id is acceptable because both sides use ON DELETE SET NULL.
+
+[2026-05-30] [A-01] [BUILD] Game Templates Engine v1 — schema + RPCs
+- supabase/migrations/20260530100000_game_templates_v1.sql: game_templates table (mirrors games configurable fields + cron + AI presenter + question filters + lifecycle tracking), games.template_id FK, updated_at trigger, RLS enabled (service-role only).
+- supabase/migrations/20260530100001_game_templates_rpcs.sql: match_cron_expression(expr text, ts timestamptz) — 5-field UTC cron matcher with ranges/steps/lists/named-DoW. generate_game_from_template(p_template_id, p_skip_overlap) SECURITY DEFINER — overlap guard, filter-based question selection, insert games row with status=upcoming + mode=live + scheduled_at = NOW() + start_buffer_seconds, populate game_questions, advance template tracking columns.
+- supabase/migrations/20260530100002_game_templates_generator.sql: refined generator (LiveKit room name, AI/avatar field propagation onto games row).
+- supabase/migrations/20260530100003_game_templates_cron_tick.sql: generate_games_from_active_templates() — looped tick RPC called by the Docker cron service every 60 s. Returns per-template status summary (generated|no_match|skipped_recent|overlap_skipped|error).
+
+[2026-05-30] [A-01] [BUILD] Game Templates Engine v1 — admin Edge Function
+- supabase/functions/admin-game-templates/index.ts: full CRUD (GET list/detail, POST create, PATCH update, DELETE soft-delete) plus PATCH activate / deactivate, POST generate-now, GET current-game / last-game / history, POST asset (icon/thumbnail/poster/host_avatar — multipart, ≤10 MB, S3 upload). JWT validation + admin role gate + admin_audit_log entries. Server-side invariant: ai_enabled = TRUE forces enable_streaming = TRUE.
+
+[2026-05-30] [A-01] [BUILD] Game Templates Engine v1 — Docker template-generator
+- deploy/template-generator/generator.ts: Deno loop that wakes every TEMPLATE_GEN_INTERVAL_MS (default 60 000 ms) and POSTs the tick RPC via PostgREST with the service-role key. Summarises per-tick result; logs "GENERATED template=… game=…" lines for ops visibility. Graceful SIGTERM/SIGINT handling via tini.
+- deploy/template-generator/Dockerfile: denoland/deno:alpine-1.46.3 + tini, runs with --allow-env --allow-net only.
+- docker-compose.yml: new "template-generator" service depends_on db-maintainer (healthy), inherits SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / TZ=UTC.
+
+[2026-05-30] [A-01] [BUILD] Game Templates Engine v1 — LiveAvatar + RabbitMQ
+- supabase/functions/_shared/rabbitmq.ts: publish() via RabbitMQ Management HTTP API (Basic auth, persistent delivery mode 2). publishQuizShowStart() composes the quiz.show.start payload (gameId QUIZ:<uuid>, templateId, language, avatarId, voiceId, durationSeconds, totalPrize/currency, liveKit.url/roomName). Best-effort — returns { ok:false, error } instead of throwing; isConfigured() guard for caller short-circuit.
+- supabase/functions/admin-liveavatar/index.ts: thin proxy over LIVEAVATAR_API_URL (avatars, public avatars, voices, voice preview, credits). Forwards X-Api-Key + Bearer auth. Returns 503 if not configured so the UI can fall back to free-form ID entry.
+- supabase/functions/admin-games/index.ts: start endpoint now reads game.template_id + game_templates AI fields; if ai_enabled && rabbitmqConfigured() it publishes quiz.show.start and records the outcome in admin_audit_log details ({ ai: "ai_show_dispatched" | "ai_show_dispatch_failed:*" }). Failure never rolls the start transition back.
+- docker-compose.yml: new env vars on the api service — LIVEAVATAR_API_URL/KEY, RABBITMQ_MGMT_URL/USER/PASSWORD/VHOST, MQ_COMMAND_EXCHANGE, MQ_COMMAND_QUEUE (default "quiz.show.start").
+
+[2026-05-30] [A-01] [BUILD] Game Templates Engine v1 — admin UI
+- admin/src/lib/actions/templates.ts: server actions (createTemplate, updateTemplate, setTemplateActive, deleteTemplate, generateNow) with Zod validation matching the table CHECK constraints (mode/language/difficulty enums, hex colours, AI duration 60..1800).
+- admin/src/app/(app)/templates/page.tsx: list page with status tabs (All/Active/Inactive), cron preview, AI badge, total generated, last run, pagination.
+- admin/src/app/(app)/templates/create-template-dialog.tsx: 4-tab dialog (Basic / Schedule / Questions / AI Presenter) with cron presets, filter-based question fields, AI avatar/voice ID inputs (disabled when ai_enabled=false).
+- admin/src/app/(app)/templates/[id]/page.tsx: detail page — schedule/config card, AI presenter card, current/last game cards, history table (linked to /games/<id>).
+- admin/src/app/(app)/templates/[id]/template-actions.tsx: client component for Generate-now / Activate-Deactivate / Delete.
+- admin/src/lib/nav.ts: new "Game Templates" entry (CalendarClock icon) in Content section.
+
+[2026-05-30] [A-01] [TASK] Game Templates Engine v1 — operational notes
+- Cron expressions are UTC only. Admin UI hints this on the schedule tab.
+- Generated games always start as status=upcoming, mode=live (R-D-LiveOnly invariant for templated games).
+- Question selection is filter-based: question_category / question_difficulty / question_language on the template are matched against the questions table at generation time. NULL means "any value".
+- Overlap guard: a template with a non-completed current_game_id will not generate another game unless POST /generate-now { skip_overlap: true }.
+
+[2026-05-30] [A-01] [BUILD] Game Template Engine — test suite + UI completion
+  • admin/src/app/(app)/templates/[id]/edit/page.tsx — new edit page (RSC)
+  • admin/src/app/(app)/templates/[id]/edit/edit-template-form.tsx — full edit form (basic info, schedule, gameplay, question filters, AI presenter)
+  • admin/src/app/(app)/templates/[id]/page.tsx — added Edit button (Pencil icon → /templates/:id/edit)
+  • .env.docker.example — added LIVEAVATAR_API_URL/KEY, RABBITMQ_MGMT_URL/USER/PASSWORD/VHOST, MQ_COMMAND_EXCHANGE/QUEUE, TEMPLATE_GEN_INTERVAL_MS
+  • supabase/functions/_shared/rabbitmq_test.ts — Deno unit tests: isConfigured, publish (ok/error/network-fail), publishQuizShowStart payload composition
+  • supabase/migrations/tests/game_templates_test.sql — SQL tests: match_cron_expression (wildcard/step/range/list/DOW/malformed/NULL), generate_game_from_template (happy path, overlap guard, skip_overlap, AI streaming)
+  • supabase/migrations/tests/template_generator_integration_test.sql — Integration test: cron-tick RPC generates game for matching template, skipped_recent on second tick, no_match for impossible cron, inactive template ignored
+  • admin/playwright.config.ts — Playwright config (auth setup project + chromium runner)
+  • admin/e2e/auth.setup.ts — login helper saving session to .auth/admin.json
+  • admin/e2e/templates.spec.ts — 7-step smoke test: list/create/detail/edit/  • admin/e2e/templates.spec.ts — 7-step smoke test: list/create/detail/edit/  • admin/e2e/templates.spec.ts — 7-step smoke test: list/createtalled)

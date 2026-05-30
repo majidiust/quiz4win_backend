@@ -1,6 +1,6 @@
 # Quiz4Win Backend — Architecture Map
 
-Last updated: 2026-05-22 (rev 2 — post initial-schema migration)
+Last updated: 2026-05-30 (rev 3 — Game Template Engine v1)
 Owner: A-03 (Architecture Agent)
 
 ---
@@ -141,7 +141,8 @@ backend/
 |-------|-------------|-------------------|
 | `questions` | Question bank: text, choices[4], correct_index, category, difficulty, language | Enabled, policy pending |
 | `show_hosts` | Live-show hosts: bio, avatar, liveKit identity, rating stats | Enabled, policy pending |
-| `games` | Game lobby: mode, title, entry_fee, prize_pool, status, scheduled_at, livekit_room | Enabled, policy pending |
+| `games` | Game lobby: mode, title, entry_fee, prize_pool, status, scheduled_at, livekit_room, `template_id` FK | Enabled, policy pending |
+| `game_templates` | Recurring game spec: cron_expression (UTC), all game config fields, AI presenter fields, question filter criteria, lifecycle tracking (`current_game_id`, `last_completed_game_id`, `last_generated_at`, `total_games_generated`) | Service-role only (RLS strict) |
 | `game_questions` | Ordered question list for each game | Enabled, policy pending |
 | `game_participants` | Users joined to a game: score, rank, answers, entry_fee_paid, prize_earned | Enabled, policy pending |
 | `game_answers` | Per-question answer record with correctness and timing | Enabled, policy pending |
@@ -203,3 +204,7 @@ backend/
 | 2026-05-22 | **[OPEN CONFLICT]** Initial schema uses `NUMERIC(12,2)` for money columns, matching the Data Schema Google Sheet, despite R-02 mandating integer cents | Sheet is the immediate source of truth; R-02 conflict requires human + A-05 resolution. Two options: (a) amend R-02 to allow NUMERIC(12,2) or (b) refactor to BIGINT cents columns. Tracked as P0 blocker in Open_Tasks_AI.md | Pending |
 | 2026-05-22 | Wallet balance embedded in `profiles.wallet_balance` (not a separate `wallets` table) | Data Schema sheet defines balance as a column in profiles; no separate wallets table in the schema | A-03 |
 | 2026-05-22 | `database.types.ts` is the canonical TypeScript type file (replaces planned `types.ts`) | Naming aligns with Supabase codegen conventions and clearly identifies the file's purpose | A-03 |
+| 2026-05-30 | Game Template Engine v1 added as a new top-level module | Recurring/scheduled games with cron-based generation, filter-based question selection, and AI presenter integration. Spans schema (`game_templates`), Edge Functions (`admin-game-templates`, `admin-liveavatar`), shared helper (`_shared/rabbitmq.ts`), Docker service (`deploy/template-generator`), and admin UI (`admin/src/app/(app)/templates/`) | A-03 |
+| 2026-05-30 | Cron loop runs in a dedicated Docker service (`template-generator`) rather than `pg_cron` | Keeps the database free of background scheduling concerns; the Deno loop polls `cron_tick_templates()` RPC every 60 s and is independently restartable. Import direction: `template-generator` → Postgres RPCs only (no Edge Function dependency) | A-03 |
+| 2026-05-30 | AI presenter dispatch uses RabbitMQ Management HTTP API (`_shared/rabbitmq.ts`) as a best-effort publish | Avoids hard-coupling the game lifecycle to broker availability — failure is logged in `admin_audit_log` but never rolls back the start transition. `admin-games` → `_shared/rabbitmq.ts` is allowed; reverse direction is forbidden | A-03 |
+| 2026-05-30 | Templated games are constrained to `mode=live` and start in `status=upcoming` | Matches product decision: only live, AI-hosted shows are auto-generated; manual lobby-style games remain admin-created. Enforced inside `generate_game_from_template` RPC | A-05 |

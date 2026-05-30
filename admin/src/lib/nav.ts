@@ -23,6 +23,7 @@ import {
   KeyRound,
   Star,
   Smartphone,
+  CalendarClock,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -58,6 +59,7 @@ export const navSections: NavSection[] = [
     title: "Content",
     items: [
       { title: "Games", href: "/games", icon: Gamepad2, roles: ["super_admin", "admin", "moderator"] },
+      { title: "Game Templates", href: "/templates", icon: CalendarClock, roles: ["super_admin", "admin", "moderator"] },
       { title: "Live Shows", href: "/shows", icon: Radio, roles: ["super_admin", "admin", "moderator"] },
       { title: "Host Applications", href: "/host-applications", icon: Star, roles: ["super_admin", "admin", "moderator"] },
       { title: "Early Birds", href: "/early-birds", icon: Smartphone, roles: ["super_admin", "admin", "moderator"] },
