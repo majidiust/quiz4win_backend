@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -12,11 +12,17 @@ interface Props {
   status: string;
 }
 
+const TERMINAL_STATES = new Set(["failed", "cancelled", "expired"]);
+
 export function PaymentActions({ id, status }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
-  const canVerify = ["pending", "init"].includes(status);
+  // Allow re-querying the gateway for any non-succeeded payment. Terminal
+  // states (failed/cancelled/expired) can also be re-checked in case the
+  // upstream provider state has changed since we last polled.
+  const canVerify = status !== "succeeded";
+  const isTerminal = TERMINAL_STATES.has(status);
 
   function handleVerify() {
     startTransition(async () => {
@@ -35,19 +41,17 @@ export function PaymentActions({ id, status }: Props) {
     });
   }
 
+  if (!canVerify) return null;
+
   return (
-    <div className="flex items-center gap-2">
-      {canVerify ? (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleVerify}
-          disabled={pending}
-        >
-          <RefreshCw className={`mr-2 size-4 ${pending ? "animate-spin" : ""}`} />
-          Re-verify status
-        </Button>
-      ) : null}
-    </div>
+    <Button
+      variant={isTerminal ? "outline" : "default"}
+      size="sm"
+      onClick={handleVerify}
+      disabled={pending}
+    >
+      <RefreshCw className={`mr-2 size-4 ${pending ? "animate-spin" : ""}`} />
+      {pending ? "Verifying…" : isTerminal ? "Re-check with gateway" : "Verify with gateway"}
+    </Button>
   );
 }

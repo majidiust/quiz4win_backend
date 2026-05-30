@@ -1,3 +1,11 @@
+[2026-05-30] [A-01] [BUILD] **LiveAvatar Admin UI Integration.** Enhanced game-template editing with a rich selection UI for AI Presenters:
+- Created `admin/src/lib/actions/liveavatar.ts` server actions (`fetchAvatars`, `fetchVoices`, `fetchVoicePreview`) calling the provider directly using `LIVEAVATAR_API_URL` and `LIVEAVATAR_API_KEY`.
+- Built `AvatarPicker` component with a 4-column portrait grid, preview images, and selection highlights.
+- Built `VoicePicker` component with searchable list, language filtering, and on-demand audio preview playback.
+- Integrated pickers into `edit-template-form.tsx` with graceful manual UUID fallbacks.
+
+[2026-05-30] [A-01] [BUILD] **Payments detail enhancements.** Expanded the payment detail view with identifiers, crypto details, extra data, and enriched transaction summary. Added a "Verify with gateway" button available for all non-succeeded statuses.
+
 [2026-05-30] [A-01] [FIX] **.env cleanup & validation.** Deleted dead commented-out block (lines 1-35), fixed invalid inline comment in `BACKUP_SCHEDULE`, filled `MONGODB_URL` placeholder, and removed duplicate `LIVEKIT_*` vars.
 [2026-05-30] [A-01] [REFACTOR] **RabbitMQ env consolidation.** Replaced four separate env vars (`RABBITMQ_MGMT_URL`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD`, `RABBITMQ_VHOST`) with a single `RABBITMQ_URL` AMQP connection URI (e.g. `amqps://user:pass@host/vhost`). Added `parseRabbitUrl()` helper in `supabase/functions/_shared/rabbitmq.ts` that rewrites `amqp(s)://` to `http(s)://`, strips the AMQP port, and extracts user/password/vhost from the URI; `http(s)://` management URLs are still accepted as-is (preserves explicit ports such as 15672). `RABBITMQ_VHOST` is retained as an optional override only. Updated `_shared/rabbitmq_test.ts` (new parser tests + endpoint URL assertions), `.env.docker.example`, `docker-compose.yml` (api service env block), and `docs/game-templates.md` to reflect the new single-URL contract. No call-site changes required — `publishQuizShowStart()` signature unchanged.
 

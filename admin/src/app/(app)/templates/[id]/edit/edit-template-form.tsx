@@ -17,6 +17,8 @@ import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/shell/page-header";
 import { updateTemplate } from "@/lib/actions/templates";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { AvatarPicker } from "./avatar-picker";
+import { VoicePicker } from "./voice-picker";
 
 const LANG_OPTIONS = [
   { value: "en", label: "English" },
@@ -296,13 +298,11 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
             </div>
             {aiEnabled && (
               <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="et-avatar">Avatar ID *</Label>
-                  <Input id="et-avatar" value={aiAvatarId} onChange={(e) => setAiAvatarId(e.target.value)} placeholder="HeyGen avatar UUID" className="font-mono text-xs" />
+                <div className="sm:col-span-2">
+                  <AvatarPicker value={aiAvatarId} onChange={setAiAvatarId} disabled={pending} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="et-voice">Voice ID *</Label>
-                  <Input id="et-voice" value={aiSoundId} onChange={(e) => setAiSoundId(e.target.value)} placeholder="HeyGen voice UUID" className="font-mono text-xs" />
+                <div className="sm:col-span-2">
+                  <VoicePicker value={aiSoundId} onChange={setAiSoundId} disabled={pending} />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="et-aidur">Max duration (s)</Label>

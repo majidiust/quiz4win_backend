@@ -103,6 +103,9 @@ Owner: A-01 (Augment Code Agent)
 ---
 
 ## Completed Tasks
+- [P1] [DONE] [A-01] **LiveAvatar Admin UI Integration** — Enhanced template editor with Avatar/Voice pickers and audio previews. — 2026-05-30
+- [P2] [DONE] [A-01] **Payments detail enhancements** — Expanded payment details with identifiers, crypto cards, and universal verify button. — 2026-05-30
+
 - [P1] [DONE] [A-01] **Admin API Keys management** — Migration `20260528000000_api_keys.sql` (RLS, service-role only), `validateAdminAccess` helper in `_shared/auth.ts` supporting `X-API-Key: key_id.secret`, server actions + `/api-keys` UI page with create/revoke + one-time secret reveal, nav + ROUTE_ROLES entry for super_admin. — 2026-05-28
 - [P1] [DONE] [A-01] **Dedicated Game Edit Page** — Converted `EditGameDialog` modal to a full-screen internal page; added `questions_count` field support. — 2026-05-26
 
