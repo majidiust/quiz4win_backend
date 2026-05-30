@@ -1,10 +1,12 @@
 /**
  * Notifications Edge Function — Quiz4Win
  *
- * GET   /notifications                    — List notifications (API #38)
- * PATCH /notifications/read               — Mark read (API #39)
- * PUT   /notifications/preferences        — Update preferences (API #40)
- * POST  /notifications/push-token         — Register push token (API #41)
+ * GET    /notifications                    — List notifications (API #38)
+ * PATCH  /notifications/read               — Mark read (API #39)
+ * PUT    /notifications/preferences        — Update preferences (API #40)
+ * GET    /notifications/preferences        — Get preferences
+ * POST   /notifications/push-token         — Register push token (API #41)
+ * DELETE /notifications/push-token         — Unregister push token (logout / rotation)
  *
  * Rule compliance: R-01, R-03
  */
@@ -67,6 +69,24 @@ Deno.serve(async (req: Request) => {
       return successResponse({ message: notificationId ? "Notification marked as read" : "All notifications marked as read" });
     }
 
+    // GET /notifications/preferences — fetch current preferences (defaults if none)
+    if (path === "preferences" && req.method === "GET") {
+      const { data } = await supabase
+        .from("notification_preferences")
+        .select("game_reminders, promotions, kyc_updates, system")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      return successResponse({
+        preferences: data ?? {
+          game_reminders: true,
+          promotions: false,
+          kyc_updates: true,
+          system: true,
+        },
+      });
+    }
+
     // PUT /notifications/preferences
     if (path === "preferences" && req.method === "PUT") {
       const prefs = await req.json();
@@ -113,6 +133,28 @@ Deno.serve(async (req: Request) => {
 
       if (error) return errorResponse(sanitizeError(error), 500);
       return successResponse({ message: "Push token registered" }, 201);
+    }
+
+    // DELETE /notifications/push-token — unregister on logout or token rotation.
+    // Accepts either { device_id } or { token } in the body; both scope the
+    // delete to the authenticated user so a user can never remove someone
+    // else's token even if they guess a device_id.
+    if (path === "push-token" && req.method === "DELETE") {
+      let body: { device_id?: string; token?: string } = {};
+      try { body = await req.json(); } catch { /* empty body OK */ }
+      const { device_id, token } = body;
+      if (!device_id && !token) {
+        return errorResponse("device_id or token is required", 400);
+      }
+
+      const admin = getAdminClient();
+      let q = admin.from("push_tokens").delete().eq("user_id", user.id);
+      if (device_id) q = q.eq("device_id", device_id);
+      else if (token) q = q.eq("token", token);
+
+      const { error } = await q;
+      if (error) return errorResponse(sanitizeError(error), 500);
+      return successResponse({ message: "Push token unregistered" });
     }
 
     return errorResponse("Not found", 404);
