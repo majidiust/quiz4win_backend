@@ -7,7 +7,7 @@
 # We use the official denoland image (same Deno runtime as the api service)
 # so the team only has to learn one runtime.
 
-FROM denoland/deno:alpine-1.46.3
+FROM denoland/deno:alpine-2.3.3
 
 # tini gives us PID 1 signal handling so SIGTERM cleanly stops the loop.
 RUN apk add --no-cache tini ca-certificates

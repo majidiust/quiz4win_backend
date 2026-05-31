@@ -6,7 +6,7 @@
 #
 # Uses the same Deno version as the api and template-generator services.
 
-FROM denoland/deno:alpine-1.46.3
+FROM denoland/deno:alpine-2.3.3
 
 # tini for PID-1 signal forwarding (clean SIGTERM on docker stop).
 RUN apk add --no-cache tini ca-certificates
