@@ -942,7 +942,10 @@ async function handleAdvanceQuestion(payload: any): Promise<void> {
 
 async function startConsumer(): Promise<void> {
   console.log("[orchestrator] connecting to RabbitMQ…");
-  const conn = await amqpConnect(RABBITMQ_URL);
+  // Explicitly pass servername for SNI — required when running amqplib under
+  // Deno's Node-compat TLS layer, which does not always infer it automatically.
+  const mqHostname = new URL(RABBITMQ_URL.replace(/^amqps?/, "https")).hostname;
+  const conn = await amqpConnect(RABBITMQ_URL, { servername: mqHostname });
   const channel = await conn.createChannel();
   await channel.assertQueue(MQ_QUEUE, { durable: true });
   await channel.prefetch(1);
