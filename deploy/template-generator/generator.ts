@@ -197,44 +197,14 @@ async function schedulerTick(): Promise<void> {
       }
       await publishStartGame(g.id, g.title);
 
-      // Event-driven next-game generation (spec: "create next game when
-      // current Upcoming Game changes to Running"). With the relaxed overlap
-      // rule (blocks only on 'upcoming'), this call succeeds the moment the
-      // current game leaves 'upcoming'.
-      if (g.template_id) {
-        await generateNextGameForTemplate(g.template_id, g.id);
-      }
+      // Next-game generation is handled exclusively by the cron tick
+      // (generate_games_from_active_templates) which runs every minute and
+      // respects each template's cron_expression. Event-driven generation
+      // here would bypass cron and create games on a duration_minutes cadence
+      // instead of the scheduled cron cadence.
     }
   } catch (err) {
     console.error("[scheduler] tick failed:", err instanceof Error ? err.message : err);
-  }
-}
-
-async function generateNextGameForTemplate(templateId: string, currentGameId: string): Promise<void> {
-  try {
-    const res = await fetch(
-      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/rpc/generate_game_from_template`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": SERVICE_ROLE_KEY!,
-          "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
-        },
-        body: JSON.stringify({ p_template_id: templateId }),
-      },
-    );
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      console.warn(`[scheduler] next-game RPC HTTP ${res.status}: ${txt.slice(0, 200)}`);
-      return;
-    }
-    const newId = await res.json().catch(() => null) as string | null;
-    if (newId) {
-      console.log(`[scheduler] generated next game template=${templateId} new=${newId} after=${currentGameId}`);
-    }
-  } catch (err) {
-    console.warn("[scheduler] generateNextGameForTemplate failed:", err instanceof Error ? err.message : err);
   }
 }
 
