@@ -54,7 +54,13 @@ export async function validateJWT(req: Request): Promise<AuthResult> {
   // makes the SDK read from its internal session, which is empty in an
   // Edge Function context (persistSession: false) — so it would always
   // return AuthSessionMissingError regardless of the forwarded header.
-  const supabase = getAnonClient(req);
+  //
+  // Use getPublicClient() (not getAnonClient) so the SDK's default
+  // "Authorization: Bearer <ANON_KEY>" header reaches gotrue unchanged.
+  // getAnonClient(req) forwards the *user's* Bearer into global.headers,
+  // which overrides the SDK's apikey slot on /auth/v1/* calls and causes
+  // gotrue to return "Invalid API key" — same root cause fixed in 408cd35.
+  const supabase = getPublicClient();
   const startedAt = Date.now();
   const { data: { user }, error } = await supabase.auth.getUser(token);
   const elapsed = Date.now() - startedAt;

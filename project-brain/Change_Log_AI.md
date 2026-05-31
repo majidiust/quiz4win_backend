@@ -58,6 +58,8 @@
 
 # Quiz4Win Backend — AI Agent Change Log
 
+[2026-05-31] [A-01] [FIX] **validateJWT: switch from `getAnonClient(req)` to `getPublicClient()` in `_shared/auth.ts`.** Root cause of the "Invalid API key" / 401 on `POST /auth/update-password` (and every other endpoint that calls `validateJWT`): `getAnonClient(req)` puts the user's Bearer JWT into `global.headers.Authorization`, which overrides the SDK's default `Authorization: Bearer <ANON_KEY>` on all `/auth/v1/*` calls — gotrue then rejects the call with "Invalid API key". The token is passed *explicitly* to `supabase.auth.getUser(token)` so no header forwarding is needed. One-line change, same pattern as `408cd35`. Confirmed from production logs.
+
 [2026-05-31] [A-01] [REVERT] **reset-password: reverted `3e4da41` + `59c562e`.** User reported signin and other endpoints regressed after the password-reset edits. Both `supabase/functions/auth/index.ts` and `app/public/auth/reset-password.html` restored to their state at `408cd35` (last known-good commit). Pushed as `535baf6`. The original password-reset "link expired" issue is back on the open-task list; **do not retry without explicit user approval and a clear diagnostic from the edge-function logs first.**
 
 [2026-05-24] [A-01] [FIX] Email logo now served from app.quiz4win.com (public static container) instead of panel.quiz4win.com to avoid auth-middleware / image-proxy issues. Removed duplicate from admin/public/email/.
