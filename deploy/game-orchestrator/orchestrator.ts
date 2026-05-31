@@ -27,9 +27,10 @@
 
 // deno-lint-ignore-file no-explicit-any
 
-// Native Deno AMQP client — uses Deno's TLS stack directly (rustls),
-// avoiding the Node-compat amqplib TLS interop issues with CloudAMQP.
-import { connect as amqpConnect } from "https://deno.land/x/amqp@v0.24.0/mod.ts";
+// CloudAMQP's official AMQP 0-9-1 client — native Deno support, uses
+// Deno.connectTls directly. Avoids amqplib's Node-compat TLS issues and
+// deno.land/x/amqp's broken jsr:@std/io dependency.
+import { AMQPClient } from "npm:@cloudamqp/amqp-client@3.1.1";
 import { createClient } from "npm:redis@4";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -944,18 +945,17 @@ async function handleAdvanceQuestion(payload: any): Promise<void> {
 
 async function startConsumer(): Promise<void> {
   console.log("[orchestrator] connecting to RabbitMQ…");
-  const conn = await amqpConnect(RABBITMQ_URL);
-  const channel = await conn.openChannel();
-  await channel.declareQueue({ queue: MQ_QUEUE, durable: true });
-  await channel.qos({ prefetchCount: 1, global: false });
+  const amqp = new AMQPClient(RABBITMQ_URL);
+  const conn = await amqp.connect();
+  const channel = await conn.channel();
+  await channel.prefetch(1);
+  const queue = await channel.queue(MQ_QUEUE, { durable: true });
 
   console.log(`[orchestrator] consuming queue=${MQ_QUEUE}`);
 
-  const decoder = new TextDecoder();
-
-  await channel.consume({ queue: MQ_QUEUE }, async (args: any, _props: any, data: Uint8Array) => {
+  await queue.subscribe({ noAck: false }, async (msg: any) => {
     try {
-      const payload = JSON.parse(decoder.decode(data)) as any;
+      const payload = JSON.parse(msg.bodyString() ?? "{}") as any;
       const type: string = payload.type ?? "";
       console.log(`[orchestrator] received type=${type} gameId=${payload.gameId ?? "-"}`);
 
@@ -990,11 +990,11 @@ async function startConsumer(): Promise<void> {
           console.warn(`[orchestrator] unknown message type: ${type}`);
       }
 
-      await channel.ack({ deliveryTag: args.deliveryTag });
+      await msg.ack();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error("[orchestrator] message handler error:", errMsg);
-      await channel.nack({ deliveryTag: args.deliveryTag, requeue: false }); // dead-letter on repeated failure
+      await msg.nack(false); // requeue=false → dead-letter on repeated failure
     }
   });
 }
