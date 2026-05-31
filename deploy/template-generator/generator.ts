@@ -163,7 +163,7 @@ async function schedulerTick(): Promise<void> {
     const now = new Date().toISOString();
     const res = await fetch(
       `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/games` +
-      `?status=eq.upcoming&scheduled_at=lte.${encodeURIComponent(now)}&select=id,title`,
+      `?status=eq.upcoming&scheduled_at=lte.${encodeURIComponent(now)}&select=id,title,template_id`,
       {
         headers: {
           "apikey": SERVICE_ROLE_KEY!,
@@ -173,7 +173,7 @@ async function schedulerTick(): Promise<void> {
       },
     );
     if (!res.ok) return;
-    const games = await res.json() as Array<{ id: string; title: string }>;
+    const games = await res.json() as Array<{ id: string; title: string; template_id: string | null }>;
     if (!games.length) return;
     console.log(`[scheduler] ${games.length} game(s) ready to start`);
     for (const g of games) {
@@ -196,9 +196,90 @@ async function schedulerTick(): Promise<void> {
         continue;
       }
       await publishStartGame(g.id, g.title);
+
+      // Event-driven next-game generation (spec: "create next game when
+      // current Upcoming Game changes to Running"). With the relaxed overlap
+      // rule (blocks only on 'upcoming'), this call succeeds the moment the
+      // current game leaves 'upcoming'.
+      if (g.template_id) {
+        await generateNextGameForTemplate(g.template_id, g.id);
+      }
     }
   } catch (err) {
     console.error("[scheduler] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function generateNextGameForTemplate(templateId: string, currentGameId: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/rpc/generate_game_from_template`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SERVICE_ROLE_KEY!,
+          "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+        },
+        body: JSON.stringify({ p_template_id: templateId }),
+      },
+    );
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.warn(`[scheduler] next-game RPC HTTP ${res.status}: ${txt.slice(0, 200)}`);
+      return;
+    }
+    const newId = await res.json().catch(() => null) as string | null;
+    if (newId) {
+      console.log(`[scheduler] generated next game template=${templateId} new=${newId} after=${currentGameId}`);
+    }
+  } catch (err) {
+    console.warn("[scheduler] generateNextGameForTemplate failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ─── Watchdog tick ────────────────────────────────────────────────────────────
+// Force-finalises games whose duration_minutes (+ grace) has elapsed but the
+// orchestrator never delivered GAME_ENDED. RPC selects status='live' rows and
+// atomically flips them to 'completed' with ended_at=NOW().
+const WATCHDOG_GRACE_MINUTES = Number(Deno.env.get("WATCHDOG_GRACE_MINUTES") ?? 5);
+
+interface WatchdogRow {
+  game_id: string;
+  template_id: string | null;
+  started_at: string;
+  expected_end: string;
+}
+
+async function watchdogTick(): Promise<void> {
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/rpc/force_finalize_stuck_games`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SERVICE_ROLE_KEY!,
+          "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+        },
+        body: JSON.stringify({ p_grace_minutes: WATCHDOG_GRACE_MINUTES }),
+      },
+    );
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error(`[watchdog] rpc HTTP ${res.status}: ${txt.slice(0, 200)}`);
+      return;
+    }
+    const rows = await res.json() as WatchdogRow[] | null;
+    if (!Array.isArray(rows) || rows.length === 0) return;
+    for (const r of rows) {
+      console.warn(
+        `[watchdog] force-finalized game=${r.game_id} template=${r.template_id ?? "-"} ` +
+        `started_at=${r.started_at} expected_end=${r.expected_end}`,
+      );
+    }
+  } catch (err) {
+    console.error("[watchdog] tick failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -365,7 +446,7 @@ async function reminderTick(): Promise<void> {
 // ─── Combined tick ────────────────────────────────────────────────────────────
 
 async function fullTick(): Promise<void> {
-  await Promise.all([tick(), schedulerTick(), reminderTick()]);
+  await Promise.all([tick(), schedulerTick(), reminderTick(), watchdogTick()]);
 }
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

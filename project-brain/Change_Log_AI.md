@@ -325,3 +325,10 @@ Architecture (§2.1 compliant — Redis source of truth, not Postgres FOR UPDATE
     'completed', column is ended_at).
   • No scheduled job to finalize games whose duration_minutes has elapsed
     when the orchestrator misses the GAME_ENDED path.
+[2026-05-31] [A-01] [BUILD] Game lifecycle, round 2 — orchestrator finalize fix + watchdog + event-driven next-game generation
+- deploy/game-orchestrator/orchestrator.ts:579 — fix invalid finalize: status:'finished'/finished_at -> status:'completed'/ended_at (matches schema CHECK constraint and actual column name). Every game finalize was failing silently before this.
+- supabase/migrations/20260531210000_force_finalize_stuck_games.sql — new force_finalize_stuck_games(grace_minutes INT DEFAULT 5) RPC. Selects games with status='live' AND started_at + template.duration_minutes + grace_minutes <= NOW(), atomically flips to status='completed', ended_at=NOW(). Race-guarded by WHERE g.status='live' in the UPDATE. Returns one row per game flipped (game_id, template_id, started_at, expected_end) for caller logging. Prize distribution NOT touched — lifecycle recovery only.
+- deploy/template-generator/generator.ts:
+  - watchdogTick(): added to fullTick(); calls force_finalize_stuck_games via PostgREST RPC every interval (default 60s). Grace via WATCHDOG_GRACE_MINUTES env var (default 5).
+  - schedulerTick(): after flipping a game upcoming->open and publishing StartGame, now also calls generate_game_from_template(template_id) so the next upcoming game is created at the moment the current one starts — event-driven, not cron-driven (spec: "create next game when current Upcoming Game changes to Running"). Made possible by the relaxed overlap rule in 20260531200000_game_lifecycle.sql.
+- Migration applied to live DB. Container rebuild required: docker compose up -d --build --force-recreate template-generator game-orchestrator

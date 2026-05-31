@@ -576,7 +576,7 @@ async function closeQuestion(game: {
 async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   console.log(`[orchestrator] game=${gameId} finalizing`);
   const now = new Date().toISOString();
-  await dbUpdate("games", { id: gameId }, { status: "finished", finished_at: now });
+  await dbUpdate("games", { id: gameId }, { status: "completed", ended_at: now });
   await broadcast(roomName, { type:"GAME_ENDED", gameId, serverTime:Date.now() }, "GAME_ENDED");
   // Expire Redis keys after 1 hour (§15.1 — TTLs to avoid stale state)
   const r = await getRedis();
