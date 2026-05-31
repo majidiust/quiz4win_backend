@@ -9,7 +9,7 @@
  */
 
 import type { User } from "@supabase/supabase-js";
-import { getAnonClient } from "./supabase.ts";
+import { getPublicClient } from "./supabase.ts";
 
 export interface AuthResult {
   user: User | null;
