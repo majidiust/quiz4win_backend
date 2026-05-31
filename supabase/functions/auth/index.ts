@@ -239,23 +239,55 @@ Deno.serve(async (req: Request) => {
     // Works for both flows:
     //  - In-app OTP flow: token comes from /auth/verify-otp.
     //  - Magic-link Universal Link flow: token comes from the URL hash
-    //    fragment of the recovery email (#access_token=…).
+    //    fragment of the recovery email (#access_token=…&refresh_token=…).
     // Authorization: Bearer <access_token>
-    // Body: { new_password }
+    // Body: { new_password, refresh_token? }
+    //
+    // Resilience: the recovery access_token has a 1-hour TTL. If the user
+    // submits the form after that window we fall back to refresh_token (also
+    // present in the recovery URL hash, valid for ~7 days) to mint a fresh
+    // session server-side and verify the user — instead of returning 401
+    // "Link expired" on a link that is actually still recoverable. The
+    // refresh_token is only consumed when the Bearer token is invalid, so
+    // fresh links don't burn their refresh_token preemptively.
     if (path === "update-password" && req.method === "POST") {
-      const { user, error: authErr } = await validateJWT(req);
-      if (authErr || !user) return errorResponse("unauthorized", 401);
-      const { new_password } = await req.json();
+      const body = await req.json();
+      const { new_password, refresh_token } = body as {
+        new_password?: string;
+        refresh_token?: string;
+      };
       if (!new_password || new_password.length < 8) {
         return errorResponse("weak_password", 400);
       }
+
+      let userId: string | null = null;
+      const primary = await validateJWT(req);
+      if (primary.user && !primary.error) {
+        userId = primary.user.id;
+      } else if (refresh_token) {
+        // Access_token expired or invalid — try the refresh_token fallback.
+        const supabase = getPublicClient();
+        const { data, error: refreshErr } = await supabase.auth.refreshSession({
+          refresh_token,
+        });
+        if (!refreshErr && data.user) {
+          userId = data.user.id;
+          console.log(
+            `[auth] update-password — recovered via refresh_token user=${userId}`,
+          );
+        } else {
+          console.warn(
+            `[auth] update-password — refresh fallback failed: ${refreshErr?.message ?? "no user"}`,
+          );
+        }
+      }
+      if (!userId) return errorResponse("unauthorized", 401);
+
       // Use the admin client to update the password. The anon client's
       // auth.updateUser() relies on an internal session that we never
-      // establish here (we only forward the Bearer token), so it would
-      // fail with "Auth session missing". The user id was already verified
-      // by validateJWT via supabase.auth.getUser().
+      // establish here, so it would fail with "Auth session missing".
       const admin = getAdminClient();
-      const { error } = await admin.auth.admin.updateUserById(user.id, {
+      const { error } = await admin.auth.admin.updateUserById(userId, {
         password: new_password,
       });
       if (error) {
