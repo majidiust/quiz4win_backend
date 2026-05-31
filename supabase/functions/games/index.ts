@@ -138,15 +138,12 @@ Deno.serve(async (req: Request) => {
     // POST /games/:id/join — join game (R-09: atomic debit + join)
     if (gameId && action === "join" && req.method === "POST") {
       const { data: game } = await supabase
-        .from("games").select("id, status, entry_fee, max_players, total_participants, scheduled_at").eq("id", gameId).single();
+        .from("games").select("id, status, entry_fee, max_players, total_participants").eq("id", gameId).single();
       if (!game) return errorResponse("game_not_found", 404);
-      // Registration window: status IN ('upcoming','open') AND scheduled_at > NOW().
-      // The DB RPC enforces the same; this is a fast-path rejection.
+      // Registration gate: status alone (`upcoming` or `open`). The scheduler
+      // owns `open` → `live`; until then the game is joinable. DB RPC mirrors.
       if (game.status !== "upcoming" && game.status !== "open") {
         return errorResponse("game_not_open", 400);
-      }
-      if (game.scheduled_at && new Date(game.scheduled_at).getTime() <= Date.now()) {
-        return errorResponse("registration_closed", 400);
       }
       if (game.max_players && (game.total_participants ?? 0) >= game.max_players) {
         return errorResponse("game_full", 400);
