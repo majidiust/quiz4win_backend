@@ -27,18 +27,17 @@
 
 // deno-lint-ignore-file no-explicit-any
 
-// CloudAMQP's official AMQP 0-9-1 client — imported from the repo's Deno
-// entry (mod.ts) which uses Deno.connectTls directly via rustls. The npm:
-// build of this package resolves to the Node.js entry and goes through
-// Deno's Node-compat TLS layer, which hangs during AMQP negotiation.
-import { AMQPClient } from "https://raw.githubusercontent.com/cloudamqp/amqp-client.js/v3.1.1/mod.ts";
+// deno.land/x/amqp uses Deno.connectTls (native rustls) — no Node-compat
+// layer. The broken jsr:@std/io BufReader export is pinned to 0.224.9 via
+// the deno.json import map in this directory.
+import { connect } from "https://deno.land/x/amqp@v0.24.0/mod.ts";
 import { createClient } from "npm:redis@4";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const REDIS_URL       = Deno.env.get("REDIS_URL") ?? "redis://127.0.0.1:6379";
-const RABBITMQ_URL    = Deno.env.get("RABBITMQ_URL") ?? "";
-const MQ_QUEUE        = Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.commands";
+const REDIS_URL    = Deno.env.get("REDIS_URL") ?? "redis://127.0.0.1:6379";
+const RABBITMQ_URL = Deno.env.get("RABBITMQ_URL") ?? "";
+const MQ_QUEUE     = Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.commands";
 const SUPABASE_URL    = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY     = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const OPENAI_KEY      = Deno.env.get("OPENAI_API_KEY") ?? "";
@@ -942,62 +941,62 @@ async function handleAdvanceQuestion(payload: any): Promise<void> {
   await handleStartQuestion({ gameId, questionIndex: idx, timeLimitSeconds, correlationId, publishedAt });
 }
 
-// ─── AMQP consumer ────────────────────────────────────────────────────────────
+// ─── AMQP consumer ───────────────────────────────────────────────────────────
 
 async function startConsumer(): Promise<void> {
-  console.log("[orchestrator] connecting to RabbitMQ…");
-  const amqp = new AMQPClient(RABBITMQ_URL);
-  const conn = await amqp.connect();
-  const channel = await conn.channel();
-  await channel.prefetch(1);
-  const queue = await channel.queue(MQ_QUEUE, { durable: true });
+  const decoder = new TextDecoder();
 
-  console.log(`[orchestrator] consuming queue=${MQ_QUEUE}`);
-
-  await queue.subscribe({ noAck: false }, async (msg: any) => {
+  while (true) {
     try {
-      const payload = JSON.parse(msg.bodyString() ?? "{}") as any;
-      const type: string = payload.type ?? "";
-      console.log(`[orchestrator] received type=${type} gameId=${payload.gameId ?? "-"}`);
+      console.log("[orchestrator] connecting to RabbitMQ…");
+      const conn = await connect(RABBITMQ_URL);
+      const ch   = await conn.openChannel();
 
-      switch (type) {
-        // ── Lifecycle ──────────────────────────────────────────────────────────
-        case "StartGame":
-          await handleStartGame(payload);
-          break;
-        case "FinalizeGame": {
-          const roomName = payload.livekitRoomName ?? `quiz-${payload.gameId}`;
-          await finalizeGame(payload.gameId, roomName);
-          break;
-        }
-        // ── Presenter-driven question flow ─────────────────────────────────────
-        case "PrepareQuestion":
-          await handlePrepareQuestion(payload);
-          break;
-        case "StartQuestion":
-          await handleStartQuestion(payload);
-          break;
-        case "CloseQuestion":
-          await handleCloseQuestion(payload);
-          break;
-        case "AdvanceQuestion":
-          await handleAdvanceQuestion(payload);
-          break;
-        // ── Internal async events ──────────────────────────────────────────────
-        case "ANSWER_PERSIST_REQUESTED":
-          await handlePersistAnswer(payload);
-          break;
-        default:
-          console.warn(`[orchestrator] unknown message type: ${type}`);
-      }
+      await ch.qos({ prefetchCount: 1 });
+      await ch.declareQueue({ queue: MQ_QUEUE, durable: true });
+      console.log(`[orchestrator] consuming queue=${MQ_QUEUE}`);
 
-      await msg.ack();
+      await ch.consume({ queue: MQ_QUEUE, noAck: false }, (args, _props, data) => {
+        const body = decoder.decode(data);
+        (async () => {
+          try {
+            const payload = JSON.parse(body) as any;
+            const type: string = payload.type ?? "";
+            console.log(`[orchestrator] received type=${type} gameId=${payload.gameId ?? "-"}`);
+
+            switch (type) {
+              case "StartGame":             await handleStartGame(payload); break;
+              case "FinalizeGame": {
+                const roomName = payload.livekitRoomName ?? `quiz-${payload.gameId}`;
+                await finalizeGame(payload.gameId, roomName);
+                break;
+              }
+              case "PrepareQuestion":          await handlePrepareQuestion(payload); break;
+              case "StartQuestion":            await handleStartQuestion(payload); break;
+              case "CloseQuestion":            await handleCloseQuestion(payload); break;
+              case "AdvanceQuestion":          await handleAdvanceQuestion(payload); break;
+              case "ANSWER_PERSIST_REQUESTED": await handlePersistAnswer(payload); break;
+              default: console.warn(`[orchestrator] unknown message type: ${type}`);
+            }
+
+            await ch.ack({ deliveryTag: args.deliveryTag });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error("[orchestrator] message handler error:", errMsg);
+            // requeue=false → dead-letter on repeated failure (same as before)
+            await ch.nack({ deliveryTag: args.deliveryTag, requeue: false });
+          }
+        })();
+      });
+
+      // Block until the broker closes the channel/connection.
+      await ch.closed();
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error("[orchestrator] message handler error:", errMsg);
-      await msg.nack(false); // requeue=false → dead-letter on repeated failure
+      console.error("[orchestrator] RabbitMQ error, reconnecting in 5 s:", errMsg);
+      await new Promise<void>(r => setTimeout(r, 5_000));
     }
-  });
+  }
 }
 
 // ─── Recovery: pick up running games on restart (§15.2) ──────────────────────

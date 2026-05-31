@@ -13,9 +13,12 @@ RUN apk add --no-cache tini ca-certificates
 
 WORKDIR /opt/game-orchestrator
 
+# deno.json must be present before `deno cache` so the import map
+# (jsr:@std/io → 0.224.9) is applied when resolving deno.land/x/amqp deps.
+COPY deno.json      /opt/game-orchestrator/deno.json
 COPY orchestrator.ts /opt/game-orchestrator/orchestrator.ts
 
-# Pre-cache npm dependencies at build time so cold-start is instant.
+# Pre-cache all dependencies at build time so cold-start is instant.
 RUN deno cache \
       --node-modules-dir=auto \
       /opt/game-orchestrator/orchestrator.ts || true
