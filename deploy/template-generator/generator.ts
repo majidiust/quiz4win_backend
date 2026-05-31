@@ -585,76 +585,71 @@ async function prizeNotificationTick(): Promise<void> {
   }
 }
 
-// ─── Queue-builder tick ───────────────────────────────────────────────────────
-// Spec §6 (docs/game_template_logic.md): create the next game when the
-// current one transitions to Running. For each active template whose current
-// game is 'live', if no upcoming/open game is queued yet, generate the next
-// one. scheduled_at is set by generate_game_from_template via next_cron_match.
+// ─── Rules-audit tick ─────────────────────────────────────────────────────────
+// Self-healing watchdog for the game_template lifecycle invariants documented
+// in docs/game_template_logic.md. Calls audit_game_template_rules() which:
 //
-// Invariant (§5): at most ONE upcoming/open game per template. The SQL
-// generate_game_from_template (overlap on 'upcoming'/'open') + the FOR UPDATE
-// row-lock + the partial unique index games_one_registerable_per_template
-// guarantee this even under racy cron / queue-builder timing.
+//   • §5  Cancels duplicate upcoming/open games per template (keeps earliest).
+//   • §3  Cancels orphan/never-started registerable games whose scheduled_at
+//         is older than RULES_AUDIT_ORPHAN_GRACE_MINUTES and started_at IS NULL.
+//   • §2/§5/§6  Refills the queue: for every active template missing an
+//         upcoming/open game, generates the next one (subsumes queue-builder).
+//
+// The RPC returns a JSONB array of actions. Empty = clean state.
 
-async function queueBuilderTick(): Promise<void> {
+interface RulesAuditAction {
+  rule: string;
+  count?: number;
+  game_ids?: string[];
+  template_id?: string;
+  name?: string;
+  game_id?: string;
+  error?: string;
+}
+
+const RULES_AUDIT_ORPHAN_GRACE_MINUTES = Number(
+  Deno.env.get("RULES_AUDIT_ORPHAN_GRACE_MINUTES") ?? 15,
+);
+
+async function rulesAuditTick(): Promise<void> {
   try {
-    const base = SUPABASE_URL!.replace(/\/$/, "");
-    const headers = {
-      "apikey": SERVICE_ROLE_KEY!,
-      "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
-      "Accept": "application/json",
-    };
-
-    // 1. Fetch all active templates with their current_game_id.
-    const tplRes = await fetch(
-      `${base}/rest/v1/game_templates?is_active=eq.true&deleted_at=is.null&select=id,current_game_id`,
-      { headers },
-    );
-    if (!tplRes.ok) return;
-    const templates = await tplRes.json() as Array<{ id: string; current_game_id: string | null }>;
-
-    for (const tpl of templates) {
-      if (!tpl.current_game_id) continue;
-
-      // 2. Check if the current game is live (session running).
-      const gameRes = await fetch(
-        `${base}/rest/v1/games?id=eq.${tpl.current_game_id}&select=status`,
-        { headers },
-      );
-      if (!gameRes.ok) continue;
-      const [game] = await gameRes.json() as Array<{ status: string }>;
-      if (!game || game.status !== "live") continue;
-
-      // 3. Check if a next game is already queued (upcoming or open).
-      const qRes = await fetch(
-        `${base}/rest/v1/games?template_id=eq.${tpl.id}&status=in.(upcoming,open)&select=id&limit=1`,
-        { headers },
-      );
-      if (!qRes.ok) continue;
-      const queued = await qRes.json() as Array<{ id: string }>;
-      if (queued.length > 0) continue; // already queued — nothing to do
-
-      // 4. Queue the next upcoming game.
-      const genRes = await fetch(
-        `${base}/rest/v1/rpc/generate_game_from_template`,
-        {
-          method: "POST",
-          headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify({ p_template_id: tpl.id }),
+    const res = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/rpc/audit_game_template_rules`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": SERVICE_ROLE_KEY!,
+          "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
         },
-      );
-      if (!genRes.ok) {
-        const txt = await genRes.text().catch(() => "");
-        console.warn(`[queue-builder] generate RPC HTTP ${genRes.status}: ${txt.slice(0, 200)}`);
-        continue;
-      }
-      const newId = await genRes.json().catch(() => null) as string | null;
-      if (newId) {
-        console.log(`[queue-builder] queued next game template=${tpl.id} game=${newId}`);
+        body: JSON.stringify({ p_orphan_grace_minutes: RULES_AUDIT_ORPHAN_GRACE_MINUTES }),
+      },
+    );
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error(`[rules-audit] rpc HTTP ${res.status}: ${txt.slice(0, 200)}`);
+      return;
+    }
+    const actions = await res.json() as RulesAuditAction[] | null;
+    if (!Array.isArray(actions) || actions.length === 0) return;
+    for (const a of actions) {
+      switch (a.rule) {
+        case "duplicate_upcoming":
+          console.warn(`[rules-audit] cancelled ${a.count} duplicate upcoming games: ${(a.game_ids ?? []).join(",")}`);
+          break;
+        case "orphan_never_started":
+          console.warn(`[rules-audit] cancelled ${a.count} orphan never-started games: ${(a.game_ids ?? []).join(",")}`);
+          break;
+        case "queue_refill":
+          console.log(`[rules-audit] refilled queue template=${a.template_id} game=${a.game_id}`);
+          break;
+        case "queue_refill_error":
+          console.error(`[rules-audit] refill failed template=${a.template_id}: ${a.error}`);
+          break;
       }
     }
   } catch (err) {
-    console.error("[queue-builder] tick failed:", err instanceof Error ? err.message : err);
+    console.error("[rules-audit] tick failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -664,7 +659,7 @@ async function fullTick(): Promise<void> {
   await Promise.all([
     tick(),
     schedulerTick(),
-    queueBuilderTick(),
+    rulesAuditTick(),
     reminderTick(),
     watchdogTick(),
     prizeDistributionTick(),
