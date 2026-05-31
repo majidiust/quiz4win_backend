@@ -1,8 +1,8 @@
 # Quiz4Win — Player & Spectator Integration Guide
 
-**Audience:** Mobile / web app engineering team building the client app.  
-**Last updated:** 2026-05-31  
-**Base URL:** `{SUPABASE_URL}/functions/v1/game-session`
+**Audience:** Mobile / web app engineering team building the client app.
+**Last updated:** 2026-05-31
+**Base URL:** `https://api.quiz4win.com`
 
 ---
 
@@ -19,7 +19,7 @@ A customer participates in a live quiz through three mechanisms:
 The flow for every player session is:
 
 ```
-Authenticate (Supabase JWT)
+Authenticate (obtain access token)
     ↓
 POST /game-session/:id/join    ← get LiveKit token + initial state
     ↓
@@ -40,13 +40,13 @@ Receive GAME_ENDED             ← show final scores
 
 ## 1. Authentication
 
-All requests require a **Supabase JWT** in the `Authorization` header:
+All requests require a **Bearer access token** in the `Authorization` header:
 
 ```
-Authorization: Bearer <supabase-access-token>
+Authorization: Bearer <access-token>
 ```
 
-Obtain the token via Supabase Auth (email/password, OAuth, magic link, etc.).
+Obtain the token through the standard sign-in flow (email/password, OAuth, magic link, etc.).
 The token identifies the user and is validated server-side before every operation.
 
 ---
@@ -119,7 +119,7 @@ Content-Type: application/json
 
 | Code | Reason | Description |
 |------|--------|-------------|
-| 401  | `unauthorized` | Missing or invalid Supabase JWT |
+| 401  | `unauthorized` | Missing or invalid access token |
 | 404  | `game_not_found` | `gameId` does not exist |
 | 400  | `game_not_joinable` | Game status is not `open` or `live` |
 | 400  | `game_not_found` (Redis) | Game not yet initialised in Redis |

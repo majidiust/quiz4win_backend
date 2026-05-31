@@ -213,7 +213,13 @@ services:
       RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
       MQ_COMMAND_EXCHANGE: ${MQ_COMMAND_EXCHANGE:-}
       MQ_ORCHESTRATOR_QUEUE: ${MQ_ORCHESTRATOR_QUEUE:-quiz.game.commands}
+      # FCM — used by reminderTick() to push T-60/T-10/T-1 game-start reminders.
+      FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/app/configs/quiz4win-68443-firebase-adminsdk-fbsvc-24d33392b8.json}
       TZ: UTC
+    volumes:
+      # Same read-only mount the admin container uses, so a single service-account
+      # JSON powers both FCM senders.
+      - ./configs:/app/configs:ro
     networks:
       - quiz4win
 

@@ -1,7 +1,7 @@
 # Quiz4Win — Payments API Reference
 
 **Base URL:** `https://api.quiz4win.com`
-**Auth:** `Authorization: Bearer <user_jwt>` on every endpoint except `/payments/:id/verify`.
+**Auth:** `Authorization: Bearer <access-token>` on every endpoint except `/payments/:id/verify`.
 **Content-Type:** `application/json`
 **Amounts:** All `amount_cents` values are **integer cents** — e.g. `3000` = $30.00.
 
@@ -69,7 +69,7 @@ Returns all payments for the authenticated user, newest first, unified across al
 
 ```http
 GET /payments?page=1&limit=20
-Authorization: Bearer <user_jwt>
+Authorization: Bearer <access-token>
 ```
 
 ### Response `200`
@@ -131,7 +131,7 @@ Authorization: Bearer <user_jwt>
 
 ```http
 POST /payments
-Authorization: Bearer <user_jwt>
+Authorization: Bearer <access-token>
 Content-Type: application/json
 ```
 
@@ -163,7 +163,7 @@ Open `redirect_url` in a WebView or the system browser. The gateway redirects th
 
 ```http
 POST /payments
-Authorization: Bearer <user_jwt>
+Authorization: Bearer <access-token>
 Content-Type: application/json
 ```
 
@@ -230,7 +230,7 @@ Display `crypto.address` and `crypto.qr_url` directly in the app. Poll `GET /pay
 
 ```http
 GET /payments/3fa85f64-5717-4562-b3fc-2c963f66afa6
-Authorization: Bearer <user_jwt>
+Authorization: Bearer <access-token>
 ```
 
 Returns the full unified Payment object. Scoped to the authenticated user — returns `404` if the ID belongs to another user.

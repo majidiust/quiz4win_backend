@@ -1,3 +1,12 @@
+[2026-05-31] [A-01] [AUDIT] Session started. Resolving Game Orchestrator AMQP connection issues.
+[2026-05-31] [A-01] [FIX] **Game Orchestrator AMQP Consumer restoration.** Fixed the orchestrator crash `The requested module 'jsr:@std/io' does not provide an export named 'BufReader'` and subsequent TLS handshake hangs by:
+- Creating `deploy/game-orchestrator/deno.json` to pin `jsr:@std/io` to `0.224.9`, ensuring the `BufReader` export required by `deno.land/x/amqp` remains available.
+- Switching to the native Deno AMQP client `https://deno.land/x/amqp@v0.24.0/mod.ts`. This client uses `Deno.connectTls` (native rustls) which correctly handles SNI and the AMQP/TLS handshake with CloudAMQP, unlike the Node-compat `amqplib` layer.
+- Restoring the `startConsumer` function with a robust `while(true)` reconnect loop, QoS prefetch(1), and manual ack/nack logic.
+- Updating `deploy/game-orchestrator/Dockerfile` to copy the `deno.json` import map and pre-cache dependencies with it.
+- Removed all temporary RabbitMQ HTTP-polling code and associated environment variables (`MQ_POLL_MS`, `MQ_POLL_BATCH`, `RABBITMQ_VHOST`).
+
+
 [2026-05-30] [A-01] [FIX] **Admin container missing LiveAvatar/LiveKit env.** The admin service in `docker-compose.yml` did not pass `LIVEAVATAR_API_URL`, `LIVEAVATAR_API_KEY`, `LIVEKIT_SERVER_URL`, `LIVEKIT_API_KEY`, or `LIVEKIT_API_SECRET` through to the container. As a result the new `AvatarPicker`/`VoicePicker` server actions returned `{ notConfigured: true }` and the UI silently fell back to the plain UUID inputs — making the new template editor look unchanged after a rebuild. Added all five vars to the admin service `environment` block (with `${VAR:-}` defaults so a missing value does not break compose). Requires `docker compose up -d admin` to recreate the container with the new env.
 
 [2026-05-30] [A-01] [FIX] **Admin panel cache disabled.** Added `Cache-Control: no-cache, no-store, must-revalidate` + `Pragma: no-cache` + `Expires: 0` headers to all non-static admin routes in `next.config.ts`. Static assets (`_next/static/*`) remain long-term cached via immutable fingerprinted URLs. Ensures admins always see the latest deployed version without a hard-refresh.
@@ -288,3 +297,12 @@ Architecture (§2.1 compliant — Redis source of truth, not Postgres FOR UPDATE
 - .env.docker.example: added REDIS_PASSWORD, REDIS_URL, OPENAI_API_KEY, OPENAI_MODEL, MQ_ORCHESTRATOR_QUEUE
 
 [2026-05-31] [A-01] [BUILD] Presenter command handling — implemented PrepareQuestion, StartQuestion, CloseQuestion, AdvanceQuestion in deploy/game-orchestrator/orchestrator.ts. Added STAGE_Q and ACTIVATE_Q Lua scripts for two-phase question flow (staged→active). Added broadcastToIdentity() for private QUESTION_PREPARED events. Added PresenterGameConfig, presenterGames map, stagedQuestions map, module-level prefillQueue(). Updated closeQuestion() to skip auto-advance in presenter mode. Updated handleStartGame() to set up presenter config + store presenterIdentity in Redis. Updated recoverRunningGames() to rebuild presenter state from Redis on restart. Updated docs/game-commands-protocol.md — all six commands marked implemented, presenter identity convention documented.
+
+[2026-05-31] [A-01] [BUILD] Template-generator start reminders — T-60min / T-10min / T-1min FCM pushes:
+- supabase/migrations/20260531180000_games_start_reminders.sql: added reminder_60m_sent_at / reminder_10m_sent_at / reminder_1m_sent_at columns + 3 partial indexes for pending-only scans; new SECURITY DEFINER RPC get_game_reminder_push_tokens() returning opted-in tokens (game_reminders default TRUE).
+- deploy/template-generator/fcm.ts: new Deno-native FCM v1 sender (mirrors admin/src/lib/fcm.ts) — service-account JSON, RS256 JWT via WebCrypto, OAuth2 token cache, concurrency=20 fan-out, invalid-token detection.
+- deploy/template-generator/generator.ts: added reminderTick() that runs each tick, scans 3 windows, atomic claim via PATCH (column IS NULL), per-game FCM fan-out, bulk insert into public.notifications (type='show_reminder', sent_via_push=true) carrying game_id/title/prize_pool/accent_color/glow_color/gradient_colors/minutes_until_start/scheduled_at, then deletes invalid tokens via PostgREST. Token list cached 60s. fullTick() now awaits reminderTick() in parallel with tick/schedulerTick.
+- deploy/template-generator/Dockerfile: copies fcm.ts and adds --allow-read; documents FCM_SERVICE_ACCOUNT_PATH env var.
+- docker-compose.yml: template-generator now mounts ./configs:/app/configs:ro (shared with admin) and exposes FCM_SERVICE_ACCOUNT_PATH (default points to existing firebase-adminsdk JSON).
+- Real-time strategy preserved: still push-based; reminders are minute-granular by design, not polling for state.
+- R-01 compliant: service-account loaded but never logged.

@@ -15,14 +15,15 @@ RUN apk add --no-cache tini ca-certificates
 WORKDIR /opt/template-generator
 
 COPY generator.ts /opt/template-generator/generator.ts
+COPY fcm.ts       /opt/template-generator/fcm.ts
 
-# Pre-cache the network/std deps so cold-start doesn't go to the network. The
-# script only uses Web Fetch + Deno.* so there's nothing to cache yet, but
-# leaving this as a hook for future deps (e.g. amqplib for RabbitMQ).
+# Pre-cache the network/std deps so cold-start doesn't go to the network.
 RUN deno cache /opt/template-generator/generator.ts || true
 
 # Run with minimum permissions:
-#   --allow-env  : SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TEMPLATE_GEN_INTERVAL_MS
-#   --allow-net  : reach the Supabase REST endpoint
+#   --allow-env  : SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TEMPLATE_GEN_INTERVAL_MS,
+#                  RABBITMQ_*, MQ_*, FCM_SERVICE_ACCOUNT_PATH
+#   --allow-net  : reach the Supabase REST endpoint, RabbitMQ, FCM
+#   --allow-read : load the Firebase service-account JSON for push reminders
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["deno", "run", "--allow-env", "--allow-net", "/opt/template-generator/generator.ts"]
+CMD ["deno", "run", "--allow-env", "--allow-net", "--allow-read", "/opt/template-generator/generator.ts"]

@@ -414,7 +414,7 @@ Returned when no active featured game exists or the matching game has no `host_i
 
 ## What These Endpoints Do NOT Return
 
-- `joined_by_me` — requires a user JWT; available only on the authenticated `GET /games` endpoint
+- `joined_by_me` — requires an access token; available only on the authenticated `GET /games` endpoint
 - Email, wallet balance, KYC status, or any other PII
 - Full player names — `/public-leaderboard` only returns `"<First> <Initial>."`
 - Player UUIDs / user IDs

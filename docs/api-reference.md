@@ -1,7 +1,7 @@
 # Quiz4Win API — Games Reference
 
 Base URL: `https://api.quiz4win.com`  
-All requests require: `Authorization: Bearer <user_jwt>`  
+All requests require: `Authorization: Bearer <access_token>`
 All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }` on failure.
 
 ---
@@ -10,7 +10,7 @@ All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }
 
 | Code | HTTP | Meaning |
 |------|------|---------|
-| `unauthorized` | 401 | Missing or invalid JWT |
+| `unauthorized` | 401 | Missing or invalid access token |
 | `game_not_found` | 404 | Game UUID doesn't exist |
 | `game_not_open` | 400 | Game status is not `open` |
 | `game_full` | 400 | `participant_count` reached `max_participants` |
@@ -366,7 +366,7 @@ Manually triggers a prize credit if the automatic post-game crediting failed. Id
 
 ## Admin Game API
 
-All admin endpoints additionally require the JWT to belong to a user with role `super_admin`, `admin`, or `moderator`.
+All admin endpoints additionally require the access token to belong to a user with role `super_admin`, `admin`, or `moderator`.
 
 ---
 

@@ -46,7 +46,7 @@ Body — see existing pattern in `deploy/template-generator/generator.ts`.
 | JWT grants     | `roomJoin=true`, `room=quiz-{gameId}`, `canPublish=true`         |
 | Data topic     | One of `GAME_STARTED`, `QUESTION_PREPARED`, `QUESTION_STARTED`, `QUESTION_CLOSED`, `GAME_ENDED` |
 
-JWT generation reference: `supabase/functions/_shared/livekit.ts` (HS256).
+JWT generation reference: `_shared/livekit.ts` → `signAccessToken()` (HS256).
 The presenter joins with audio enabled so its voice is heard by all players.
 
 ---
@@ -134,7 +134,7 @@ state hash) so it survives an orchestrator restart.
 ```
 
 Call `signAccessToken("ai-presenter-{gameId}", "quiz-{gameId}", { canPublish: true })`
-from `supabase/functions/_shared/livekit.ts` or use the LiveKit SDK.
+from `_shared/livekit.ts` → `signAccessToken()`, or use the LiveKit SDK directly.
 
 ---
 

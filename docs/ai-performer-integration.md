@@ -26,7 +26,7 @@ voice via LiveKit audio and see questions appear on-screen via LiveKit data even
 |-------------|---------|
 | **RabbitMQ access** | `RABBITMQ_URL` credential from the backend team |
 | **LiveKit credentials** | `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET` from the backend team |
-| **Supabase service key** | Only needed if you want to query game metadata directly; optional |
+| **Service access token** | Only needed if you want to query game metadata directly; optional |
 | **`games.run_mode`** | Must be set to `'presenter'` on the game row before `StartGame` |
 
 > **Never log credentials.** All secrets must be kept in environment variables.

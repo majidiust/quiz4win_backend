@@ -86,7 +86,7 @@ Owner: A-01 (Augment Code Agent)
 
 - [P3] [TODO] [A-01] **Implement referral bonus logic** — Credit referrer on referred user's first paid game completion (INV-08). Blocked on P0 referral bonus amount.
 
-- [P3] [TODO] [A-01] **Push notification integration** — Edge Function or DB trigger to send push notifications on game start, result, and withdrawal status updates.
+- [P3] [PARTIAL] [A-01] **Push notification integration** — Game-start reminders (T-60/T-10/T-1) implemented in deploy/template-generator (2026-05-31). Still pending: result/withdrawal notifications.
 
 - [P3] [TODO] [A-04] **Document all PostgreSQL RPC functions** — Add inline SQL comments to every `CREATE FUNCTION` with purpose, parameters, return type, and invariants enforced.
 
@@ -103,6 +103,8 @@ Owner: A-01 (Augment Code Agent)
 ---
 
 ## Completed Tasks
+- [P1] [DONE] [A-01] **Restore Game Orchestrator AMQP Consumer** — Fixed the crash due to missing `BufReader` and the TLS handshake issues with `amqplib` by switching to native `deno.land/x/amqp@v0.24.0` with a pinned `jsr:@std/io@0.224.9` import map. Replaced HTTP polling with robust real-time AMQP consumption. — 2026-05-31
+
 - [P1] [DONE] [A-01] **LiveAvatar Admin UI Integration** — Enhanced template editor with Avatar/Voice pickers and audio previews. — 2026-05-30
 - [P2] [DONE] [A-01] **Payments detail enhancements** — Expanded payment details with identifiers, crypto cards, and universal verify button. — 2026-05-30
 

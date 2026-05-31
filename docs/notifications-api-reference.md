@@ -1,7 +1,7 @@
 # Quiz4Win API — Notifications & Push Reference
 
 Base URL: `https://api.quiz4win.com`  
-All requests require: `Authorization: Bearer <user_jwt>`  
+All requests require: `Authorization: Bearer <access-token>`  
 All responses are JSON: `{ ... }` on success, `{ "error": "<message>" }` on failure.
 
 ---

@@ -20,7 +20,11 @@
  *   RABBITMQ_VHOST              — Optional vhost override.
  *   MQ_COMMAND_EXCHANGE         — Exchange name (default = "").
  *   MQ_ORCHESTRATOR_QUEUE       — Routing key (default = "quiz.game.commands").
+ *   FCM_SERVICE_ACCOUNT_PATH    — Path to Firebase service-account JSON
+ *                                 (optional; default in fcm.ts).
  */
+
+import { isFcmConfigured, sendFcmToTokens } from "./fcm.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -198,10 +202,170 @@ async function schedulerTick(): Promise<void> {
   }
 }
 
+// ─── Start-reminder tick ──────────────────────────────────────────────────────
+// Sends FCM "game starts in X" pushes at three windows (60m / 10m / 1m).
+// Each window is fired at most once per game via reminder_*_sent_at columns
+// added by migration 20260531180000_games_start_reminders.sql.
+//
+// Notification payload carries: game_id, game_title, prize_pool, accent_color,
+// glow_color, gradient_colors, minutes_until_start, scheduled_at.
+
+interface ReminderGame {
+  id: string;
+  title: string;
+  prize_pool: string;     // numeric → string in PostgREST JSON
+  accent_color: string | null;
+  glow_color: string | null;
+  gradient_colors: string[] | null;
+  scheduled_at: string;
+}
+
+interface ReminderWindow {
+  minutes: 60 | 10 | 1;
+  column: "reminder_60m_sent_at" | "reminder_10m_sent_at" | "reminder_1m_sent_at";
+  bodyKey: string;
+}
+
+const REMINDER_WINDOWS: ReminderWindow[] = [
+  { minutes: 60, column: "reminder_60m_sent_at", bodyKey: "in 1 hour" },
+  { minutes: 10, column: "reminder_10m_sent_at", bodyKey: "in 10 minutes" },
+  { minutes:  1, column: "reminder_1m_sent_at",  bodyKey: "in 1 minute" },
+];
+
+const REST = `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1`;
+const restHeaders = (extra: Record<string, string> = {}) => ({
+  "apikey": SERVICE_ROLE_KEY!,
+  "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+  "Accept": "application/json",
+  ...extra,
+});
+
+let _cachedTokens: { at: number; rows: Array<{ user_id: string; token: string; platform: string }> } | null = null;
+const TOKEN_CACHE_TTL_MS = 60_000;
+
+async function fetchEligibleTokens(): Promise<Array<{ user_id: string; token: string; platform: string }>> {
+  if (_cachedTokens && Date.now() - _cachedTokens.at < TOKEN_CACHE_TTL_MS) return _cachedTokens.rows;
+  const res = await fetch(`${REST}/rpc/get_game_reminder_push_tokens`, {
+    method: "POST",
+    headers: restHeaders({ "Content-Type": "application/json" }),
+    body: "{}",
+  });
+  if (!res.ok) {
+    console.error(`[reminder] rpc tokens HTTP ${res.status}`);
+    return [];
+  }
+  const rows = await res.json() as Array<{ user_id: string; token: string; platform: string }>;
+  _cachedTokens = { at: Date.now(), rows };
+  return rows;
+}
+
+async function deleteInvalidTokens(tokens: string[]): Promise<void> {
+  if (tokens.length === 0) return;
+  const inList = tokens.map((t) => `"${t.replace(/"/g, '\\"')}"`).join(",");
+  await fetch(`${REST}/push_tokens?token=in.(${encodeURIComponent(inList)})`, {
+    method: "DELETE",
+    headers: restHeaders({ "Prefer": "return=minimal" }),
+  }).catch((e) => console.warn("[reminder] cleanup invalid tokens failed:", e instanceof Error ? e.message : e));
+}
+
+async function markReminderSent(gameId: string, column: ReminderWindow["column"]): Promise<boolean> {
+  const res = await fetch(`${REST}/games?id=eq.${gameId}&${column}=is.null`, {
+    method: "PATCH",
+    headers: restHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+    body: JSON.stringify({ [column]: new Date().toISOString() }),
+  });
+  return res.ok;
+}
+
+async function insertNotificationRows(gameId: string, gameTitle: string, body: string, data: Record<string, string>, userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  const rows = userIds.map((user_id) => ({
+    user_id,
+    type: "show_reminder",
+    title: gameTitle,
+    body,
+    sent_via_push: true,
+    data,
+  }));
+  // Chunk to keep request size sane.
+  const CHUNK = 500;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const res = await fetch(`${REST}/notifications`, {
+      method: "POST",
+      headers: restHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+      body: JSON.stringify(rows.slice(i, i + CHUNK)),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.warn(`[reminder] insert notifications game=${gameId} HTTP ${res.status} ${t.slice(0, 200)}`);
+    }
+  }
+}
+
+async function processReminderWindow(win: ReminderWindow): Promise<void> {
+  const now = Date.now();
+  const upper = new Date(now + win.minutes * 60_000).toISOString();
+  const lower = new Date(now).toISOString();
+  // Games whose scheduled_at falls in (now, now + window] and this column is still null.
+  const url =
+    `${REST}/games?status=in.(upcoming,open)` +
+    `&scheduled_at=gt.${encodeURIComponent(lower)}` +
+    `&scheduled_at=lte.${encodeURIComponent(upper)}` +
+    `&${win.column}=is.null` +
+    `&select=id,title,prize_pool,accent_color,glow_color,gradient_colors,scheduled_at`;
+  const res = await fetch(url, { headers: restHeaders() });
+  if (!res.ok) {
+    console.error(`[reminder] fetch games (${win.minutes}m) HTTP ${res.status}`);
+    return;
+  }
+  const games = await res.json() as ReminderGame[];
+  if (games.length === 0) return;
+
+  const tokens = await fetchEligibleTokens();
+  if (tokens.length === 0) {
+    // Still mark as sent so we don't keep retrying when no audience exists.
+    for (const g of games) await markReminderSent(g.id, win.column);
+    return;
+  }
+
+  for (const g of games) {
+    const won = await markReminderSent(g.id, win.column);
+    if (!won) continue; // another tick already claimed this reminder
+    const data: Record<string, string> = {
+      type: "show_reminder",
+      game_id: g.id,
+      game_title: g.title,
+      prize_pool: String(g.prize_pool ?? ""),
+      accent_color: g.accent_color ?? "",
+      glow_color: g.glow_color ?? "",
+      gradient_colors: (g.gradient_colors ?? []).join(","),
+      minutes_until_start: String(win.minutes),
+      scheduled_at: g.scheduled_at,
+    };
+    const title = g.title;
+    const body = `Starts ${win.bodyKey} — prize ${g.prize_pool}`;
+    const deviceTokens = tokens.map((t) => t.token);
+    const result = await sendFcmToTokens(deviceTokens, { title, body, data });
+    const userIds = Array.from(new Set(tokens.map((t) => t.user_id)));
+    await insertNotificationRows(g.id, title, body, data, userIds);
+    if (result.invalidTokens.length > 0) await deleteInvalidTokens(result.invalidTokens);
+    console.log(`[reminder] game=${g.id} window=${win.minutes}m delivered=${result.delivered} failed=${result.failed}`);
+  }
+}
+
+async function reminderTick(): Promise<void> {
+  if (!isFcmConfigured()) return; // silently skip when FCM credentials are absent
+  try {
+    for (const win of REMINDER_WINDOWS) await processReminderWindow(win);
+  } catch (err) {
+    console.error("[reminder] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 // ─── Combined tick ────────────────────────────────────────────────────────────
 
 async function fullTick(): Promise<void> {
-  await Promise.all([tick(), schedulerTick()]);
+  await Promise.all([tick(), schedulerTick(), reminderTick()]);
 }
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

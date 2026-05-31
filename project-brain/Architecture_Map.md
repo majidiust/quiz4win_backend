@@ -7,12 +7,12 @@ Owner: A-03 (Architecture Agent)
 
 ## 1. System Overview
 
-Quiz4Win is a **real-money quiz gaming platform**. The backend is hosted entirely on **Supabase** and consists of:
+Quiz4Win is a **real-money quiz gaming platform**. The backend infrastructure consists of:
 
-- **Supabase PostgreSQL** — primary data store (users, games, questions, wallets, transactions)
-- **Supabase Auth** — user identity and JWT issuance
-- **Supabase Edge Functions** — Deno/TypeScript serverless functions (business logic, external API calls)
-- **Supabase Realtime** — live game state broadcast to connected mobile clients
+- **PostgreSQL** — primary data store (users, games, questions, wallets, transactions)
+- **Authentication service** — user identity and access token issuance
+- **Edge Functions** — Deno/TypeScript serverless functions (business logic, external API calls)
+- **Realtime broadcast service** — live game state broadcast to connected mobile clients
 - **S3-compatible Object Storage** (DigitalOcean Spaces, region `fra1`, bucket `wingobingo`) — all file uploads: KYC documents (private, presigned GET), profile avatars (public-read), and any future attachments. Shared by both the edge functions (`supabase/functions/_shared/s3.ts`) and the admin panel (`admin/src/lib/s3.ts`). Supabase Storage is no longer used.
 - **External APIs** — payment gateways (top-up/withdrawal), reCAPTCHA (fraud prevention), Brevo (transactional email)
 
@@ -22,7 +22,7 @@ Quiz4Win is a **real-money quiz gaming platform**. The backend is hosted entirel
 |------|------|-----------|---------|
 | `panel.quiz4win.com` | 5800 → 3000 | `quiz4win-admin` (Next.js)        | Admin panel (staff) |
 | `app.quiz4win.com`   | 5801 → 8080 | `quiz4win-app` (nginx:alpine)     | Customer Universal Link host: AASA + assetlinks manifests, password-reset web fallback, landing page |
-| `api.quiz4win.com`   | 5802 → 8000 | `quiz4win-api` (Deno edge fns)    | All customer + admin REST/Edge endpoints |
+| `api.quiz4win.com`   | 5802 → 8000 | `quiz4win-api` (Deno edge functions)    | All customer + admin REST/Edge endpoints |
 
 Host nginx terminates TLS for all three subdomains and proxies to the loopback ports above. See `deploy/nginx/*.conf` and `docker-compose.yml`.
 
@@ -47,6 +47,10 @@ backend/
 │   ├── Collaboration_Protocol.md
 │   ├── Change_Log_AI.md
 │   └── Open_Tasks_AI.md
+├── deploy/                         # Deployment manifests and Docker services
+│   ├── game-orchestrator/          # ✅ CREATED — RabbitMQ consumer (Deno)
+│   ├── db-maintainer/              # ✅ CREATED — Database lifecycle (Postgres)
+│   └── ...
 └── supabase/
     ├── config.toml                 # Supabase project configuration (<<TBD>>)
     ├── seed.sql                    # Dev/test seed data (<<TBD>>)
@@ -101,8 +105,8 @@ backend/
 ```
 
 **Allowed import directions:**
-- Mobile App → Edge Functions (via Supabase JS client)
-- Edge Functions → Supabase DB (via Supabase admin client inside function)
+- Mobile App → Edge Functions (via public API)
+- Edge Functions → Database (via internal connection)
 - Edge Functions → External APIs (via `fetch`)
 - Edge Functions → `_shared/` utilities
 
@@ -204,6 +208,8 @@ backend/
 | 2026-05-22 | **[OPEN CONFLICT]** Initial schema uses `NUMERIC(12,2)` for money columns, matching the Data Schema Google Sheet, despite R-02 mandating integer cents | Sheet is the immediate source of truth; R-02 conflict requires human + A-05 resolution. Two options: (a) amend R-02 to allow NUMERIC(12,2) or (b) refactor to BIGINT cents columns. Tracked as P0 blocker in Open_Tasks_AI.md | Pending |
 | 2026-05-22 | Wallet balance embedded in `profiles.wallet_balance` (not a separate `wallets` table) | Data Schema sheet defines balance as a column in profiles; no separate wallets table in the schema | A-03 |
 | 2026-05-22 | `database.types.ts` is the canonical TypeScript type file (replaces planned `types.ts`) | Naming aligns with Supabase codegen conventions and clearly identifies the file's purpose | A-03 |
+| 2026-05-31 | Use native Deno AMQP client (`deno.land/x/amqp`) for Game Orchestrator | Resolves TLS handshake issues found with Node-compat `amqplib`. Native `Deno.connectTls` correctly handles CloudAMQP SNI requirements. Transitive dependency `BufReader` from `jsr:@std/io` is pinned to `0.224.9` via `deno.json` import map | A-03 |
+
 | 2026-05-30 | Game Template Engine v1 added as a new top-level module | Recurring/scheduled games with cron-based generation, filter-based question selection, and AI presenter integration. Spans schema (`game_templates`), Edge Functions (`admin-game-templates`, `admin-liveavatar`), shared helper (`_shared/rabbitmq.ts`), Docker service (`deploy/template-generator`), and admin UI (`admin/src/app/(app)/templates/`) | A-03 |
 | 2026-05-30 | Cron loop runs in a dedicated Docker service (`template-generator`) rather than `pg_cron` | Keeps the database free of background scheduling concerns; the Deno loop polls `cron_tick_templates()` RPC every 60 s and is independently restartable. Import direction: `template-generator` → Postgres RPCs only (no Edge Function dependency) | A-03 |
 | 2026-05-30 | AI presenter dispatch uses RabbitMQ Management HTTP API (`_shared/rabbitmq.ts`) as a best-effort publish | Avoids hard-coupling the game lifecycle to broker availability — failure is logged in `admin_audit_log` but never rolls back the start transition. `admin-games` → `_shared/rabbitmq.ts` is allowed; reverse direction is forbidden | A-03 |
