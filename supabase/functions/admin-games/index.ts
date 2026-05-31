@@ -178,10 +178,13 @@ Deno.serve(async (req: Request) => {
 
     // POST /admin/games/:id/end
     if (gameId && action === "end" && req.method === "POST") {
-      await admin.from("games").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", gameId);
-      // TODO: trigger prize distribution via DB function
-      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_ended", target_type: "game", target_id: gameId, created_at: new Date().toISOString() });
-      return successResponse({ message: "Game ended" });
+      await admin.from("games").update({ status: "completed", ended_at: new Date().toISOString() }).eq("id", gameId);
+      // Distribute prizes atomically/idempotently. Safe to call again from the
+      // template-generator safety-net tick if this errors here.
+      const { data: distRes, error: distErr } = await admin.rpc("distribute_prizes", { p_game_id: gameId });
+      if (distErr) console.error(`[admin-games] distribute_prizes failed game=${gameId}: ${distErr.message ?? distErr}`);
+      await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_ended", target_type: "game", target_id: gameId, details: { distribution: distRes ?? null }, created_at: new Date().toISOString() });
+      return successResponse({ message: "Game ended", distribution: distRes ?? null });
     }
 
     // POST /admin/games/:id/pause — freeze countdown (row 121)
@@ -237,18 +240,18 @@ Deno.serve(async (req: Request) => {
     // GET /admin/games/:id/result — final rankings + prize breakdown (row 124)
     if (gameId && action === "result" && req.method === "GET") {
       const [gameRes, partsRes, answersRes] = await Promise.all([
-        admin.from("games").select("id, title, mode, status, entry_fee, prize_pool, prize_breakdown, participant_count, started_at, ended_at").eq("id", gameId).single(),
-        admin.from("game_participants").select("user_id, score, rank, correct_answers, wrong_answers, prize_amount, prize_credited, profiles!user_id(name, email, avatar_url)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false }),
+        admin.from("games").select("id, title, mode, status, entry_fee, prize_pool, prize_pool_currency, prize_breakdown, prizes_distributed_at, prize_notifications_sent_at, total_winners, participant_count, started_at, ended_at").eq("id", gameId).single(),
+        admin.from("game_participants").select("user_id, score, rank, correct_answers, wrong_answers, prize_earned, profiles!user_id(full_name, email, avatar_url)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false }),
         admin.from("game_questions").select("question_id, question_index, asked_at, questions(text, category, difficulty)").eq("game_id", gameId).order("question_index", { ascending: true }),
       ]);
       if (!gameRes.data) return errorResponse("game_not_found", 404);
-      const participants = (partsRes.data ?? []) as Array<{ prize_amount: number | null }>;
-      const totalPrizesPaid = participants.reduce((s, p) => s + (p.prize_amount ?? 0), 0);
+      const participants = (partsRes.data ?? []) as Array<{ prize_earned: number | null }>;
+      const totalPrizesPaid = participants.reduce((s, p) => s + (Number(p.prize_earned) || 0), 0);
       return successResponse({
         game: gameRes.data,
         rankings: partsRes.data ?? [],
         questions: answersRes.data ?? [],
-        summary: { total_prizes_paid_cents: totalPrizesPaid, prize_pool_cents: gameRes.data.prize_pool ?? 0 },
+        summary: { total_prizes_paid: totalPrizesPaid, prize_pool: gameRes.data.prize_pool ?? 0 },
       });
     }
 
@@ -279,25 +282,24 @@ Deno.serve(async (req: Request) => {
 
     // GET /admin/games/:id/participants
     if (gameId && action === "participants" && !actionId && req.method === "GET") {
-      const { data, error } = await admin.from("game_participants").select("*, profiles!user_id(name, email, avatar_url)").eq("game_id", gameId).order("score", { ascending: false });
+      const { data, error } = await admin.from("game_participants").select("*, profiles!user_id(full_name, email, avatar_url)").eq("game_id", gameId).order("score", { ascending: false });
       if (error) return errorResponse("Failed to fetch participants", 500);
       return successResponse({ participants: data ?? [] });
     }
 
     // GET /admin/games/:id/export — CSV (row 125)
     if (gameId && action === "export" && req.method === "GET") {
-      const { data, error } = await admin.from("game_participants").select("user_id, score, rank, prize_amount, prize_credited, joined_at, profiles!user_id(name, email)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false });
+      const { data, error } = await admin.from("game_participants").select("user_id, score, rank, prize_earned, joined_at, profiles!user_id(full_name, email)").eq("game_id", gameId).order("rank", { ascending: true, nullsFirst: false });
       if (error) return errorResponse("Failed to export game results", 500);
-      type Row = { user_id: string; score: number | null; rank: number | null; prize_amount: number | null; prize_credited: boolean | null; joined_at: string; profiles: { name: string; email: string } | null };
+      type Row = { user_id: string; score: number | null; rank: number | null; prize_earned: number | null; joined_at: string; profiles: { full_name: string; email: string } | null };
       const rows = (data ?? []) as unknown as Row[];
       const csv = toCsv(rows, [
         { header: "user_id", value: (r) => r.user_id },
-        { header: "name", value: (r) => r.profiles?.name ?? null },
+        { header: "full_name", value: (r) => r.profiles?.full_name ?? null },
         { header: "email", value: (r) => r.profiles?.email ?? null },
         { header: "rank", value: (r) => r.rank },
         { header: "score", value: (r) => r.score },
-        { header: "prize_amount_cents", value: (r) => r.prize_amount },
-        { header: "prize_credited", value: (r) => r.prize_credited },
+        { header: "prize_earned", value: (r) => r.prize_earned },
         { header: "joined_at", value: (r) => r.joined_at },
       ]);
       await admin.from("admin_audit_log").insert({ admin_id: user.id, action: "game_results_exported", target_type: "game", target_id: gameId, details: { count: rows.length }, created_at: new Date().toISOString() });

@@ -578,6 +578,32 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   const now = new Date().toISOString();
   await dbUpdate("games", { id: gameId }, { status: "completed", ended_at: now });
   await broadcast(roomName, { type:"GAME_ENDED", gameId, serverTime:Date.now() }, "GAME_ENDED");
+
+  // Distribute prizes (atomic, idempotent — safe to call again from the
+  // template-generator safety-net tick if this step fails). FCM fan-out to
+  // winners is handled by the template-generator's prizeNotificationTick.
+  try {
+    const res = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/rpc/distribute_prizes`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SERVICE_KEY,
+        "Authorization": `Bearer ${SERVICE_KEY}`,
+      },
+      body: JSON.stringify({ p_game_id: gameId }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error(`[orchestrator] distribute_prizes HTTP ${res.status} game=${gameId}: ${txt.slice(0, 200)}`);
+    } else {
+      const out = await res.json().catch(() => null);
+      console.log(`[orchestrator] distribute_prizes game=${gameId} →`, out);
+    }
+  } catch (err) {
+    console.error(`[orchestrator] distribute_prizes failed game=${gameId}:`,
+      err instanceof Error ? err.message : err);
+  }
+
   // Expire Redis keys after 1 hour (§15.1 — TTLs to avoid stale state)
   const r = await getRedis();
   await r.expire(K.game(gameId), 3600);

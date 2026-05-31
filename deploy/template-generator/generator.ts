@@ -443,10 +443,189 @@ async function reminderTick(): Promise<void> {
   }
 }
 
+// ─── Prize-distribution safety-net tick ───────────────────────────────────────
+// The orchestrator calls distribute_prizes() inline at finalize. This tick is
+// the safety net for the two cases where that call does not run:
+//   (a) the orchestrator crashed between status='completed' and the RPC call;
+//   (b) the watchdog force-finalized a stuck game (no orchestrator involved).
+// distribute_prizes is idempotent (anchored by games.prizes_distributed_at),
+// so calling it twice is safe.
+
+interface PendingDistributionRow { id: string }
+
+async function prizeDistributionTick(): Promise<void> {
+  try {
+    const url =
+      `${REST}/games?status=eq.completed&prizes_distributed_at=is.null` +
+      `&select=id&order=ended_at.asc&limit=50`;
+    const res = await fetch(url, { headers: restHeaders() });
+    if (!res.ok) {
+      console.error(`[prize-distribute] fetch HTTP ${res.status}`);
+      return;
+    }
+    const rows = await res.json() as PendingDistributionRow[];
+    if (rows.length === 0) return;
+    for (const g of rows) {
+      const r = await fetch(`${REST}/rpc/distribute_prizes`, {
+        method: "POST",
+        headers: restHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ p_game_id: g.id }),
+      });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        console.error(`[prize-distribute] rpc HTTP ${r.status} game=${g.id}: ${t.slice(0, 200)}`);
+        continue;
+      }
+      const out = await r.json().catch(() => null);
+      console.log(`[prize-distribute] game=${g.id} →`, out);
+    }
+  } catch (err) {
+    console.error("[prize-distribute] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ─── Prize-notification tick ──────────────────────────────────────────────────
+// Finds games that have been distributed but not yet notified, fetches winner
+// push tokens via get_winner_push_tokens(p_game_id), sends FCM, and stamps
+// games.prize_notifications_sent_at so each game notifies exactly once.
+
+interface PendingNotificationRow { id: string; title: string; prize_pool_currency: string | null }
+interface WinnerTokenRow {
+  user_id: string;
+  token: string;
+  platform: string;
+  rank: number;
+  prize_amount: string;   // numeric → string in PostgREST JSON
+  full_name: string | null;
+  game_title: string;
+  currency: string;
+}
+
+async function markPrizeNotificationsSent(gameId: string): Promise<boolean> {
+  const res = await fetch(
+    `${REST}/games?id=eq.${gameId}&prize_notifications_sent_at=is.null`,
+    {
+      method: "PATCH",
+      headers: restHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+      body: JSON.stringify({ prize_notifications_sent_at: new Date().toISOString() }),
+    },
+  );
+  return res.ok;
+}
+
+async function insertPrizeNotificationRows(
+  gameId: string,
+  gameTitle: string,
+  winnersByUser: Map<string, { rank: number; prize_amount: string; currency: string }>,
+): Promise<void> {
+  if (winnersByUser.size === 0) return;
+  const rows = Array.from(winnersByUser.entries()).map(([user_id, w]) => ({
+    user_id,
+    type: "prize",
+    title: `You won in ${gameTitle}!`,
+    body: `Rank #${w.rank} — prize ${w.prize_amount} ${w.currency}`,
+    sent_via_push: true,
+    data: {
+      type: "prize",
+      game_id: gameId,
+      game_title: gameTitle,
+      rank: String(w.rank),
+      prize_amount: w.prize_amount,
+      currency: w.currency,
+    },
+  }));
+  const res = await fetch(`${REST}/notifications`, {
+    method: "POST",
+    headers: restHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    console.warn(`[prize-notify] insert notifications game=${gameId} HTTP ${res.status} ${t.slice(0, 200)}`);
+  }
+}
+
+async function processPrizeNotification(g: PendingNotificationRow): Promise<void> {
+  // Claim the row first so a concurrent tick (or restart) cannot double-send.
+  const claimed = await markPrizeNotificationsSent(g.id);
+  if (!claimed) return;
+
+  const res = await fetch(`${REST}/rpc/get_winner_push_tokens`, {
+    method: "POST",
+    headers: restHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ p_game_id: g.id }),
+  });
+  if (!res.ok) {
+    console.error(`[prize-notify] tokens rpc HTTP ${res.status} game=${g.id}`);
+    return;
+  }
+  const winners = await res.json() as WinnerTokenRow[];
+  if (!Array.isArray(winners) || winners.length === 0) {
+    console.log(`[prize-notify] game=${g.id} no winners with push tokens`);
+    return;
+  }
+
+  // Per-winner notification rows (one DB row per user, even with multi-device).
+  const winnersByUser = new Map<string, { rank: number; prize_amount: string; currency: string }>();
+  for (const w of winners) {
+    if (!winnersByUser.has(w.user_id)) {
+      winnersByUser.set(w.user_id, { rank: w.rank, prize_amount: w.prize_amount, currency: w.currency });
+    }
+  }
+
+  // Fan-out: send each winner a personalised FCM payload (one HTTP per device).
+  let delivered = 0, failed = 0;
+  const invalidTokens: string[] = [];
+  for (const w of winners) {
+    const body = `Rank #${w.rank} — you won ${w.prize_amount} ${w.currency}`;
+    const data: Record<string, string> = {
+      type: "prize",
+      game_id: g.id,
+      game_title: w.game_title,
+      rank: String(w.rank),
+      prize_amount: w.prize_amount,
+      currency: w.currency,
+    };
+    const r = await sendFcmToTokens([w.token], { title: `You won in ${w.game_title}!`, body, data });
+    delivered += r.delivered;
+    failed += r.failed;
+    for (const t of r.invalidTokens) invalidTokens.push(t);
+  }
+
+  await insertPrizeNotificationRows(g.id, g.title, winnersByUser);
+  if (invalidTokens.length > 0) await deleteInvalidTokens(invalidTokens);
+  console.log(`[prize-notify] game=${g.id} winners=${winnersByUser.size} delivered=${delivered} failed=${failed}`);
+}
+
+async function prizeNotificationTick(): Promise<void> {
+  if (!isFcmConfigured()) return;
+  try {
+    const url =
+      `${REST}/games?prizes_distributed_at=not.is.null&prize_notifications_sent_at=is.null` +
+      `&select=id,title,prize_pool_currency&order=prizes_distributed_at.asc&limit=50`;
+    const res = await fetch(url, { headers: restHeaders() });
+    if (!res.ok) {
+      console.error(`[prize-notify] fetch HTTP ${res.status}`);
+      return;
+    }
+    const games = await res.json() as PendingNotificationRow[];
+    for (const g of games) await processPrizeNotification(g);
+  } catch (err) {
+    console.error("[prize-notify] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 // ─── Combined tick ────────────────────────────────────────────────────────────
 
 async function fullTick(): Promise<void> {
-  await Promise.all([tick(), schedulerTick(), reminderTick(), watchdogTick()]);
+  await Promise.all([
+    tick(),
+    schedulerTick(),
+    reminderTick(),
+    watchdogTick(),
+    prizeDistributionTick(),
+    prizeNotificationTick(),
+  ]);
 }
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────

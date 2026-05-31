@@ -22,13 +22,19 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const db = createSupabaseAdminClient();
 
-  const [{ data: game, error }, { data: participants }] = await Promise.all([
+  const [{ data: game, error }, { data: participants }, { data: winners }] = await Promise.all([
     db.from("games").select("*").eq("id", id).maybeSingle(),
     db
       .from("game_participants")
       .select("user_id, score, rank, prize_earned, entry_fee_paid, status, joined_at, profiles!game_participants_user_id_fkey(full_name, email)")
       .eq("game_id", id)
       .order("rank", { ascending: true, nullsFirst: false }),
+    db
+      .from("game_participants")
+      .select("user_id, score, rank, prize_earned, profiles!game_participants_user_id_fkey(full_name, email)")
+      .eq("game_id", id)
+      .gt("prize_earned", 0)
+      .order("rank", { ascending: true }),
   ]);
 
   if (error || !game) notFound();
@@ -160,6 +166,102 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
                 </div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Trophy className="size-4 text-yellow-500" />
+              Prize distribution
+              <span className="ml-auto text-xs font-normal">
+                {game.prizes_distributed_at
+                  ? <Badge variant="default" className="text-[10px]">Distributed · {formatRelative(game.prizes_distributed_at)}</Badge>
+                  : <Badge variant="muted" className="text-[10px]">Pending</Badge>}
+                {game.prize_notifications_sent_at
+                  ? <Badge variant="muted" className="ml-1 text-[10px]">Notified</Badge>
+                  : null}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div>
+                <div className="text-xs text-muted-foreground">Prize pool</div>
+                <div className="font-mono text-success">{formatMoneyDecimal(game.prize_pool)} {game.prize_pool_currency ?? "USD"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Winners</div>
+                <div className="font-mono">{game.total_winners ?? (winners?.length ?? 0)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Distributed at</div>
+                <div className="text-xs">{game.prizes_distributed_at ? formatDateTime(game.prizes_distributed_at) : "—"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Notified at</div>
+                <div className="text-xs">{game.prize_notifications_sent_at ? formatDateTime(game.prize_notifications_sent_at) : "—"}</div>
+              </div>
+            </div>
+            {game.prize_breakdown && Array.isArray((game.prize_breakdown as { tiers?: unknown[] }).tiers) ? (
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">Tiers</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {((game.prize_breakdown as { tiers: Array<Record<string, unknown>> }).tiers).map((t, i) => {
+                    const rankFrom = (t.rank_from ?? t.rank) as number | undefined;
+                    const rankTo   = (t.rank_to ?? t.rank) as number | undefined;
+                    const rankLabel = rankFrom === rankTo ? `#${rankFrom}` : `#${rankFrom}–${rankTo}`;
+                    const payout = t.amount !== undefined
+                      ? `${formatMoneyDecimal(Number(t.amount))} ${game.prize_pool_currency ?? "USD"}`
+                      : t.percent !== undefined ? `${t.percent}%` : "—";
+                    return (
+                      <Badge key={i} variant="muted" className="font-mono text-[10px]">
+                        {rankLabel} → {payout}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No prize breakdown defined — winner takes all.</p>
+            )}
+            {winners && winners.length > 0 ? (
+              <div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">Winners</div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Player</TableHead>
+                      <TableHead className="text-right">Rank</TableHead>
+                      <TableHead className="text-right">Score</TableHead>
+                      <TableHead className="text-right">Prize</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {winners.map((w) => {
+                      const profile = w.profiles as ProfileShape | null;
+                      return (
+                        <TableRow key={w.user_id}>
+                          <TableCell>
+                            <Link href={`/users/${w.user_id}`} className="hover:underline">
+                              <div className="text-sm font-medium">{profile?.full_name ?? "—"}</div>
+                              <div className="text-xs text-muted-foreground">{profile?.email}</div>
+                            </Link>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {w.rank === 1 ? <Trophy className="inline size-3.5 text-yellow-500" /> : null} #{w.rank}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{w.score}</TableCell>
+                          <TableCell className="text-right font-mono text-xs text-success">
+                            {formatMoneyDecimal(w.prize_earned)}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 

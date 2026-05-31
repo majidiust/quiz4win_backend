@@ -22,7 +22,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const db = createSupabaseAdminClient();
 
-  const [{ data: user }, { data: txs }, { data: games }, authRes] = await Promise.all([
+  const [{ data: user }, { data: txs }, { data: games }, { data: wins }, authRes] = await Promise.all([
     db.from("profiles").select("*").eq("id", id).maybeSingle(),
     db
       .from("transactions")
@@ -36,6 +36,13 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
       .eq("user_id", id)
       .order("joined_at", { ascending: false })
       .limit(20),
+    db
+      .from("game_participants")
+      .select("game_id, score, rank, prize_earned, joined_at, games(title, mode, status, prize_pool_currency, ended_at)")
+      .eq("user_id", id)
+      .gt("prize_earned", 0)
+      .order("rank", { ascending: true })
+      .limit(50),
     db.auth.admin.getUserById(id),
   ]);
 
@@ -123,6 +130,49 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
             <StatCard label="Total deposited" value={formatMoneyDecimal(user.total_deposited)} icon={ShieldCheck} />
             <StatCard label="Total withdrawn" value={formatMoneyDecimal(user.total_withdrawn)} icon={AlertOctagon} />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Trophy className="size-4 text-yellow-500" /> Wins</CardTitle>
+            </CardHeader>
+            <CardContent className="px-0 pt-0">
+              {wins && wins.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Game</TableHead>
+                      <TableHead className="text-right">Rank</TableHead>
+                      <TableHead className="text-right">Prize</TableHead>
+                      <TableHead>Ended</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {wins.map((w) => {
+                      const game = w.games as { title?: string; mode?: string; status?: string; prize_pool_currency?: string | null; ended_at?: string | null } | null;
+                      return (
+                        <TableRow key={w.game_id}>
+                          <TableCell className="text-sm font-medium">
+                            <Link href={`/games/${w.game_id}`} className="hover:underline">{game?.title ?? "—"}</Link>
+                            <div className="text-xs text-muted-foreground capitalize">{game?.mode?.replace(/_/g, " ") ?? ""}</div>
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {w.rank === 1 ? <Trophy className="inline size-3 text-yellow-500" /> : null} #{w.rank ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-xs">
+                            {formatMoneyDecimal(w.prize_earned)}
+                            <span className="ml-1 text-[10px] text-muted-foreground">{game?.prize_pool_currency ?? "USD"}</span>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{game?.ended_at ? formatRelative(game.ended_at) : "—"}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="px-6 pb-6 text-sm text-muted-foreground">No wins yet.</div>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
