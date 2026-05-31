@@ -110,14 +110,29 @@ Deno.serve(async (req: Request) => {
         .single();
       if (error || !data) return errorResponse("game_not_found", 404);
 
-      const { data: participant } = await supabase
-        .from("game_participants")
-        .select("id")
-        .eq("game_id", gameId)
-        .eq("user_id", user.id)
-        .maybeSingle();
+      // Run both lookups in parallel: caller's participation + live count.
+      // The live count from game_participants overrides the potentially stale
+      // total_participants column that GAME_FIELDS aliases as participant_count.
+      const [{ data: participant }, { count: liveCount }] = await Promise.all([
+        supabase
+          .from("game_participants")
+          .select("id")
+          .eq("game_id", gameId)
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("game_participants")
+          .select("id", { count: "exact", head: true })
+          .eq("game_id", gameId),
+      ]);
 
-      return successResponse({ game: { ...data, joined_by_me: !!participant } });
+      return successResponse({
+        game: {
+          ...data,
+          participant_count: liveCount ?? 0,
+          joined_by_me: !!participant,
+        },
+      });
     }
 
     // POST /games/:id/join — join game (R-09: atomic debit + join)
