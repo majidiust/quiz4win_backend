@@ -585,12 +585,86 @@ async function prizeNotificationTick(): Promise<void> {
   }
 }
 
+// ─── Queue-builder tick ───────────────────────────────────────────────────────
+// For each active template whose current game is 'live' or 'paused', checks
+// whether there is already an upcoming/open game queued. If not, generates
+// the next upcoming game so players always have a game to join after the
+// current session ends.
+//
+// Invariant enforced: at most ONE game per template in 'upcoming'/'open' at
+// any time. The SQL generate_game_from_template function (overlap check on
+// 'upcoming'/'open') + the FOR UPDATE row-lock on the template guarantee
+// idempotency even if this tick races with the cron tick.
+
+async function queueBuilderTick(): Promise<void> {
+  try {
+    const base = SUPABASE_URL!.replace(/\/$/, "");
+    const headers = {
+      "apikey": SERVICE_ROLE_KEY!,
+      "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+      "Accept": "application/json",
+    };
+
+    // 1. Fetch all active templates with their current_game_id.
+    const tplRes = await fetch(
+      `${base}/rest/v1/game_templates?is_active=eq.true&deleted_at=is.null&select=id,current_game_id`,
+      { headers },
+    );
+    if (!tplRes.ok) return;
+    const templates = await tplRes.json() as Array<{ id: string; current_game_id: string | null }>;
+
+    for (const tpl of templates) {
+      if (!tpl.current_game_id) continue;
+
+      // 2. Check if the current game is live or paused (session running).
+      const gameRes = await fetch(
+        `${base}/rest/v1/games?id=eq.${tpl.current_game_id}&select=status`,
+        { headers },
+      );
+      if (!gameRes.ok) continue;
+      const [game] = await gameRes.json() as Array<{ status: string }>;
+      if (!game || !["live", "paused"].includes(game.status)) continue;
+
+      // 3. Check if a next game is already queued (upcoming or open).
+      const qRes = await fetch(
+        `${base}/rest/v1/games?template_id=eq.${tpl.id}&status=in.(upcoming,open)&select=id&limit=1`,
+        { headers },
+      );
+      if (!qRes.ok) continue;
+      const queued = await qRes.json() as Array<{ id: string }>;
+      if (queued.length > 0) continue; // already queued — nothing to do
+
+      // 4. Queue the next upcoming game.
+      const genRes = await fetch(
+        `${base}/rest/v1/rpc/generate_game_from_template`,
+        {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ p_template_id: tpl.id }),
+        },
+      );
+      if (!genRes.ok) {
+        const txt = await genRes.text().catch(() => "");
+        console.warn(`[queue-builder] generate RPC HTTP ${genRes.status}: ${txt.slice(0, 200)}`);
+        continue;
+      }
+      const newId = await genRes.json().catch(() => null) as string | null;
+      if (newId) {
+        console.log(`[queue-builder] queued next game template=${tpl.id} game=${newId}`);
+      }
+    }
+  } catch (err) {
+    console.error("[queue-builder] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 // ─── Combined tick ────────────────────────────────────────────────────────────
 
 async function fullTick(): Promise<void> {
   await Promise.all([
     tick(),
     schedulerTick(),
+    queueBuilderTick(),
     reminderTick(),
     watchdogTick(),
     prizeDistributionTick(),
