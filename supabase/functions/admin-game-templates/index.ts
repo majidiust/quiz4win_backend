@@ -156,12 +156,27 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await admin.from("game_templates")
         .update({ is_active: true }).eq("id", id).is("deleted_at", null).select("id, is_active").single();
       if (error || !data) return errorResponse("template_not_found", 404);
+
+      // Spec §2: immediately create the next upcoming game on activation so
+      // users can register in advance. Best-effort — overlap (existing
+      // upcoming/open) just returns NULL and does not fail activation.
+      let firstGameId: string | null = null;
+      const { data: gid, error: genErr } = await admin.rpc("generate_game_from_template", {
+        p_template_id: id, p_skip_overlap: false,
+      });
+      if (genErr) {
+        console.warn(`[admin-game-templates] activate: generate failed template=${id}: ${genErr.message ?? genErr}`);
+      } else {
+        firstGameId = (gid as string | null) ?? null;
+      }
+
       await admin.from("admin_audit_log").insert({
         admin_id: user.id, action: "game_template_activated",
         target_type: "game_template", target_id: id,
+        details: { first_game_id: firstGameId },
         created_at: new Date().toISOString(),
       });
-      return successResponse({ message: "Template activated", is_active: true });
+      return successResponse({ message: "Template activated", is_active: true, first_game_id: firstGameId });
     }
 
     // PATCH /admin/game-templates/:id/deactivate

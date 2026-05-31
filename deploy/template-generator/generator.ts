@@ -586,15 +586,15 @@ async function prizeNotificationTick(): Promise<void> {
 }
 
 // ─── Queue-builder tick ───────────────────────────────────────────────────────
-// For each active template whose current game is 'live' or 'paused', checks
-// whether there is already an upcoming/open game queued. If not, generates
-// the next upcoming game so players always have a game to join after the
-// current session ends.
+// Spec §6 (docs/game_template_logic.md): create the next game when the
+// current one transitions to Running. For each active template whose current
+// game is 'live', if no upcoming/open game is queued yet, generate the next
+// one. scheduled_at is set by generate_game_from_template via next_cron_match.
 //
-// Invariant enforced: at most ONE game per template in 'upcoming'/'open' at
-// any time. The SQL generate_game_from_template function (overlap check on
-// 'upcoming'/'open') + the FOR UPDATE row-lock on the template guarantee
-// idempotency even if this tick races with the cron tick.
+// Invariant (§5): at most ONE upcoming/open game per template. The SQL
+// generate_game_from_template (overlap on 'upcoming'/'open') + the FOR UPDATE
+// row-lock + the partial unique index games_one_registerable_per_template
+// guarantee this even under racy cron / queue-builder timing.
 
 async function queueBuilderTick(): Promise<void> {
   try {
@@ -616,14 +616,14 @@ async function queueBuilderTick(): Promise<void> {
     for (const tpl of templates) {
       if (!tpl.current_game_id) continue;
 
-      // 2. Check if the current game is live or paused (session running).
+      // 2. Check if the current game is live (session running).
       const gameRes = await fetch(
         `${base}/rest/v1/games?id=eq.${tpl.current_game_id}&select=status`,
         { headers },
       );
       if (!gameRes.ok) continue;
       const [game] = await gameRes.json() as Array<{ status: string }>;
-      if (!game || !["live", "paused"].includes(game.status)) continue;
+      if (!game || game.status !== "live") continue;
 
       // 3. Check if a next game is already queued (upcoming or open).
       const qRes = await fetch(
