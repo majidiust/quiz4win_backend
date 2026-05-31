@@ -1,0 +1,224 @@
+/**
+ * Redis Lua scripts for Quiz4Win atomic real-time quiz operations.
+ *
+ * §9.3 requires that validation be atomic:
+ *   "duplicate check, wrong count update, and elimination decision [must]
+ *    not [be] performed in separate unsafe operations."
+ *
+ * Each script uses cjson.encode() to return a JSON string so Deno can
+ * parse the full result with a single JSON.parse(). All keys that the
+ * script touches must appear in KEYS[] (cluster-safe).
+ */
+
+// ─── JOIN_GAME (§7) ──────────────────────────────────────────────────────────
+// KEYS[1] = gameState hash
+// KEYS[2] = userState hash
+// KEYS[3] = participants set
+// KEYS[4] = spectators set
+// ARGV[1] = userId
+// ARGV[2] = sessionId
+// ARGV[3] = deviceId
+// ARGV[4] = serverTimeMs (epoch milliseconds as string)
+export const JOIN_GAME_SCRIPT = `
+local gameStatus = redis.call("HGET", KEYS[1], "gameStatus")
+if not gameStatus then
+  return cjson.encode({status="error", reason="game_not_found"})
+end
+if gameStatus ~= "running" and gameStatus ~= "open" then
+  return cjson.encode({status="error", reason="game_not_joinable"})
+end
+local joinPolicy = redis.call("HGET", KEYS[1], "joinPolicy") or "first_question_only"
+if joinPolicy == "closed" then
+  return cjson.encode({status="error", reason="join_closed"})
+end
+local existingStatus = redis.call("HGET", KEYS[2], "userStatus")
+if existingStatus then
+  if ARGV[2] ~= "" then redis.call("HSET", KEYS[2], "sessionId", ARGV[2]) end
+  if ARGV[3] ~= "" then redis.call("HSET", KEYS[2], "deviceId", ARGV[3]) end
+  local wc = tonumber(redis.call("HGET", KEYS[2], "wrongCount") or "0")
+  local rl = redis.call("HGET", KEYS[2], "remainingLives")
+  local cc = tonumber(redis.call("HGET", KEYS[2], "correctCount") or "0")
+  return cjson.encode({status="ok", reconnect=true, userStatus=existingStatus,
+    wrongCount=wc, remainingLives=rl and tonumber(rl) or cjson.null, correctCount=cc})
+end
+local role
+if joinPolicy == "any_time" then
+  role = "participant"
+else
+  local qIdx = redis.call("HGET", KEYS[1], "currentQuestionIndex")
+  local qEndsAt = redis.call("HGET", KEYS[1], "currentQuestionEndsAt")
+  local grace = tonumber(redis.call("HGET", KEYS[1], "gracePeriodMs") or "400")
+  local now = tonumber(ARGV[4])
+  if not qIdx then
+    role = "participant"
+  elseif qIdx == "0" and qEndsAt and now <= (tonumber(qEndsAt) + grace) then
+    role = "participant"
+  elseif qIdx == "0" and not qEndsAt then
+    role = "participant"
+  else
+    role = "spectator"
+  end
+end
+local maxWrong = redis.call("HGET", KEYS[1], "maxWrongAnswers")
+local rl = maxWrong and tonumber(maxWrong) or nil
+redis.call("HSET", KEYS[2], "userId", ARGV[1], "sessionId", ARGV[2],
+  "deviceId", ARGV[3], "userStatus", role, "wrongCount", "0",
+  "correctCount", "0", "joinTime", ARGV[4])
+if rl then redis.call("HSET", KEYS[2], "remainingLives", tostring(rl)) end
+if role == "participant" then
+  redis.call("SADD", KEYS[3], ARGV[1])
+  redis.call("HINCRBY", KEYS[1], "participantCount", 1)
+else
+  redis.call("SADD", KEYS[4], ARGV[1])
+  redis.call("HINCRBY", KEYS[1], "spectatorCount", 1)
+end
+return cjson.encode({status="ok", reconnect=false, userStatus=role,
+  wrongCount=0, remainingLives=rl or cjson.null, correctCount=0})
+`;
+
+// ─── SUBMIT_ANSWER (§9.3) ────────────────────────────────────────────────────
+// KEYS[1] = gameState hash
+// KEYS[2] = userState hash
+// KEYS[3] = userAnswers set  (set of questionIds this user has answered)
+// KEYS[4] = userAttempt key  (idempotency cache string, TTL 300s)
+// KEYS[5] = questionAnswered set (userIds who answered current question)
+// ARGV[1] = questionId
+// ARGV[2] = selectedOptionId
+// ARGV[3] = attemptId
+// ARGV[4] = serverTimeMs
+// ARGV[5] = responseTimeMs
+export const SUBMIT_ANSWER_SCRIPT = `
+local cached = redis.call("GET", KEYS[4])
+if cached then return cached end
+local userStatus = redis.call("HGET", KEYS[2], "userStatus")
+if not userStatus then
+  return cjson.encode({status="rejected", reason="not_joined"})
+end
+if userStatus ~= "participant" then
+  return cjson.encode({status="rejected", reason=userStatus.."_cannot_answer"})
+end
+local gameStatus = redis.call("HGET", KEYS[1], "gameStatus")
+if gameStatus ~= "running" then
+  return cjson.encode({status="rejected", reason="game_not_running"})
+end
+local curQId = redis.call("HGET", KEYS[1], "currentQuestionId")
+if not curQId or curQId ~= ARGV[1] then
+  return cjson.encode({status="rejected", reason="question_not_active"})
+end
+local qStatus = redis.call("HGET", KEYS[1], "currentQuestionStatus")
+if qStatus ~= "active" then
+  return cjson.encode({status="rejected", reason="question_closed"})
+end
+local endsAt = tonumber(redis.call("HGET", KEYS[1], "currentQuestionEndsAt"))
+local grace = tonumber(redis.call("HGET", KEYS[1], "gracePeriodMs") or "400")
+local now = tonumber(ARGV[4])
+if not endsAt or now > (endsAt + grace) then
+  return cjson.encode({status="rejected", reason="late"})
+end
+local dup = redis.call("SISMEMBER", KEYS[3], ARGV[1])
+if dup == 1 then
+  return cjson.encode({status="rejected", reason="duplicate"})
+end
+local correctOpt = redis.call("HGET", KEYS[1], "currentQuestionCorrectOptionId")
+if not correctOpt then
+  return cjson.encode({status="rejected", reason="no_correct_option"})
+end
+local isCorrect = (ARGV[2] == correctOpt)
+local wrongCount = tonumber(redis.call("HGET", KEYS[2], "wrongCount") or "0")
+local rlRaw = redis.call("HGET", KEYS[2], "remainingLives")
+local maxWrongRaw = redis.call("HGET", KEYS[1], "maxWrongAnswers")
+local correctCount = tonumber(redis.call("HGET", KEYS[2], "correctCount") or "0")
+local newWrong = wrongCount
+local newRl = rlRaw and tonumber(rlRaw) or nil
+local eliminate = false
+local elimReason = cjson.null
+local points = 0
+if isCorrect then
+  correctCount = correctCount + 1
+  local rt = tonumber(ARGV[5]) or 0
+  points = math.max(10, 100 - math.floor(rt / 100))
+else
+  newWrong = wrongCount + 1
+  if newRl ~= nil then
+    newRl = math.max(newRl - 1, 0)
+    if newRl == 0 then eliminate = true; elimReason = "wrong_answer_lives_zero" end
+  end
+  if maxWrongRaw and not eliminate then
+    if newWrong > tonumber(maxWrongRaw) then eliminate=true; elimReason="max_wrong_exceeded" end
+  end
+end
+local roleAfter = eliminate and "eliminated" or "participant"
+local qIdx = redis.call("HGET", KEYS[1], "currentQuestionIndex")
+redis.call("HSET", KEYS[2], "wrongCount", tostring(newWrong),
+  "correctCount", tostring(correctCount), "userStatus", roleAfter,
+  "lastAnsweredQuestionId", ARGV[1])
+if newRl ~= nil then redis.call("HSET", KEYS[2], "remainingLives", tostring(newRl)) end
+if eliminate then
+  local ts = ARGV[4]
+  redis.call("HSET", KEYS[2], "eliminatedAt", ts, "eliminationReason", elimReason)
+  redis.call("HINCRBY", KEYS[1], "eliminatedUserCount", 1)
+end
+redis.call("SADD", KEYS[3], ARGV[1])
+redis.call("SADD", KEYS[5], redis.call("HGET", KEYS[2], "userId") or "unknown")
+local startsAt = redis.call("HGET", KEYS[1], "currentQuestionStartsAt")
+local result = cjson.encode({
+  status="accepted", isCorrect=isCorrect,
+  correctOptionId=correctOpt, pointsEarned=points,
+  wrongCount=newWrong, remainingLives=newRl or cjson.null,
+  participantRole=roleAfter, eliminated=eliminate, eliminationReason=elimReason,
+  questionId=ARGV[1], questionIndex=tonumber(qIdx) or 0,
+  startsAt=startsAt and tonumber(startsAt) or 0, endsAt=endsAt, serverTime=now
+})
+redis.call("SET", KEYS[4], result, "EX", 300)
+return result
+`;
+
+// ─── PREPARE_QUESTION (§8.1) ─────────────────────────────────────────────────
+// KEYS[1] = gameState hash
+// KEYS[2] = questionState hash  (q4w:game:{id}:q:{idx}:state)
+// ARGV[1] = questionId
+// ARGV[2] = questionIndex (string)
+// ARGV[3] = correctOptionId
+// ARGV[4] = startsAt (epoch ms string)
+// ARGV[5] = endsAt   (epoch ms string)
+// ARGV[6] = gracePeriodMs
+// ARGV[7] = localizedJson (full payload, stored as string)
+// Rule §8.2: Redis must be ready BEFORE the question is broadcast.
+export const PREPARE_QUESTION_SCRIPT = `
+redis.call("HSET", KEYS[2],
+  "questionId", ARGV[1], "questionIndex", ARGV[2],
+  "status", "active", "correctOptionId", ARGV[3],
+  "startsAt", ARGV[4], "endsAt", ARGV[5],
+  "gracePeriodMs", ARGV[6], "localizedPayload", ARGV[7])
+redis.call("EXPIRE", KEYS[2], 86400)
+redis.call("HSET", KEYS[1],
+  "currentQuestionId", ARGV[1],
+  "currentQuestionIndex", ARGV[2],
+  "currentQuestionStatus", "active",
+  "currentQuestionStartsAt", ARGV[4],
+  "currentQuestionEndsAt", ARGV[5],
+  "currentQuestionCorrectOptionId", ARGV[3])
+return cjson.encode({status="ok", questionId=ARGV[1], questionIndex=tonumber(ARGV[2]),
+  startsAt=tonumber(ARGV[4]), endsAt=tonumber(ARGV[5])})
+`;
+
+// ─── CLOSE_QUESTION (§18.5) ──────────────────────────────────────────────────
+// KEYS[1] = gameState hash
+// KEYS[2] = questionState hash
+// KEYS[3] = participants set
+// KEYS[4] = questionAnswered set
+// ARGV[1] = serverTimeMs
+// Returns list of userIds who didn't answer (for no-answer processing).
+export const CLOSE_QUESTION_SCRIPT = `
+local curStatus = redis.call("HGET", KEYS[1], "currentQuestionStatus")
+if curStatus ~= "active" then
+  return cjson.encode({status="error", reason="question_not_active"})
+end
+redis.call("HSET", KEYS[1], "currentQuestionStatus", "closed")
+redis.call("HSET", KEYS[2], "status", "closed", "closedAt", ARGV[1])
+local notAnswered = redis.call("SDIFF", KEYS[3], KEYS[4])
+local qId = redis.call("HGET", KEYS[1], "currentQuestionId")
+local qIdx = redis.call("HGET", KEYS[1], "currentQuestionIndex")
+return cjson.encode({status="ok", questionId=qId, questionIndex=tonumber(qIdx) or 0,
+  notAnswered=notAnswered, closedAt=tonumber(ARGV[1])})
+`;

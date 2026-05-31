@@ -137,6 +137,8 @@ services:
     depends_on:
       db-maintainer:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "127.0.0.1:5802:8000"
     environment:
@@ -166,14 +168,14 @@ services:
       # LiveAvatar (AI presenter catalog proxy). Leave empty to disable.
       LIVEAVATAR_API_URL: ${LIVEAVATAR_API_URL:-}
       LIVEAVATAR_API_KEY: ${LIVEAVATAR_API_KEY:-}
-      # RabbitMQ — used to publish quiz.show.start when a template-generated
-      # game with ai_enabled=true starts. Single AMQP URI with credentials
-      # embedded (amqps://user:pass@host/vhost). Leave empty to disable the
-      # publish (game start still succeeds — best-effort).
+      # RabbitMQ — used to publish quiz.show.start and answer-persist events.
       RABBITMQ_URL: ${RABBITMQ_URL:-}
       RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
       MQ_COMMAND_EXCHANGE: ${MQ_COMMAND_EXCHANGE:-}
       MQ_COMMAND_QUEUE: ${MQ_COMMAND_QUEUE:-quiz.show.start}
+      MQ_ORCHESTRATOR_QUEUE: ${MQ_ORCHESTRATOR_QUEUE:-quiz.game.commands}
+      # Redis — real-time game state (game-session edge function reads/writes)
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
       # S3-compatible object storage (DigitalOcean Spaces).
       S3_BUCKET: ${S3_BUCKET}
       S3_REGION: ${S3_REGION}
@@ -190,10 +192,9 @@ services:
       - quiz4win
 
   template-generator:
-    # Wakes every minute and calls generate_games_from_active_templates() so
-    # active game_templates spawn new games on their cron schedule. Depends on
-    # db-maintainer so it never runs before the schema migration that created
-    # the RPC has been applied.
+    # Wakes every minute: (1) generates games from active templates via RPC,
+    # (2) detects upcoming games whose scheduled_at has arrived and publishes
+    # StartGame to RabbitMQ so the game-orchestrator starts the Redis session.
     build:
       context: ./deploy/template-generator
       dockerfile: Dockerfile
@@ -206,8 +207,70 @@ services:
     environment:
       SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      # Override only for tests; production should leave at 60_000ms.
       TEMPLATE_GEN_INTERVAL_MS: ${TEMPLATE_GEN_INTERVAL_MS:-60000}
+      # RabbitMQ — publish StartGame when a scheduled game's time arrives.
+      RABBITMQ_URL: ${RABBITMQ_URL:-}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
+      MQ_COMMAND_EXCHANGE: ${MQ_COMMAND_EXCHANGE:-}
+      MQ_ORCHESTRATOR_QUEUE: ${MQ_ORCHESTRATOR_QUEUE:-quiz.game.commands}
+      TZ: UTC
+    networks:
+      - quiz4win
+
+  # ─── Redis — real-time source of truth during active games (§2.1/§3.7) ────
+  redis:
+    image: redis:7-alpine
+    container_name: quiz4win-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    ports:
+      # Only bound to localhost — not exposed externally.
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - quiz4win
+
+  # ─── Game Orchestrator — quiz session brain (§3.2) ──────────────────────────
+  game-orchestrator:
+    build:
+      context: ./deploy/game-orchestrator
+      dockerfile: Dockerfile
+    image: quiz4win-game-orchestrator:latest
+    container_name: quiz4win-game-orchestrator
+    restart: unless-stopped
+    depends_on:
+      db-maintainer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Redis (real-time game state)
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
+      # RabbitMQ (command/event bus)
+      RABBITMQ_URL: ${RABBITMQ_URL:-}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
+      MQ_ORCHESTRATOR_QUEUE: ${MQ_ORCHESTRATOR_QUEUE:-quiz.game.commands}
+      # Supabase (persistent DB writes)
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # OpenAI (question generation — §5)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # LiveKit (broadcast — §3.5)
+      LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       TZ: UTC
     networks:
       - quiz4win
@@ -218,6 +281,4 @@ networks:
 
 volumes:
   quiz4win-db-backups:
-    # Local backup cache for db-maintainer. Daily dumps are also uploaded
-    # to S3; this volume just keeps a short window for fast local restore.
     driver: local

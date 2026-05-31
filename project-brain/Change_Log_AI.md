@@ -263,3 +263,28 @@ Owner: A-02 (Project Memory Guardian)
   • admin/src/lib/actions/liveavatar.ts — provider envelope is { code, data: { count, results: [...] }, message }, not { data: { avatars/voices: [...] } }. Added mapAvatar() (id→avatar_id, name→avatar_name, preview_url→preview_image_url/preview_video_url heuristic) and mapVoice() (id→voice_id). fetchVoices now defaults to merging public+private (capped at 100/page per provider). LiveAvatarVoice type slimmed (dropped unused support_pause/emotion_support).
   • Root cause: previous build returned upstream 404 for every path; admin UI silently fell back to empty grid/list. Fixed by matching the provider's documented OpenAPI exactly.
 
+
+[2026-05-28] [A-01] [BUILD] Real-time quiz Phase 1: schema + atomic RPCs + game-session edge function.
+  - Migrations 20260528360000 (schema columns + stable option_ids backfill) and 20260528360001 (join_game_session, start_game_question, close_game_question, submit_answer_v2 SECURITY DEFINER RPCs with FOR UPDATE locking).
+  - submit_answer_v2 implements the §9.3 atomic validator: idempotency (attempt_id), time window with grace_period_ms, duplicate check, wrong/lives counters, elimination, full §16 audit row.
+  - New edge function game-session exposes POST/GET join/state/answer/advance/close. Lifecycle routes (advance/close) gated by requireAdminRole.
+  - Legacy /games/* routes left untouched for backwards-compat.
+  - Redis/LiveKit/RabbitMQ/LLM deferred to Phase 2+ (see docs/wingobingo_quiz_backend_phase1_implementation.md).
+
+[2026-05-31] [A-01] [BUILD] Real-time Quiz Phase 2: exact-technology implementation per docs/wingobingo_quiz_backend_architecture_complete.md
+
+Architecture (§2.1 compliant — Redis source of truth, not Postgres FOR UPDATE):
+- supabase/migrations/20260528360001: replaced wrong Postgres RPCs with Redis reference columns on games (redis_namespace, redis_cluster_id, redis_started_at, redis_expires_at per §3.8)
+- supabase/functions/_shared/redis.ts: Redis client singleton (npm:redis@4)
+- supabase/functions/_shared/redis_keys.ts: §6 key schema builders (game/question/user-level)
+- supabase/functions/_shared/redis_scripts.ts: atomic Lua scripts — JOIN_GAME (§7), SUBMIT_ANSWER (§9.3), PREPARE_QUESTION (§8.2), CLOSE_QUESTION (§18.5)
+- supabase/functions/_shared/livekit.ts: LiveKit broadcaster — HS256 JWT signing + RoomService.SendData REST (§3.5)
+- supabase/functions/_shared/llm.ts: OpenAI gpt-4o-mini question generator — multilingual with stable option IDs per §5.5
+- supabase/functions/game-session/index.ts: rewritten — /join uses Redis Lua + DB upsert + LiveKit token; /state reads Redis HGETALL; /answer runs atomic Lua + publishes ANSWER_PERSIST_REQUESTED to RabbitMQ (§9.5)
+- deploy/game-orchestrator/orchestrator.ts: new AMQP consumer (npm:amqplib) — StartGame→Redis init→question loop; CloseQuestion→no-answer processing; PersistAnswer→DB insert; FinalizeGame; §15.2 recovery
+- deploy/game-orchestrator/Dockerfile: same Deno pattern as template-generator
+- deploy/template-generator/generator.ts: extended with §3.1 Game Scheduler — detects upcoming games, flips status to open, publishes StartGame to RabbitMQ
+- docker-compose.yml: added redis:7-alpine service + game-orchestrator service; api depends on redis
+- .env.docker.example: added REDIS_PASSWORD, REDIS_URL, OPENAI_API_KEY, OPENAI_MODEL, MQ_ORCHESTRATOR_QUEUE
+
+[2026-05-31] [A-01] [BUILD] Presenter command handling — implemented PrepareQuestion, StartQuestion, CloseQuestion, AdvanceQuestion in deploy/game-orchestrator/orchestrator.ts. Added STAGE_Q and ACTIVATE_Q Lua scripts for two-phase question flow (staged→active). Added broadcastToIdentity() for private QUESTION_PREPARED events. Added PresenterGameConfig, presenterGames map, stagedQuestions map, module-level prefillQueue(). Updated closeQuestion() to skip auto-advance in presenter mode. Updated handleStartGame() to set up presenter config + store presenterIdentity in Redis. Updated recoverRunningGames() to rebuild presenter state from Redis on restart. Updated docs/game-commands-protocol.md — all six commands marked implemented, presenter identity convention documented.
