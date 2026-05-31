@@ -133,7 +133,14 @@ async function sendOne(accessToken: string, projectId: string, deviceToken: stri
     || lower.includes("unregistered")
     || lower.includes("not_found")
     || lower.includes("invalid_argument");
-  console.warn(`[fcm] send failed status=${res.status} remove=${remove}`);
+  // Extract FCM error.status (e.g. INVALID_ARGUMENT, SENDER_ID_MISMATCH,
+  // UNREGISTERED) from the response body without logging the token (R-01).
+  let fcmCode = "UNKNOWN";
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: { status?: string; message?: string } };
+    fcmCode = parsed?.error?.status ?? parsed?.error?.message?.split(" ")[0] ?? "UNKNOWN";
+  } catch { /* not JSON — leave as UNKNOWN */ }
+  console.warn(`[fcm] send failed status=${res.status} code=${fcmCode} remove=${remove}`);
   return { ok: false, remove };
 }
 
