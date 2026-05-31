@@ -309,3 +309,19 @@ Architecture (§2.1 compliant — Redis source of truth, not Postgres FOR UPDATE
 [2026-05-31] [A-01] [BUILD] Redesigned admin template detail page (/templates/[id]) in ERP style — KPI strip (status/mode/generated/last-run/prize/fee), 3-column grid with Schedule + Activity sidebar, Gameplay + Question Filters, AI Presenter + Branding, Identifiers full-width, Generated games table. Reused DetailRow pattern from /finance/payments/[id]. No data-shape or action changes; pure UI density and IA improvement.
 [2026-05-31] [A-01] [BUILD] Templates ERP polish, round 2 — (1) Added admin/src/lib/cron.ts wrapping cron-parser (next runs, validation). (2) Detail page now shows a Next-run KPI + an "Upcoming runs (UTC)" chip row in Schedule. (3) Edit form rewritten as sticky save bar + 4-tab layout (Basic / Schedule / Gameplay / AI Presenter) with live cron next-3-runs preview and inline validity indicator. (4) Templates list: KPI strip (Templates / Active / Games generated / AI-enabled), name search, mode + AI filter chips, new "Next run" column, "Clear filters" link, ERP-style chip filters. Dependency: cron-parser ^5.5.0.
 [2026-05-31] [A-01] [FIX] deploy/template-generator/fcm.ts: surface FCM error.status code (e.g. INVALID_ARGUMENT, SENDER_ID_MISMATCH, UNREGISTERED) in warn log without ever logging the device token (R-01 compliant). Log line now reads: [fcm] send failed status=<http> code=<FCM_CODE> remove=<bool>.
+[2026-05-31] [A-01] [BUILD] Game lifecycle alignment with Template spec
+- supabase/migrations/20260531200000_game_lifecycle.sql:
+  • join_game now allows status IN ('upcoming','open') AND scheduled_at > NOW().
+    Time is the registration gate (raises 'registration_closed' after start).
+  • generate_game_from_template overlap now blocks only on current_game_id
+    status = 'upcoming'. Dropped 'open','live','paused' from the block-list,
+    enabling "one running + one upcoming" per spec.
+    ('paused' was never a valid games.status — also dead-code removed.)
+- supabase/functions/games/index.ts: matching fast-path check on POST /games/:id/join.
+- Migration applied to live DB (BEGIN/CREATE/CREATE/REVOKE/GRANT/COMMIT).
+- Pre-existing bugs flagged but NOT touched in this commit (require coordinated
+  orchestrator change, awaiting sign-off):
+  • orchestrator.ts:579 writes status='finished', finished_at — invalid (enum is
+    'completed', column is ended_at).
+  • No scheduled job to finalize games whose duration_minutes has elapsed
+    when the orchestrator misses the GAME_ENDED path.
