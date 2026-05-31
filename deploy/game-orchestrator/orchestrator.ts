@@ -27,10 +27,11 @@
 
 // deno-lint-ignore-file no-explicit-any
 
-// CloudAMQP's official AMQP 0-9-1 client — native Deno support, uses
-// Deno.connectTls directly. Avoids amqplib's Node-compat TLS issues and
-// deno.land/x/amqp's broken jsr:@std/io dependency.
-import { AMQPClient } from "npm:@cloudamqp/amqp-client@3.1.1";
+// CloudAMQP's official AMQP 0-9-1 client — imported from the repo's Deno
+// entry (mod.ts) which uses Deno.connectTls directly via rustls. The npm:
+// build of this package resolves to the Node.js entry and goes through
+// Deno's Node-compat TLS layer, which hangs during AMQP negotiation.
+import { AMQPClient } from "https://raw.githubusercontent.com/cloudamqp/amqp-client.js/v3.1.1/mod.ts";
 import { createClient } from "npm:redis@4";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
