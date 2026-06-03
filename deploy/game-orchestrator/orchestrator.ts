@@ -919,9 +919,10 @@ async function handleStartGame(payload: any): Promise<void> {
     gracePeriodMs, maxWrongAnswers,
   };
 
-  if (runMode === "auto") {
-    // Fully automated — start question loop immediately
-    await startQuestionLoop({ ...gameCommon, questionIndex: 0 });
+   if (runMode === "auto") {
+     // Fully automated — wait 2 minutes then start question loop
+     await new Promise(resolve => setTimeout(resolve, 120_000));
+     await startQuestionLoop({ ...gameCommon, questionIndex: 0 });
 
   } else if (runMode === "presenter") {
     // Command-driven — AI Presenter sends PrepareQuestion / StartQuestion

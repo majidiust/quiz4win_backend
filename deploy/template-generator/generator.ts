@@ -764,6 +764,166 @@ async function rulesAuditTick(): Promise<void> {
   } catch (err) {
     console.error("[rules-audit] tick failed:", err instanceof Error ? err.message : err);
   }
+
+// ─── Mid-game participant notification tick ─────────────────────────────────────
+// Sends notifications to all participants in live games at configurable intervals.
+// Uses get_game_participant_push_tokens() RPC to fetch opt-in tokens.
+// Stores notification records in public.notifications table for history and deduplication.
+
+interface LiveGame {
+  id: string;
+  title: string;
+  prize_pool: string | null;
+}
+
+async function midGameNotificationTick(): Promise<void> {
+  // For MVP, send a notification every 5 minutes during live games
+  // In future, this could be enhanced to send notifications at specific game events
+  // (e.g., question start, time warnings, etc.) by reading game state from Redis or DB
+  
+  try {
+    const now = new Date().toISOString();
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    
+    // Find live games that haven't had a mid-game notification in the last 5 minutes
+    // We'll use the notifications table for deduplication: look for games with no 
+    // 'mid_game' notification in the last 5 minutes
+    const res = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/games` +
+      `?status=eq.live` +
+      `&select=id,title,prize_pool`,
+      {
+        headers: {
+          "apikey": SERVICE_ROLE_KEY!,
+          "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+          "Accept": "application/json",
+        },
+      },
+    );
+    
+    if (!res.ok) {
+      console.warn(`[mid-game-notify] fetch live games HTTP ${res.status}`);
+      return;
+    }
+    
+    const games = await res.json() as LiveGame[];
+    if (games.length === 0) return;
+    
+    console.log(`[mid-game-notify] ${games.length} live game(s) found`);
+    
+    for (const game of games) {
+      // Check if we've sent a mid-game notification to this game recently
+      // by looking for a 'mid_game' type notification in the last 5 minutes
+      const notifRes = await fetch(
+        `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/notifications` +
+        `?game_id=eq.${game.id}` +
+        `&type=eq.mid_game` +
+        `&created_at=gte.${encodeURIComponent(fiveMinutesAgo)}` +
+        `&select=id&limit=1`,
+        {
+          headers: {
+            "apikey": SERVICE_ROLE_KEY!,
+            "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+            "Accept": "application/json",
+          },
+        },
+      );
+      
+      if (!notifRes.ok) {
+        console.warn(`[mid-game-notify] check recent notifications HTTP ${notifRes.status}`);
+        continue;
+      }
+      
+      const recentNotifications = await notifRes.json();
+      if (Array.isArray(recentNotifications) && recentNotifications.length > 0) {
+        // Skip if we've sent a mid-game notification recently
+        continue;
+      }
+      
+      // Get participant push tokens
+      const tokenRes = await fetch(
+        `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/rpc/get_game_participant_push_tokens`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": SERVICE_ROLE_KEY!,
+            "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+          },
+          body: JSON.stringify({ p_game_id: game.id }),
+        },
+      );
+      
+      if (!tokenRes.ok) {
+        console.warn(`[mid-game-notify] get participant tokens HTTP ${tokenRes.status} for game ${game.id}`);
+        continue;
+      }
+      
+      const tokens = await tokenRes.json() as Array<{ user_id: string; token: string; platform: string }>;
+      if (tokens.length === 0) {
+        // Still log that we checked but found no tokens
+        console.log(`[mid-game-notify] game=${game.id} no participant push tokens found`);
+        continue;
+      }
+      
+      // Prepare notification
+      const title = game.title;
+      const body = `Live now! Answer questions to win prizes.`;
+      const prizePool = game.prize_pool ? ` (Prize pool: ${game.prize_pool})` : "";
+      const data: Record<string, string> = {
+        type: "mid_game",
+        game_id: game.id,
+        game_title: game.title,
+        ...(game.prize_pool ? { prize_pool: game.prize_pool } : {}),
+      };
+      
+      // Send FCM notification
+      const deviceTokens = tokens.map((t) => t.token);
+      const result = await sendFcmToTokens(deviceTokens, { title, body, data });
+      
+      // Extract user IDs for notification storage
+      const userIds = Array.from(new Set(tokens.map((t) => t.user_id)));
+      
+      // Store notification records
+      if (userIds.length > 0) {
+        const notificationRows = userIds.map((user_id) => ({
+          user_id,
+          type: "mid_game",
+          title,
+          body: body + prizePool,
+          sent_via_push: true,
+          data,
+        }));
+        
+        // Chunk to keep request size sane
+        const CHUNK = 500;
+        for (let i = 0; i < notificationRows.length; i += CHUNK) {
+          const chunkRes = await fetch(`${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/notifications`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "apikey": SERVICE_ROLE_KEY!,
+              "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+              "Prefer": "return=minimal",
+            },
+            body: JSON.stringify(notificationRows.slice(i, i + CHUNK)),
+          });
+          
+          if (!chunkRes.ok) {
+            console.warn(`[mid-game-notify] insert notifications game=${game.id} HTTP ${chunkRes.status}`);
+          }
+        }
+      }
+      
+      if (result.invalidTokens.length > 0) {
+        await deleteInvalidTokens(result.invalidTokens);
+      }
+      
+      console.log(`[mid-game-notify] game=${game.id} delivered=${result.delivered} failed=${result.failed} tokens=${tokens.length}`);
+    }
+  } catch (err) {
+    console.error("[mid-game-notify] tick failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 // ─── Combined tick ────────────────────────────────────────────────────────────
@@ -778,6 +938,7 @@ async function fullTick(): Promise<void> {
     watchdogTick(),
     prizeDistributionTick(),
     prizeNotificationTick(),
+    midGameNotificationTick(),
   ]);
 }
 
