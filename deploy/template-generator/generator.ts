@@ -33,10 +33,56 @@ const RABBITMQ_URL = Deno.env.get("RABBITMQ_URL") ?? "";
 const RABBITMQ_VHOST_OVERRIDE = Deno.env.get("RABBITMQ_VHOST");
 const MQ_EXCHANGE = Deno.env.get("MQ_COMMAND_EXCHANGE") ?? "";
 const MQ_ORCHESTRATOR_QUEUE = Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.commands";
+// Debug log forwarding — toggled via DEBUG_LOG_MQ (restart required to apply)
+const DEBUG_LOG_MQ    = Deno.env.get("DEBUG_LOG_MQ") === "true";
+const DEBUG_LOG_QUEUE = Deno.env.get("DEBUG_LOG_QUEUE") ?? "quiz4win.debug.logs";
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   console.error("[template-generator] FATAL: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing");
   Deno.exit(1);
+}
+
+// ─── Debug log forwarder ──────────────────────────────────────────────────────
+// When DEBUG_LOG_MQ=true every console.log/warn/error is also published to
+// the RabbitMQ debug queue as structured JSON (fire-and-forget, never throws).
+if (DEBUG_LOG_MQ && RABBITMQ_URL) {
+  ((): void => {
+    const raw = RABBITMQ_URL;
+    let scheme: string, norm: string;
+    if (raw.startsWith("amqps://"))      { scheme = "https"; norm = "https://" + raw.slice(8); }
+    else if (raw.startsWith("amqp://")) { scheme = "http";  norm = "http://"  + raw.slice(7); }
+    else return;
+    let base: string, auth: string, vhostEnc: string;
+    try {
+      const u = new URL(norm);
+      const vhost = u.pathname && u.pathname !== "/" ? decodeURIComponent(u.pathname.slice(1)) : "/";
+      base     = `${scheme}://${u.hostname}`;
+      auth     = "Basic " + btoa(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`);
+      vhostEnc = encodeURIComponent(vhost);
+    } catch { return; }
+
+    const pub = (msg: string, lvl: string): void => {
+      void fetch(`${base}/api/exchanges/${vhostEnc}//publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": auth },
+        body: JSON.stringify({
+          properties: { content_type: "application/json" },
+          routing_key: DEBUG_LOG_QUEUE,
+          payload: JSON.stringify({ ts: new Date().toISOString(), svc: "generator", lvl, msg }),
+          payload_encoding: "string",
+        }),
+      }).catch(() => {});
+    };
+
+    const _log   = console.log.bind(console);
+    const _warn  = console.warn.bind(console);
+    const _error = console.error.bind(console);
+    console.log   = (...a: unknown[]) => { _log(...a);   pub(a.map(String).join(" "), "info");  };
+    console.warn  = (...a: unknown[]) => { _warn(...a);  pub(a.map(String).join(" "), "warn");  };
+    console.error = (...a: unknown[]) => { _error(...a); pub(a.map(String).join(" "), "error"); };
+
+    _log(`[generator] debug-log forwarding ENABLED → queue=${DEBUG_LOG_QUEUE}`);
+  })();
 }
 
 const RPC_URL = `${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/rpc/generate_games_from_active_templates`;
@@ -205,6 +251,73 @@ async function schedulerTick(): Promise<void> {
     }
   } catch (err) {
     console.error("[scheduler] tick failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ─── Start re-drive tick ──────────────────────────────────────────────────────
+// At-least-once delivery for StartGame. schedulerTick flips upcoming→open and
+// fires StartGame exactly once; if that message is lost (MQ blip, orchestrator
+// down/restart, transient handler error) the game strands with a zero countdown.
+// This tick re-publishes StartGame for two failure shapes, both bounded to the
+// orphan-cancel grace window so the re-drive wins the race against rules-audit
+// §3 orphan-cancel (a stuck game is *started*, not killed):
+//
+//   1. status='open'  + started_at IS NULL          — the start flip published
+//      but nothing ever consumed it (the game never went live).
+//   2. status='live'  + started_at within the grace — the start flip committed
+//      but question 0 never broadcast (failed first attempt / orchestrator
+//      recreated before the loop ran), so it sits frozen at 0:00.
+//
+// The orchestrator's handleStartGame is idempotent: for a 'live' game it checks
+// Redis and no-ops when a question is already in progress, so healthy running
+// games are re-published-then-skipped harmlessly, while a live-at-zero game is
+// recovered. A game leaves both sets the instant a question actually starts.
+async function startRedriveTick(): Promise<void> {
+  if (!RABBITMQ_URL) return; // nothing to re-drive without MQ
+  try {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const floorIso = new Date(now - RULES_AUDIT_ORPHAN_GRACE_MINUTES * 60_000).toISOString();
+    const baseHeaders = {
+      "apikey": SERVICE_ROLE_KEY!,
+      "Authorization": `Bearer ${SERVICE_ROLE_KEY}`,
+      "Accept": "application/json",
+    };
+
+    // (1) open + never consumed — gated on scheduled_at within grace.
+    const openRes = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/games` +
+      `?status=eq.open&started_at=is.null` +
+      `&scheduled_at=lte.${encodeURIComponent(nowIso)}` +
+      `&scheduled_at=gte.${encodeURIComponent(floorIso)}` +
+      `&select=id,title`,
+      { headers: baseHeaders },
+    );
+    if (openRes.ok) {
+      const openGames = await openRes.json() as Array<{ id: string; title: string }>;
+      if (openGames.length) {
+        console.warn(`[scheduler] re-driving StartGame for ${openGames.length} stuck open game(s)`);
+        for (const g of openGames) await publishStartGame(g.id, g.title);
+      }
+    }
+
+    // (2) live but question 0 never broadcast — gated on started_at within grace.
+    const liveRes = await fetch(
+      `${SUPABASE_URL!.replace(/\/$/, "")}/rest/v1/games` +
+      `?status=eq.live&started_at=not.is.null` +
+      `&started_at=gte.${encodeURIComponent(floorIso)}` +
+      `&select=id,title`,
+      { headers: baseHeaders },
+    );
+    if (liveRes.ok) {
+      const liveGames = await liveRes.json() as Array<{ id: string; title: string }>;
+      if (liveGames.length) {
+        console.warn(`[scheduler] re-driving StartGame for ${liveGames.length} recently-live game(s) (orchestrator skips any already running)`);
+        for (const g of liveGames) await publishStartGame(g.id, g.title);
+      }
+    }
+  } catch (err) {
+    console.error("[scheduler] start re-drive tick failed:", err instanceof Error ? err.message : err);
   }
 }
 
@@ -659,6 +772,7 @@ async function fullTick(): Promise<void> {
   await Promise.all([
     tick(),
     schedulerTick(),
+    startRedriveTick(),
     rulesAuditTick(),
     reminderTick(),
     watchdogTick(),

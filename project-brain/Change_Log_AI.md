@@ -359,3 +359,43 @@ Architecture (§2.1 compliant — Redis source of truth, not Postgres FOR UPDATE
 - admin/src/app/(app)/users/[id]/page.tsx: added "Wins" card listing the games where this user earned a prize (game title, rank, prize_earned, currency, ended_at). Filtered by prize_earned > 0 on game_participants joined with games.
 - Verified end-to-end on live DB inside a ROLLBACK transaction with 4 synthetic users + a mixed prize_breakdown ({rank:1,amount:50}, {rank:2,percent:30}, {rank_from:3,rank_to:4,amount:5}, pool=100 USD): ranks/prize_earned/wallet_balance/total_prizes_won all correct, 4 transactions inserted (type='prize', status='completed'), 2nd call idempotent, total_winners=4, prizes_distributed_at set. No DB pollution after ROLLBACK.
 - Migration applied to live DB. Container rebuild required: docker compose up -d --build --force-recreate template-generator game-orchestrator
+
+[2026-06-03] [A-01] [BUILD] At-least-once StartGame (fixes games stranded in 'open' with 0:00 countdown). schedulerTick still fires StartGame once on upcoming→open; added startRedriveTick() to template-generator that re-publishes StartGame for games stuck status='open' AND started_at IS NULL AND scheduled_at in [now-grace, now] (grace = RULES_AUDIT_ORPHAN_GRACE_MINUTES, default 15m). Re-drive (no grace) wins the race against rules-audit §3 orphan-cancel, so a missed game is started rather than killed. Hardened orchestrator handleStartGame with an idempotency guard: no-op when status has already advanced past 'open' (live/completed/cancelled), preventing a duplicate question loop / GAME_STARTED if a re-drive races a slow first attempt. Files: deploy/template-generator/generator.ts, deploy/game-orchestrator/orchestrator.ts.
+
+[2026-06-03] [A-01] [FIX] Recover games stranded in status='live' with no question broadcast (frozen 0:00). Root cause: handleStartGame commits status='live'+started_at BEFORE question 0 is confirmed broadcast, so any failure after the flip (prepare_question Lua non-ok, or a throw in the loop) leaves the game live-at-zero; recoverRunningGames only re-armed a timer when currentQuestionStatus='active', so a never-started live game was ignored on restart, and the idempotency guard (status!=open) blocked any re-drive. Fixes: (1) orchestrator handleStartGame guard is now Redis-aware — completed/cancelled are terminal, but a 'live' game is only skipped when Redis currentQuestionStatus is present; live-but-never-started falls through and (re)starts the loop. (2) prepare_question non-ok now throws (was a silent return) so the failure surfaces and is re-driven. (3) recoverRunningGames auto-mode adds a branch: live + currentQuestionIndex absent → startQuestionLoop({questionIndex:0}). (4) startRedriveTick (template-:
+docker compose logs game-orchestrator | grep "5677c39b-4398-4778-bf8d-7dd5359c09c3" | tail -n 50
+:
+docker exec -it backend-redis-1 redis-cli HGETALL q4w:game:5677c39b-4398-4778-bf8d-7dd5359c09c3:state
+:
+docker ps --format "{{.Names}}"
+:
+docker ps
+:
+docker compose ps
+:
+docker container ls -a
+:
+ls -F
+:
+pwd
+:
+echo "hello"
+:
+head -n 5 package.json
+:
+test -f .env && echo ".env: present" || echo ".env: MISSING"; grep -c -E "^RABBITMQ_URL=" .env 2>/dev/null | sed 's/^/RABBITMQ_URL lines: /'; grep -E "^(MQ_COMMAND_EXCHANGE|MQ_ORCHESTRATOR_QUEUE|RABBITMQ_VHOST|DEBUG_LOG)=" .env 2>/dev/null | sed -E 's/=.*/=<set>/'
+:
+if [ -f .env ]; then echo "env_present=yes"; else echo "env_present=no"; fi
+grep -q "^RABBITMQ_URL=" .env && echo "rabbitmq_url=set" || echo "rabbitmq_url=missing"
+grep -qE "^RABBITMQ_URL=amqps" .env && echo "scheme=amqps_external" || echo "scheme=other"
+'
+"
+:
+bash -c 'test -f .env && echo env_present=yes || echo env_present=no; grep -q "^RABBITMQ_URL=" .env && echo rabbitmq_url=set || echo rabbitmq_url=missing; grep -qE "^RABBITMQ_URL=amqps" .env && echo scheme=amqps_external || echo scheme=other'
+
+
+
+:
+printf 'env_present=%s\n' "$([ -f .env ] && echo yes || echo no)"
+:
+echo hello123

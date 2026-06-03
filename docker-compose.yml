@@ -216,6 +216,9 @@ services:
       # FCM — used by reminderTick() to push T-60/T-10/T-1 game-start reminders.
       FCM_SERVICE_ACCOUNT_PATH: ${FCM_SERVICE_ACCOUNT_PATH:-/app/configs/quiz4win-68443-firebase-adminsdk-fbsvc-24d33392b8.json}
       TZ: UTC
+      # Debug log forwarding (shared with game-orchestrator)
+      DEBUG_LOG_MQ: ${DEBUG_LOG_MQ:-false}
+      DEBUG_LOG_QUEUE: ${DEBUG_LOG_QUEUE:-quiz4win.debug.logs}
     volumes:
       # Same read-only mount the admin container uses, so a single service-account
       # JSON powers both FCM senders.
@@ -283,6 +286,10 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       TZ: UTC
+      # Debug log forwarding — set DEBUG_LOG_MQ=true to stream all logs to
+      # the quiz4win.debug.logs RabbitMQ queue (run deploy/debug-consumer to read).
+      DEBUG_LOG_MQ: ${DEBUG_LOG_MQ:-false}
+      DEBUG_LOG_QUEUE: ${DEBUG_LOG_QUEUE:-quiz4win.debug.logs}
     networks:
       - quiz4win
 

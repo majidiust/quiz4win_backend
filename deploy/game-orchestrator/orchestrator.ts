@@ -45,9 +45,56 @@ const OPENAI_MODEL    = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
 const LK_URL          = Deno.env.get("LIVEKIT_SERVER_URL") ?? "";
 const LK_KEY          = Deno.env.get("LIVEKIT_API_KEY") ?? "";
 const LK_SECRET       = Deno.env.get("LIVEKIT_API_SECRET") ?? "";
+// Debug log forwarding — toggled via DEBUG_LOG_MQ (restart required to apply)
+const DEBUG_LOG_MQ    = Deno.env.get("DEBUG_LOG_MQ") === "true";
+const DEBUG_LOG_QUEUE = Deno.env.get("DEBUG_LOG_QUEUE") ?? "quiz4win.debug.logs";
 
 if (!RABBITMQ_URL) { console.error("[orchestrator] FATAL: RABBITMQ_URL required"); Deno.exit(1); }
 if (!SUPABASE_URL || !SERVICE_KEY) { console.error("[orchestrator] FATAL: SUPABASE_* required"); Deno.exit(1); }
+
+// ─── Debug log forwarder ──────────────────────────────────────────────────────
+// When DEBUG_LOG_MQ=true every console.log/warn/error is also published to
+// the RabbitMQ debug queue as structured JSON (fire-and-forget, never throws).
+// Toggle: set DEBUG_LOG_MQ=true in .env and restart the container.
+if (DEBUG_LOG_MQ && RABBITMQ_URL) {
+  ((): void => {
+    const raw = RABBITMQ_URL;
+    let scheme: string, norm: string;
+    if (raw.startsWith("amqps://"))      { scheme = "https"; norm = "https://" + raw.slice(8); }
+    else if (raw.startsWith("amqp://")) { scheme = "http";  norm = "http://"  + raw.slice(7); }
+    else return;
+    let base: string, auth: string, vhostEnc: string;
+    try {
+      const u = new URL(norm);
+      const vhost = u.pathname && u.pathname !== "/" ? decodeURIComponent(u.pathname.slice(1)) : "/";
+      base      = `${scheme}://${u.hostname}`;
+      auth      = "Basic " + btoa(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`);
+      vhostEnc  = encodeURIComponent(vhost);
+    } catch { return; }
+
+    const pub = (msg: string, lvl: string): void => {
+      void fetch(`${base}/api/exchanges/${vhostEnc}//publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": auth },
+        body: JSON.stringify({
+          properties: { content_type: "application/json" },
+          routing_key: DEBUG_LOG_QUEUE,
+          payload: JSON.stringify({ ts: new Date().toISOString(), svc: "orchestrator", lvl, msg }),
+          payload_encoding: "string",
+        }),
+      }).catch(() => {});
+    };
+
+    const _log   = console.log.bind(console);
+    const _warn  = console.warn.bind(console);
+    const _error = console.error.bind(console);
+    console.log   = (...a: unknown[]) => { _log(...a);   pub(a.map(String).join(" "), "info");  };
+    console.warn  = (...a: unknown[]) => { _warn(...a);  pub(a.map(String).join(" "), "warn");  };
+    console.error = (...a: unknown[]) => { _error(...a); pub(a.map(String).join(" "), "error"); };
+
+    _log(`[orchestrator] debug-log forwarding ENABLED → queue=${DEBUG_LOG_QUEUE}`);
+  })();
+}
 
 // ─── Redis key namespace (mirrors supabase/functions/_shared/redis_keys.ts) ──
 
@@ -472,8 +519,11 @@ async function startQuestionLoop(game: {
        String(now), String(endsAt), String(gracePeriodMs), locPayload]);
     const prepResult = JSON.parse(luaR as string) as {status:string};
     if (prepResult.status !== "ok") {
-      console.error(`[orchestrator] game=${gameId} prepare_question failed:`, luaR);
-      return;
+      // Don't swallow — a bare return here would strand the game 'live' with no
+      // question and no close timer. Throw so the failure surfaces and (for the
+      // first question) the StartGame is nack'd / re-driven by the scheduler and
+      // recoverRunningGames rather than freezing the player on a 0:00 screen.
+      throw new Error(`prepare_question failed game=${gameId} idx=${idx}: ${luaR}`);
     }
 
     // Broadcast QUESTION_STARTED (without correctOptionId — §13.4)
@@ -628,6 +678,39 @@ async function handleStartGame(payload: any): Promise<void> {
     `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,category,difficulty`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
+
+  // Idempotency / recovery guard (at-least-once StartGame). The scheduler
+  // re-drives stuck games, so a StartGame may race a slow first attempt or be
+  // delivered twice.
+  //   • completed/cancelled are terminal → always no-op.
+  //   • live is NOT treated as terminal: a game can be 'live' yet never have
+  //     broadcast question 0 (failed first attempt, orchestrator recreated
+  //     before the loop ran). We only skip when Redis shows a question has
+  //     actually started (currentQuestionStatus present); otherwise we fall
+  //     through and (re)start the question loop so it recovers instead of
+  //     stranding with a frozen 0:00 screen.
+  if (g.status === "completed" || g.status === "cancelled") {
+    console.log(`[orchestrator] StartGame: game ${gameId} already status=${g.status}, skipping (idempotent)`);
+    return;
+  }
+  if (g.status === "live") {
+    const rGuard = await getRedis();
+    const qStatus = await rGuard.hGet(K.game(gameId), "currentQuestionStatus") as string | null;
+    // Only skip if a question is actively in progress. 'closed' means the
+    // question window ended but the advance-to-next timer never fired (e.g.
+    // orchestrator was recreated between close and advance). Treating 'closed'
+    // as "running" would permanently strand the game — recoverRunningGames
+    // handles the closed→advance path on startup.
+    if (qStatus === "active") {
+      console.log(`[orchestrator] StartGame: game ${gameId} already live with active question, skipping (idempotent)`);
+      return;
+    }
+    if (qStatus === "closed") {
+      console.warn(`[orchestrator] StartGame: game ${gameId} is live with question ${await rGuard.hGet(K.game(gameId), "currentQuestionIndex")} closed — recoverRunningGames will advance; skipping re-init`);
+      return;
+    }
+    console.warn(`[orchestrator] StartGame: game ${gameId} is live but no question started — recovering`);
+  }
 
   const roomName: string = g.livekit_room_name ?? `quiz-${gameId}`;
   const timeLimitSeconds: number = g.time_per_question ?? 10;
@@ -1118,6 +1201,7 @@ async function recoverRunningGames(): Promise<void> {
 
     // ── Auto-mode recovery ──────────────────────────────────────────────────
     if (qStatus === "active" && qIdxRaw !== null) {
+      // Question is mid-flight — re-arm the close timer.
       const endsAtRaw = await r.hGet(K.game(g.id), "currentQuestionEndsAt") as string | null;
       const deadline = endsAtRaw ? parseInt(endsAtRaw, 10) + grace + 50 : Date.now() + 1000;
       const remaining = Math.max(0, deadline - Date.now());
@@ -1125,6 +1209,20 @@ async function recoverRunningGames(): Promise<void> {
       const timer = setTimeout(() => { void closeQuestion(gameCommon, idx); }, remaining);
       closeTimers.set(g.id, timer);
       console.log(`[orchestrator] recovered auto game=${g.id} q=${idx} remaining=${remaining}ms`);
+    } else if (qStatus === "closed" && qIdxRaw !== null) {
+      // Question window ended and was closed (CLOSE_Q_SCRIPT ran) but the
+      // advance-to-next timer never fired — the orchestrator was recreated
+      // in the gap between closeQuestion finishing and advanceQuestion(idx+1)
+      // being called. Resume from the next question immediately.
+      const nextIdx = parseInt(qIdxRaw, 10) + 1;
+      console.warn(`[orchestrator] recovering auto game=${g.id} — q${qIdxRaw} closed but q${nextIdx} never started; advancing now`);
+      void startQuestionLoop({ ...gameCommon, questionIndex: nextIdx });
+    } else if (qIdxRaw === null) {
+      // Live but question 0 never started — the start flip committed but the
+      // first question failed (or the orchestrator was recreated before the
+      // loop ran). Start the question loop from index 0.
+      console.warn(`[orchestrator] recovering auto game=${g.id} that is live but never started a question — starting question loop`);
+      void startQuestionLoop({ ...gameCommon, questionIndex: 0 });
     }
   }
 }
