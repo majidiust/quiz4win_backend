@@ -582,7 +582,11 @@ async function closeQuestion(game: {
 
   // Handle no-answer eliminations (§10.2)
   const maxWrong = game.maxWrongAnswers;
-  for (const userId of (closeResult.notAnswered ?? [])) {
+  // SDIFF over an empty set is encoded by cjson as `{}` (object), not `[]`.
+  // Guard with Array.isArray so an empty result is a no-op instead of throwing
+  // "object is not iterable" (which crashed the loop on every close — see logs).
+  const notAnswered = Array.isArray(closeResult.notAnswered) ? closeResult.notAnswered : [];
+  for (const userId of notAnswered) {
     const userKey = K.user(gameId, userId);
     const wrongRaw = await r.hGet(userKey, "wrongCount") as string | null;
     const rlRaw    = await r.hGet(userKey, "remainingLives") as string | null;
@@ -614,11 +618,11 @@ async function closeQuestion(game: {
     type: "QUESTION_CLOSED", gameId,
     questionId: closeResult.questionId, questionIndex: idx,
     correctOptionId: correctOpt,
-    noAnswerCount: closeResult.notAnswered?.length ?? 0,
+    noAnswerCount: notAnswered.length,
     closedAt: now, serverTime: now,
   }, "QUESTION_CLOSED");
 
-  console.log(`[orchestrator] game=${gameId} question ${idx} closed; notAnswered=${closeResult.notAnswered?.length ?? 0}`);
+  console.log(`[orchestrator] game=${gameId} question ${idx} closed; notAnswered=${notAnswered.length}`);
 
   // In auto mode: pause 3 s then advance to the next question automatically.
   // In presenter mode: wait for the next PrepareQuestion / AdvanceQuestion command.
