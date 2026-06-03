@@ -1,0 +1,15 @@
+{
+  "name": "quiz4win-test-participant",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end test bot: joins a live game, connects to LiveKit, answers questions randomly.",
+  "bin": { "quiz4win-test-participant": "participant.mjs" },
+  "scripts": {
+    "start": "node participant.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.29"
+  }
+}
