@@ -48,6 +48,14 @@ const LK_SECRET       = Deno.env.get("LIVEKIT_API_SECRET") ?? "";
 // Debug log forwarding — toggled via DEBUG_LOG_MQ (restart required to apply)
 const DEBUG_LOG_MQ    = Deno.env.get("DEBUG_LOG_MQ") === "true";
 const DEBUG_LOG_QUEUE = Deno.env.get("DEBUG_LOG_QUEUE") ?? "quiz4win.debug.logs";
+// No-duplicate-question invariant: a question may not be re-asked across the
+// platform until this cooldown elapses (default 7 days). Enforced via the
+// claim_question RPC; the orchestrator re-rolls a fresh question on collision.
+const QUESTION_REASK_COOLDOWN_SECONDS =
+  Number(Deno.env.get("QUESTION_REASK_COOLDOWN_SECONDS") ?? "604800") || 604800;
+// Max re-generation attempts before accepting a question to avoid stalling.
+const QUESTION_DEDUP_MAX_RETRIES =
+  Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
 
 if (!RABBITMQ_URL) { console.error("[orchestrator] FATAL: RABBITMQ_URL required"); Deno.exit(1); }
 if (!SUPABASE_URL || !SERVICE_KEY) { console.error("[orchestrator] FATAL: SUPABASE_* required"); Deno.exit(1); }
@@ -252,6 +260,30 @@ async function dbUpdate(table: string, match: Record<string,string>, patch: Reco
   }
 }
 
+async function dbRpc(fn: string, args: Record<string, unknown>): Promise<any[] | null> {
+  try {
+    const res = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SERVICE_KEY,
+        "Authorization": `Bearer ${SERVICE_KEY}`,
+        "Accept": "application/json",
+      },
+      body: JSON.stringify(args),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      console.error(`[db] RPC ${fn} failed ${res.status}: ${txt.slice(0, 300)}`);
+      return null;
+    }
+    return await res.json() as any[];
+  } catch (e) {
+    console.error(`[db] RPC ${fn} error:`, e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 async function dbSelect(table: string, qs: string): Promise<any[]> {
   const res = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/${table}?${qs}`, {
     headers: {
@@ -360,29 +392,47 @@ interface GenQuestion {
 async function generateQuestion(params: {
   topic?: string; category?: string; difficulty?: string;
   targetLanguages: string[]; timeLimitSeconds?: number;
+  // Canonical texts the model must NOT reproduce (already asked this game, or
+  // a re-roll after a cross-platform cooldown collision).
+  avoidTexts?: string[];
+  // Override the sampling temperature — raised on dedup retries to escape the
+  // model's single most-likely (and therefore repeated) question.
+  temperature?: number;
 }): Promise<GenQuestion> {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not set");
-  const sys = `You are a multilingual quiz question generator.
+  const sys = `You are a multilingual quiz question generator acting as a live game-show host.
 Rules:
 - Generate ONE question with FOUR options: A, B, C, D.
 - Option IDs are IDENTICAL across all languages.
 - Exactly one correct answer.
 - Avoid political/hate/sexual/religious/illegal/ambiguous content.
+- The question MUST be original and clearly DIFFERENT from every entry in the
+  "avoid" list — a different fact/topic, not a reworded variant of the same one.
 - Output ONLY valid JSON, no markdown.
 
 Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionId":"A",
 "localizedPayloads":[{"language":"en","questionText":"","options":[{"id":"A","text":""},...]},...]
 ,"explanation":"","estimatedAnswerTimeSec":10,"safetyFlags":[]}`;
 
+  // Cap the avoid-list (most-recent first) so the prompt stays bounded.
+  const { avoidTexts, temperature, ...rest } = params;
+  const userPayload = {
+    ...rest,
+    avoid: (avoidTexts ?? []).slice(-40),
+    // A fresh seed every call pushes the model off its default answer so two
+    // back-to-back generations with identical params still differ.
+    diversitySeed: crypto.randomUUID(),
+  };
+
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method:"POST",
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},
     body: JSON.stringify({
-      model: OPENAI_MODEL, temperature:0.7, max_tokens:1500,
+      model: OPENAI_MODEL, temperature: temperature ?? 0.8, max_tokens:1500,
       response_format:{type:"json_object"},
       messages:[
         {role:"system",content:sys},
-        {role:"user",content:JSON.stringify({...params})},
+        {role:"user",content:JSON.stringify(userPayload)},
       ],
     }),
   });
@@ -442,6 +492,16 @@ const stagedQuestions = new Map<string, StagedQuestion>();
 const closeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Pre-generated question queue keyed by gameId
 const questionQueue = new Map<string, GenQuestion[]>();
+// Canonical question IDs already asked in a given game (within-game dedup).
+const askedQuestionIds = new Map<string, Set<string>>();
+// Canonical (normalized) question TEXTS already asked in a given game. Fed to
+// the generator's avoid-list so it never re-asks the same question (§ no-repeat).
+const askedQuestionTexts = new Map<string, Set<string>>();
+
+/** Normalizes question text to match claim_question's content_hash basis. */
+function normalizeText(t: string): string {
+  return t.trim().toLowerCase().replace(/\s+/g, " ");
+}
 
 /**
  * Keeps the per-game question queue filled to 3 entries (§5.7 pre-generation).
@@ -452,12 +512,19 @@ async function prefillQueue(gameId: string, config: {
   targetLanguages: string[]; timeLimitSeconds: number;
 }): Promise<void> {
   const queue = questionQueue.get(gameId) ?? [];
+  const askedTexts = askedQuestionTexts.get(gameId) ?? new Set<string>();
   while (queue.length < 3) {
+    // Avoid both already-asked questions and the ones already queued, so the
+    // 3 pre-generated questions are mutually distinct too.
+    const avoidTexts = [
+      ...askedTexts,
+      ...queue.map((qq) => normalizeText(qq.canonicalText)),
+    ];
     try {
       const q = await generateQuestion({
         topic: config.topic, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
-        timeLimitSeconds: config.timeLimitSeconds,
+        timeLimitSeconds: config.timeLimitSeconds, avoidTexts,
       });
       queue.push(q);
       console.log(`[orchestrator] game=${gameId} pre-generated question; queue=${queue.length}`);
@@ -467,6 +534,96 @@ async function prefillQueue(gameId: string, config: {
     }
   }
   questionQueue.set(gameId, queue);
+}
+
+/**
+ * Resolves a generated question to its canonical DB row via the claim_question
+ * RPC. Returns the canonical id and whether it was asked within the platform
+ * re-ask cooldown window (was_recent). Returns null only when the DB is
+ * unreachable, so callers can fall back to a local UUID and keep the game live.
+ */
+async function claimQuestion(q: GenQuestion, meta: {
+  category: string; difficulty: string;
+}): Promise<{ id: string; wasRecent: boolean } | null> {
+  const rows = await dbRpc("claim_question", {
+    p_text: q.canonicalText,
+    p_options: q.options.map(o => o.text),
+    p_option_ids: q.options.map(o => o.id),
+    p_correct_option_id: q.correctOptionId,
+    p_correct_index: q.options.findIndex(o => o.id === q.correctOptionId),
+    p_localized: q.localizedPayloads,
+    p_category: meta.category,
+    p_difficulty: meta.difficulty,
+    p_language: "en",
+    p_cooldown_seconds: QUESTION_REASK_COOLDOWN_SECONDS,
+  });
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return { id: String(rows[0].question_id), wasRecent: !!rows[0].was_recent };
+}
+
+/**
+ * Guarantees a non-duplicate question: a question is never repeated within the
+ * same game, and never re-asked across the platform inside the cooldown window
+ * (§ no-duplicate invariant). Re-generates a fresh question on collision up to
+ * QUESTION_DEDUP_MAX_RETRIES times, then accepts the last claim to avoid
+ * stalling the game. Falls back to a local UUID if the DB is unreachable.
+ */
+async function resolveUniqueQuestion(gameId: string, config: {
+  topic: string; category: string; difficulty: string;
+  targetLanguages: string[]; timeLimitSeconds: number;
+}, first: GenQuestion): Promise<{ q: GenQuestion; id: string }> {
+  const asked = askedQuestionIds.get(gameId) ?? new Set<string>();
+  askedQuestionIds.set(gameId, asked);
+  const askedTexts = askedQuestionTexts.get(gameId) ?? new Set<string>();
+  askedQuestionTexts.set(gameId, askedTexts);
+  // The avoid-list grows with every collision so the generator is explicitly
+  // told which questions NOT to produce — this is what actually breaks the
+  // "same popular trivia every time" loop (§ no-repeat invariant).
+  const avoidTexts = new Set<string>(askedTexts);
+  let q = first;
+  let fallback: { q: GenQuestion; id: string } | null = null;
+
+  for (let attempt = 0; attempt < QUESTION_DEDUP_MAX_RETRIES; attempt++) {
+    const claim = await claimQuestion(q, config);
+    if (claim) {
+      fallback = { q, id: claim.id };
+      if (!claim.wasRecent && !asked.has(claim.id)) {
+        asked.add(claim.id);
+        askedTexts.add(normalizeText(q.canonicalText));
+        return { q, id: claim.id };
+      }
+      console.warn(`[orchestrator] game=${gameId} question collision ` +
+        `(recent=${claim.wasRecent}, inGame=${asked.has(claim.id)}) — regenerating`);
+    }
+    // Feed the colliding text back so the next generation explicitly avoids it.
+    avoidTexts.add(normalizeText(q.canonicalText));
+    try {
+      q = await generateQuestion({
+        topic: config.topic, category: config.category,
+        difficulty: config.difficulty, targetLanguages: config.targetLanguages,
+        timeLimitSeconds: config.timeLimitSeconds,
+        avoidTexts: [...avoidTexts],
+        // Raise diversity on each retry to escape the model's default answer.
+        temperature: Math.min(1.2, 0.7 + attempt * 0.15),
+      });
+    } catch (e) {
+      console.error("[orchestrator] dedup regenerate failed:", e instanceof Error ? e.message : e);
+      break;
+    }
+  }
+
+  if (fallback) {
+    asked.add(fallback.id);
+    askedTexts.add(normalizeText(fallback.q.canonicalText));
+    console.warn(`[orchestrator] game=${gameId} accepting question after ` +
+      `${QUESTION_DEDUP_MAX_RETRIES} dedup attempts (fallback)`);
+    return fallback;
+  }
+  // DB unreachable — preserve the game with a local id (no audit row).
+  const id = crypto.randomUUID();
+  asked.add(id);
+  askedTexts.add(normalizeText(q.canonicalText));
+  return { q, id };
 }
 
 async function startQuestionLoop(game: {
@@ -489,7 +646,7 @@ async function startQuestionLoop(game: {
     // Ensure queue has questions
     await prefill();
     const queue = questionQueue.get(gameId) ?? [];
-    const q = queue.shift();
+    let q = queue.shift();
     questionQueue.set(gameId, queue);
     if (!q) {
       console.warn(`[orchestrator] game=${gameId} no question available at idx=${idx} — finalizing`);
@@ -497,17 +654,12 @@ async function startQuestionLoop(game: {
       return;
     }
 
-    // Persist question to DB (async — non-blocking)
-    const dbQuestionId = crypto.randomUUID();
-    void dbInsert("questions", {
-      id: dbQuestionId, text: q.canonicalText,
-      options: q.options.map(o => o.text),
-      option_ids: q.options.map(o => o.id),
-      correct_option_id: q.correctOptionId,
-      correct_index: q.options.findIndex(o => o.id === q.correctOptionId),
-      localized: q.localizedPayloads, validated: true,
-      category: game.category, difficulty: game.difficulty, language: "en",
-    });
+    // Resolve to a canonical, non-duplicate question (§ no-duplicate invariant)
+    // — re-rolls if asked recently across the platform or already used in this
+    // game; the returned id is used for Redis + broadcast + answer matching.
+    const resolved = await resolveUniqueQuestion(gameId, game, q);
+    q = resolved.q;
+    const dbQuestionId = resolved.id;
 
     // §8.2: Write to Redis FIRST, then broadcast
     const now = Date.now();
@@ -676,6 +828,8 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   questionQueue.delete(gameId);
   presenterGames.delete(gameId);
   stagedQuestions.delete(gameId);
+  askedQuestionIds.delete(gameId);
+  askedQuestionTexts.delete(gameId);
 }
 
 // ─── RabbitMQ message handlers ────────────────────────────────────────────────
@@ -872,25 +1026,19 @@ async function handlePrepareQuestion(payload: any): Promise<void> {
   // Ensure at least one question in the queue
   if ((questionQueue.get(gameId) ?? []).length === 0) await prefillQueue(gameId, config);
   const queue = questionQueue.get(gameId) ?? [];
-  const q = queue.shift();
+  let q = queue.shift();
   questionQueue.set(gameId, queue);
   if (!q) {
     console.error(`[orchestrator] PrepareQuestion: game=${gameId} question queue empty`);
     return;
   }
 
-  const questionId = crypto.randomUUID();
-
-  // Persist question row to DB (non-blocking — audit trail)
-  void dbInsert("questions", {
-    id: questionId, text: q.canonicalText,
-    options: q.options.map(o => o.text),
-    option_ids: q.options.map(o => o.id),
-    correct_option_id: q.correctOptionId,
-    correct_index: q.options.findIndex(o => o.id === q.correctOptionId),
-    localized: q.localizedPayloads, validated: true,
-    category: config.category, difficulty: config.difficulty, language: "en",
-  });
+  // Resolve to a canonical, non-duplicate question (§ no-duplicate invariant)
+  // — re-rolls if asked recently across the platform or already used in this
+  // game; the returned id is used for Redis staging + reveal + answer matching.
+  const resolved = await resolveUniqueQuestion(gameId, config, q);
+  q = resolved.q;
+  const questionId = resolved.id;
 
   // Atomically stage in Redis (idempotency guard prevents double-staging)
   const luaR = await evalLua(STAGE_Q_SCRIPT,

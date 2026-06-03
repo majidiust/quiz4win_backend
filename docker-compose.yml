@@ -281,6 +281,11 @@ services:
       # OpenAI (question generation — §5)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      # No-duplicate-question invariant: a question is never re-asked across the
+      # platform until this cooldown elapses (default 7 days = 604800s). The
+      # orchestrator re-rolls a fresh question on collision (claim_question RPC).
+      QUESTION_REASK_COOLDOWN_SECONDS: ${QUESTION_REASK_COOLDOWN_SECONDS:-604800}
+      QUESTION_DEDUP_MAX_RETRIES: ${QUESTION_DEDUP_MAX_RETRIES:-5}
       # LiveKit (broadcast — §3.5)
       LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
