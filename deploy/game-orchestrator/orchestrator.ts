@@ -539,7 +539,12 @@ async function startQuestionLoop(game: {
 
     // Schedule close after the answer window + grace
     const closeDelay = timeLimitSeconds * 1000 + gracePeriodMs + 50;
-    const timer = setTimeout(() => { void closeQuestion(game, idx); }, closeDelay);
+    const timer = setTimeout(() => {
+      closeQuestion(game, idx).catch(e =>
+        console.error(`[orchestrator] game=${gameId} closeQuestion q=${idx} CRASH:`,
+          e instanceof Error ? (e.stack ?? e.message) : String(e))
+      );
+    }, closeDelay);
     closeTimers.set(gameId, timer);
 
     // Kick off next pre-generation in the background
@@ -619,7 +624,10 @@ async function closeQuestion(game: {
   // In presenter mode: wait for the next PrepareQuestion / AdvanceQuestion command.
   if (!presenterGames.has(gameId)) {
     setTimeout(() => {
-      void startQuestionLoop({...game, questionIndex: idx + 1});
+      startQuestionLoop({...game, questionIndex: idx + 1}).catch(e =>
+        console.error(`[orchestrator] game=${gameId} startQuestionLoop q=${idx + 1} CRASH:`,
+          e instanceof Error ? (e.stack ?? e.message) : String(e))
+      );
     }, 3000);
   } else {
     console.log(`[orchestrator] game=${gameId} presenter mode — q=${idx} closed; ` +
@@ -981,8 +989,12 @@ async function handleStartQuestion(payload: any): Promise<void> {
     topic: config.topic, category: config.category, difficulty: config.difficulty,
     gracePeriodMs: config.gracePeriodMs, maxWrongAnswers: config.maxWrongAnswers,
   };
-  const timer = setTimeout(() => { void closeQuestion(gameParams, idx); },
-    timeLimit * 1000 + config.gracePeriodMs + 50);
+  const timer = setTimeout(() => {
+    closeQuestion(gameParams, idx).catch(e =>
+      console.error(`[orchestrator] game=${gameId} presenter closeQuestion q=${idx} CRASH:`,
+        e instanceof Error ? (e.stack ?? e.message) : String(e))
+    );
+  }, timeLimit * 1000 + config.gracePeriodMs + 50);
   closeTimers.set(gameId, timer);
 
   // Advance internal index so the next PrepareQuestion/AdvanceQuestion uses idx+1
@@ -1206,7 +1218,12 @@ async function recoverRunningGames(): Promise<void> {
       const deadline = endsAtRaw ? parseInt(endsAtRaw, 10) + grace + 50 : Date.now() + 1000;
       const remaining = Math.max(0, deadline - Date.now());
       const idx = parseInt(qIdxRaw, 10);
-      const timer = setTimeout(() => { void closeQuestion(gameCommon, idx); }, remaining);
+      const timer = setTimeout(() => {
+        closeQuestion(gameCommon, idx).catch(e =>
+          console.error(`[orchestrator] game=${g.id} recovery closeQuestion q=${idx} CRASH:`,
+            e instanceof Error ? (e.stack ?? e.message) : String(e))
+        );
+      }, remaining);
       closeTimers.set(g.id, timer);
       console.log(`[orchestrator] recovered auto game=${g.id} q=${idx} remaining=${remaining}ms`);
     } else if (qStatus === "closed" && qIdxRaw !== null) {
@@ -1216,13 +1233,19 @@ async function recoverRunningGames(): Promise<void> {
       // being called. Resume from the next question immediately.
       const nextIdx = parseInt(qIdxRaw, 10) + 1;
       console.warn(`[orchestrator] recovering auto game=${g.id} — q${qIdxRaw} closed but q${nextIdx} never started; advancing now`);
-      void startQuestionLoop({ ...gameCommon, questionIndex: nextIdx });
+      startQuestionLoop({ ...gameCommon, questionIndex: nextIdx }).catch(e =>
+        console.error(`[orchestrator] game=${g.id} recovery startQuestionLoop q=${nextIdx} CRASH:`,
+          e instanceof Error ? (e.stack ?? e.message) : String(e))
+      );
     } else if (qIdxRaw === null) {
       // Live but question 0 never started — the start flip committed but the
       // first question failed (or the orchestrator was recreated before the
       // loop ran). Start the question loop from index 0.
       console.warn(`[orchestrator] recovering auto game=${g.id} that is live but never started a question — starting question loop`);
-      void startQuestionLoop({ ...gameCommon, questionIndex: 0 });
+      startQuestionLoop({ ...gameCommon, questionIndex: 0 }).catch(e =>
+        console.error(`[orchestrator] game=${g.id} recovery startQuestionLoop q=0 CRASH:`,
+          e instanceof Error ? (e.stack ?? e.message) : String(e))
+      );
     }
   }
 }
@@ -1238,6 +1261,18 @@ const shutdown = (sig: string) => {
 };
 Deno.addSignalListener("SIGTERM", () => shutdown("SIGTERM"));
 Deno.addSignalListener("SIGINT",  () => shutdown("SIGINT"));
+
+// ─── Global safety net: log unhandled rejections instead of crashing ─────────
+// Any `void asyncFn()` that throws would otherwise kill the Deno process.
+// This handler logs the error and prevents the exit so the game loop continues.
+globalThis.addEventListener("unhandledrejection", (event) => {
+  event.preventDefault();
+  const reason = event.reason;
+  console.error(
+    "[orchestrator] UNHANDLED REJECTION (process kept alive):",
+    reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+  );
+});
 
 console.log("[orchestrator] starting…");
 await recoverRunningGames();
