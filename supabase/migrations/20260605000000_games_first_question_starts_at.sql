@@ -19,9 +19,6 @@ ALTER TABLE public.games
     ADD COLUMN IF NOT EXISTS first_question_starts_at TIMESTAMPTZ;
 
 COMMENT ON COLUMN public.games.first_question_starts_at IS
-    'Server-decided UTC instant at which question 0 will be broadcast for ' ||
-    'auto-mode games. Populated by the orchestrator when StartGame fires; ' ||
-    'used by clients to render the pregame countdown and by the orchestrator ' ||
-    'to honor any remaining warmup after a restart.';
+    'Server-decided UTC instant at which question 0 will be broadcast for auto-mode games. Populated by the orchestrator when StartGame fires; used by clients to render the pregame countdown and by the orchestrator to honor any remaining warmup after a restart.';
 
 COMMIT;
