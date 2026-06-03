@@ -56,6 +56,13 @@ const QUESTION_REASK_COOLDOWN_SECONDS =
 // Max re-generation attempts before accepting a question to avoid stalling.
 const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
+// Pregame warmup window: time between GAME_STARTED and the first
+// QUESTION_STARTED broadcast for auto-mode games. Used by clients to render
+// the "Get ready! The first question is being generated…" countdown screen.
+// The orchestrator also pre-generates the first batch of questions during this
+// window so OpenAI latency is hidden behind the visible countdown.
+const PREGAME_WARMUP_MS =
+  Number(Deno.env.get("PREGAME_WARMUP_MS") ?? "120000") || 120000;
 
 if (!RABBITMQ_URL) { console.error("[orchestrator] FATAL: RABBITMQ_URL required"); Deno.exit(1); }
 if (!SUPABASE_URL || !SERVICE_KEY) { console.error("[orchestrator] FATAL: SUPABASE_* required"); Deno.exit(1); }
@@ -897,18 +904,37 @@ async function handleStartGame(payload: any): Promise<void> {
   });
   await r.expire(K.game(gameId), 86400); // 24-hour safety TTL
 
-  // Persist Redis namespace reference to DB (§3.8)
+  const runMode: string = g.run_mode ?? "auto";
+  const nowMs = Date.now();
+  // Auto-mode games observe a pregame warmup so clients can render a
+  // synchronized countdown. Presenter-mode games are command-driven so the
+  // "first question" timestamp is undefined here.
+  const firstQuestionStartsAtMs = runMode === "auto"
+    ? nowMs + PREGAME_WARMUP_MS
+    : null;
+
+  // Persist Redis namespace reference + warmup target to DB (§3.8)
   await dbUpdate("games", { id: gameId }, {
-    status: "live", started_at: new Date().toISOString(),
+    status: "live", started_at: new Date(nowMs).toISOString(),
     redis_namespace: namespace, redis_cluster_id: "default",
-    redis_started_at: new Date().toISOString(),
-    redis_expires_at: new Date(Date.now() + 86400000).toISOString(),
+    redis_started_at: new Date(nowMs).toISOString(),
+    redis_expires_at: new Date(nowMs + 86400000).toISOString(),
+    ...(firstQuestionStartsAtMs !== null
+      ? { first_question_starts_at: new Date(firstQuestionStartsAtMs).toISOString() }
+      : {}),
   });
 
-  // Broadcast GAME_STARTED
-  await broadcast(roomName, { type:"GAME_STARTED", gameId, serverTime:Date.now() }, "GAME_STARTED");
+  // Broadcast GAME_STARTED with warmup metadata so clients can render the
+  // "Get ready! The first question is being generated…" countdown screen.
+  await broadcast(roomName, {
+    type: "GAME_STARTED",
+    gameId,
+    serverTime: nowMs,
+    runMode,
+    pregameDurationMs: runMode === "auto" ? PREGAME_WARMUP_MS : 0,
+    firstQuestionStartsAt: firstQuestionStartsAtMs, // epoch ms; null for presenter mode
+  }, "GAME_STARTED");
 
-  const runMode: string = g.run_mode ?? "auto";
   const gameCommon = {
     id: gameId, roomName, timeLimitSeconds,
     maxQuestions: g.questions_count ?? 10,
@@ -919,10 +945,17 @@ async function handleStartGame(payload: any): Promise<void> {
     gracePeriodMs, maxWrongAnswers,
   };
 
-   if (runMode === "auto") {
-     // Fully automated — wait 2 minutes then start question loop
-     await new Promise(resolve => setTimeout(resolve, 120_000));
-     await startQuestionLoop({ ...gameCommon, questionIndex: 0 });
+  if (runMode === "auto") {
+    // Fully automated — pre-generate questions during the warmup so the
+    // visible countdown absorbs OpenAI latency, then start the question loop.
+    void prefillQueue(gameId, gameCommon);
+    const remaining = Math.max(0, (firstQuestionStartsAtMs ?? nowMs) - Date.now());
+    if (remaining > 0) {
+      console.log(`[orchestrator] game=${gameId} pregame warmup ${remaining}ms ` +
+        `(firstQuestionStartsAt=${new Date(firstQuestionStartsAtMs!).toISOString()})`);
+      await new Promise(resolve => setTimeout(resolve, remaining));
+    }
+    await startQuestionLoop({ ...gameCommon, questionIndex: 0 });
 
   } else if (runMode === "presenter") {
     // Command-driven — AI Presenter sends PrepareQuestion / StartQuestion
@@ -1282,7 +1315,8 @@ async function startConsumer(): Promise<void> {
 async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
-    `grace_period_ms,questions_count,language,category,difficulty,run_mode`);
+    `grace_period_ms,questions_count,language,category,difficulty,run_mode,` +
+    `started_at,first_question_starts_at`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -1391,14 +1425,42 @@ async function recoverRunningGames(): Promise<void> {
           e instanceof Error ? (e.stack ?? e.message) : String(e))
       );
     } else if (qIdxRaw === null) {
-      // Live but question 0 never started — the start flip committed but the
-      // first question failed (or the orchestrator was recreated before the
-      // loop ran). Start the question loop from index 0.
-      console.warn(`[orchestrator] recovering auto game=${g.id} that is live but never started a question — starting question loop`);
-      startQuestionLoop({ ...gameCommon, questionIndex: 0 }).catch(e =>
+      // Live but question 0 never started — the orchestrator was recreated
+      // during the pregame warmup (or the first question failed). Honor any
+      // remaining warmup so clients still see a synchronized countdown, and
+      // re-broadcast GAME_STARTED with the original target instant so late
+      // joiners / reconnects can align.
+      const firstQAt = g.first_question_starts_at
+        ? Date.parse(g.first_question_starts_at as string)
+        : NaN;
+      const remaining = Number.isFinite(firstQAt) ? firstQAt - Date.now() : 0;
+      console.warn(`[orchestrator] recovering auto game=${g.id} live with no question yet ` +
+        `— remaining warmup=${Math.max(0, remaining)}ms`);
+
+      // Re-broadcast GAME_STARTED so clients that lost the original event can
+      // re-synchronize the countdown. Best-effort; failures are logged inside
+      // broadcast().
+      void broadcast(g.livekit_room_name ?? `quiz-${g.id}`, {
+        type: "GAME_STARTED",
+        gameId: g.id,
+        serverTime: Date.now(),
+        runMode: "auto",
+        pregameDurationMs: PREGAME_WARMUP_MS,
+        firstQuestionStartsAt: Number.isFinite(firstQAt) ? firstQAt : null,
+        recovered: true,
+      }, "GAME_STARTED");
+
+      // Pre-generate questions while waiting out the remaining warmup.
+      void prefillQueue(g.id, gameCommon);
+
+      const startLoop = () => startQuestionLoop({ ...gameCommon, questionIndex: 0 }).catch(e =>
         console.error(`[orchestrator] game=${g.id} recovery startQuestionLoop q=0 CRASH:`,
-          e instanceof Error ? (e.stack ?? e.message) : String(e))
-      );
+          e instanceof Error ? (e.stack ?? e.message) : String(e)));
+      if (remaining > 0) {
+        setTimeout(startLoop, remaining);
+      } else {
+        startLoop();
+      }
     }
   }
 }
