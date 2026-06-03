@@ -18,6 +18,13 @@
 
 BEGIN;
 
+-- Add the game_notifications column to notification_preferences if it doesn't exist.
+-- A plain ALTER TABLE ... ADD COLUMN IF NOT EXISTS is used here (instead of a DO
+-- block) so the column is guaranteed to be present in the catalog snapshot used
+-- by the subsequent CREATE FUNCTION body validation.
+ALTER TABLE public.notification_preferences
+    ADD COLUMN IF NOT EXISTS game_notifications BOOLEAN NOT NULL DEFAULT TRUE;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- RPC: get_game_participant_push_tokens
 --   Returns every push_tokens.token for users who are participants in the game
@@ -56,9 +63,5 @@ GRANT  EXECUTE ON FUNCTION public.get_game_participant_push_tokens(UUID) TO serv
 
 -- ALTER TABLE public.games
 --     ADD COLUMN IF NOT EXISTS last_mid_game_notification_at TIMESTAMPTZ;
-
-COMMENT ON COLUMN public.games.last_mid_game_notification_at IS
-    'When the last mid-game participant notification was sent for this game. '
-    'Used for rate limiting to avoid spamming participants.';
 
 COMMIT;
