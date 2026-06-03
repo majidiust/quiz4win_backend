@@ -213,7 +213,11 @@ async function dbSelect(table: string, qs: string): Promise<any[]> {
       "Accept": "application/json",
     },
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    console.error(`[db] SELECT ${table} failed ${res.status}: ${txt.slice(0, 300)}`);
+    return [];
+  }
   return res.json() as Promise<any[]>;
 }
 
@@ -621,7 +625,7 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,total_questions,language,category,difficulty`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,category,difficulty`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -658,7 +662,7 @@ async function handleStartGame(payload: any): Promise<void> {
   const runMode: string = g.run_mode ?? "auto";
   const gameCommon = {
     id: gameId, roomName, timeLimitSeconds,
-    maxQuestions: g.total_questions ?? 10,
+    maxQuestions: g.questions_count ?? 10,
     targetLanguages: [g.language ?? "en"],
     topic: g.title ?? "general knowledge",
     category: g.category ?? "mixed",
@@ -1030,7 +1034,7 @@ async function startConsumer(): Promise<void> {
 async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
-    `grace_period_ms,total_questions,language,category,difficulty,run_mode`);
+    `grace_period_ms,questions_count,language,category,difficulty,run_mode`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -1044,7 +1048,7 @@ async function recoverRunningGames(): Promise<void> {
     const gameCommon = {
       id: g.id, roomName,
       timeLimitSeconds: g.time_per_question ?? 10,
-      maxQuestions: g.total_questions ?? 10,
+      maxQuestions: g.questions_count ?? 10,
       targetLanguages: [g.language ?? "en"],
       topic: g.title ?? "general knowledge",
       category: g.category ?? "mixed",
