@@ -16,12 +16,17 @@
  *   npm install
  *
  * ── Run ──────────────────────────────────────────────────────────────────────
+ *   # When running against the custom API server (not Supabase Edge Functions):
+ *   node participant.mjs --game <GAME_ID> --api-url https://api.quiz4win.com
+ *   node participant.mjs --game <GAME_ID> --api-url https://api.quiz4win.com --bots 5
+ *   node participant.mjs --game <GAME_ID> --api-url https://api.quiz4win.com --no-livekit
+ *
+ *   # When running against a real Supabase project (functions deployed there):
  *   node participant.mjs --game <GAME_ID>
- *   node participant.mjs --game <GAME_ID> --bots 5
- *   node participant.mjs --game <GAME_ID> --no-livekit     # poll-only, no native dep
  *
  * Required env : SUPABASE_URL, SUPABASE_ANON_KEY, LIVEKIT_SERVER_URL
  * Optional env : SUPABASE_SERVICE_ROLE_KEY (auto-creates the test user if sign-in fails)
+ * Optional arg : --api-url <URL>  Override the API base URL (bypasses the supabase.co detection)
  */
 
 import process from "node:process";
@@ -34,19 +39,32 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const LIVEKIT_URL  = process.env.LIVEKIT_SERVER_URL || process.env.LIVEKIT_URL || "";
 
 function parseArgs(argv) {
-  const a = { game: "", bots: 1, livekit: true, password: "Test1234!" };
+  const a = { game: "", bots: 1, livekit: true, password: "Test1234!", apiUrl: "" };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === "--game") a.game = argv[++i] || "";
     else if (v === "--bots") a.bots = Math.max(1, parseInt(argv[++i] || "1", 10) || 1);
     else if (v === "--password") a.password = argv[++i] || a.password;
     else if (v === "--no-livekit") a.livekit = false;
+    else if (v === "--api-url") a.apiUrl = (argv[++i] || "").replace(/\/+$/, "");
   }
   return a;
 }
 const ARGS = parseArgs(process.argv.slice(2));
 
-const FN_BASE   = `${SUPABASE_URL}/functions/v1/game-session`;
+// Resolve the base URL for the game-session API:
+//   1. --api-url CLI flag (most reliable — use this for the custom API server)
+//   2. API_URL env var
+//   3. If SUPABASE_URL contains "supabase.co", assume real Supabase project and use /functions/v1/ prefix
+//   4. Otherwise assume a custom API container and use a top-level path
+const _envApiUrl = (process.env.API_URL || "").replace(/\/+$/, "");
+const _resolvedApiUrl = (ARGS.apiUrl || _envApiUrl || SUPABASE_URL).replace(/\/+$/, "");
+const FN_BASE = ARGS.apiUrl
+  ? `${ARGS.apiUrl}/game-session`                                 // explicit --api-url always top-level
+  : _resolvedApiUrl.includes("supabase.co")
+    ? `${_resolvedApiUrl}/functions/v1/game-session`              // real Supabase project
+    : `${_resolvedApiUrl}/game-session`;                          // custom API server
+
 const AUTH_BASE = `${SUPABASE_URL}/auth/v1`;
 
 if (!SUPABASE_URL || !ANON_KEY) {
@@ -56,7 +74,7 @@ if (!SUPABASE_URL || !ANON_KEY) {
 }
 if (!ARGS.game) {
   console.error("ERROR: --game <GAME_ID> is required.");
-  console.error("  node participant.mjs --game <GAME_ID> [--bots N] [--no-livekit]");
+  console.error("  node participant.mjs --game <GAME_ID> --api-url https://api.quiz4win.com [--bots N] [--no-livekit]");
   process.exit(1);
 }
 
@@ -261,7 +279,7 @@ async function runBot(index) {
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 (async () => {
-  log("main", C.bold, `game=${ARGS.game} bots=${ARGS.bots} livekit=${ARGS.livekit} url=${SUPABASE_URL}`);
+  log("main", C.bold, `game=${ARGS.game} bots=${ARGS.bots} livekit=${ARGS.livekit} api=${FN_BASE}`);
   const bots = [];
   for (let i = 1; i <= ARGS.bots; i++) {
     bots.push(runBot(i));
