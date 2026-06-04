@@ -5,6 +5,47 @@ Game Orchestrator. There is no Supabase Realtime. The client gets a LiveKit
 token from `POST /game-session/:id/join`, connects to the room, and listens for
 `Room.on(RoomEvent.DataReceived)`. The payload is UTF-8 JSON.
 
+All events are sent **RELIABLE** (LiveKit `kind: 0`), so a one-shot event such as
+`GAME_STARTED` is not silently dropped for a participant whose data channel is
+still settling. Events are still real-time only — a client that connects **after**
+an event was emitted will never receive that past event. For that case (and for
+reconnects) use the **snapshot** below instead of waiting for a replay.
+
+## Snapshot — catch-up on (re)connect
+Both `POST /game-session/:id/join` and `GET /game-session/:id/state` return a
+`snapshot` object that reconstructs the full current game state from Redis. This
+is the authoritative way to render the game when you join after `GAME_STARTED`
+(or after a disconnect): it carries everything `GAME_STARTED` carried plus live
+stats, the current question (no `correctOptionId`), and the caller's own status.
+Append `?lang=<code>` on `/state` (or `language` in the `/join` body) to pick the
+localized question entry. `snapshot` is `null` only before the orchestrator has
+initialized Redis (the response then falls back to a `source:"db"` payload).
+```json
+{
+  "snapshot": {
+    "game": {
+      "gameId": "uuid", "gameStatus": "running", "runMode": "auto",
+      "category": "science", "languages": ["en","ar","fa","tr"],
+      "questionsCount": 10, "title": "Science Quiz",
+      "prizePool": 1000, "prizePoolCurrency": "USD",
+      "projectedPrizePerSurvivor": 11.9,
+      "pregameDurationMs": 120000, "firstQuestionStartsAt": 1748721720000
+    },
+    "stats": { "participantCount": 100, "spectatorCount": 4, "eliminatedCount": 16, "activeSurvivorCount": 84 },
+    "currentQuestion": {
+      "questionId": "uuid", "questionIndex": 3, "status": "active",
+      "startsAt": 1748721800000, "endsAt": 1748721810000, "remainingTimeMs": 6200,
+      "localized": { "language": "en", "questionText": "…", "options": [{"id":"A","text":"…"}] }
+    },
+    "me": { "userStatus": "participant", "wrongCount": 1, "correctCount": 2, "remainingLives": 2, "eliminated": false, "eliminationReason": null, "canSubmitAnswer": true }
+  }
+}
+```
+`currentQuestion` is `null` between questions (pregame / after close). `me` is
+`null` for a user who has no Redis state yet. `prizePool` /
+`projectedPrizePerSurvivor` follow the same rule as `QUESTION_CLOSED`: `null` when
+no pool is configured, `0` when a pool exists but no survivors remain.
+
 Every payload includes:
 - `type` — the event name (table below)
 - `topic` — equal to `type` (also set as LiveKit's `topic` field; usable for filtering)

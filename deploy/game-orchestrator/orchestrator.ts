@@ -344,7 +344,10 @@ async function broadcast(roomName: string, event: object, topic: string): Promis
   // timestamps (startsAt/endsAt/firstQuestionStartsAt/eliminatedAt/closedAt) are
   // separate absolute fields and are left untouched.
   const data = new TextEncoder().encode(JSON.stringify({ topic, ...event, serverTime: Date.now() }));
-  const body = { room:roomName, data:btoa(String.fromCharCode(...data)), kind:1, topic };
+  // kind:0 = RELIABLE. One-shot game-state events (GAME_STARTED, QUESTION_STARTED,
+  // QUESTION_CLOSED, PLAYER_ELIMINATED, …) must not be silently dropped for a
+  // participant whose data channel is still settling, so they go reliable.
+  const body = { room:roomName, data:btoa(String.fromCharCode(...data)), kind:0, topic };
   try {
     const res = await fetch(`${httpBase}/twirp/livekit.RoomService/SendData`, {
       method:"POST",
@@ -380,7 +383,7 @@ async function broadcastToIdentity(
   const body = {
     room: roomName,
     data: btoa(String.fromCharCode(...data)),
-    kind: 1,
+    kind: 0, // RELIABLE — see broadcast()
     topic,
     destination_identities: identities,
   };
@@ -1271,7 +1274,7 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool,prize_pool_currency`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1317,20 +1320,6 @@ async function handleStartGame(payload: any): Promise<void> {
 
   // Initialise Redis game state (§18.1 — Orchestrator initializes namespace)
   const r = await getRedis();
-  // prize_pool in DB is NUMERIC(12,2) dollars; store as the raw decimal string
-  // so reads via hGet return the original value without float conversion error.
-  const prizePoolStr = g.prize_pool != null ? String(g.prize_pool) : null;
-  await r.hSet(K.game(gameId), {
-    gameId, gameStatus:"running", gameMode: g.run_mode ?? "auto",
-    joinPolicy: g.join_policy ?? "first_question_only",
-    gracePeriodMs: String(gracePeriodMs),
-    questionTimeLimitSeconds: String(timeLimitSeconds),
-    ...(maxWrongAnswers !== null ? { maxWrongAnswers: String(maxWrongAnswers) } : {}),
-    ...(prizePoolStr !== null ? { prizePool: prizePoolStr } : {}),
-    participantCount: "0", spectatorCount: "0",
-    eliminatedUserCount: "0", redisNamespace: namespace,
-  });
-  await r.expire(K.game(gameId), 86400); // 24-hour safety TTL
 
   const runMode: string = g.run_mode ?? "auto";
   const nowMs = Date.now();
@@ -1340,6 +1329,35 @@ async function handleStartGame(payload: any): Promise<void> {
   const firstQuestionStartsAtMs = runMode === "auto"
     ? nowMs + PREGAME_WARMUP_MS
     : null;
+  const pregameDurationMs = runMode === "auto" ? PREGAME_WARMUP_MS : 0;
+
+  // prize_pool in DB is NUMERIC(12,2) dollars; store as the raw decimal string
+  // so reads via hGet return the original value without float conversion error.
+  const prizePoolStr = g.prize_pool != null ? String(g.prize_pool) : null;
+  // The static GAME_STARTED fields (languages, category, questionsCount,
+  // prizePoolCurrency, title, pregameDurationMs, firstQuestionStartsAt) are
+  // persisted in the game hash so the game-session snapshot (returned by /join
+  // and GET /state) can reconstruct the full start payload for clients that
+  // connect AFTER GAME_STARTED was broadcast (and so never saw the one-shot).
+  await r.hSet(K.game(gameId), {
+    gameId, gameStatus:"running", gameMode: runMode,
+    joinPolicy: g.join_policy ?? "first_question_only",
+    gracePeriodMs: String(gracePeriodMs),
+    questionTimeLimitSeconds: String(timeLimitSeconds),
+    ...(maxWrongAnswers !== null ? { maxWrongAnswers: String(maxWrongAnswers) } : {}),
+    ...(prizePoolStr !== null ? { prizePool: prizePoolStr } : {}),
+    prizePoolCurrency: g.prize_pool_currency ?? "USD",
+    languages: JSON.stringify(resolveTargetLanguages(g.language, g.target_languages)),
+    category: g.category ?? "mixed",
+    questionsCount: String(g.questions_count ?? 10),
+    title: cleanTopic(g.title),
+    pregameDurationMs: String(pregameDurationMs),
+    ...(firstQuestionStartsAtMs !== null
+      ? { firstQuestionStartsAt: String(firstQuestionStartsAtMs) } : {}),
+    participantCount: "0", spectatorCount: "0",
+    eliminatedUserCount: "0", redisNamespace: namespace,
+  });
+  await r.expire(K.game(gameId), 86400); // 24-hour safety TTL
 
   // Persist Redis namespace reference + warmup target to DB (§3.8)
   await dbUpdate("games", { id: gameId }, {
@@ -1858,7 +1876,7 @@ async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
     `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
-    `started_at,first_question_starts_at,prize_pool`);
+    `started_at,first_question_starts_at,prize_pool,prize_pool_currency`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -1876,6 +1894,24 @@ async function recoverRunningGames(): Promise<void> {
       if (!existingPrize) {
         await r.hSet(K.game(g.id), { prizePool: String(g.prize_pool) });
       }
+    }
+    // Back-fill the static GAME_STARTED fields (games started before this fix,
+    // or after the 24h TTL expiry) so the game-session snapshot stays complete
+    // for clients that (re)connect after a recovery.
+    const existingLangs = await r.hGet(K.game(g.id), "languages") as string | null;
+    if (!existingLangs) {
+      const firstQAtMs = g.first_question_starts_at
+        ? Date.parse(g.first_question_starts_at as string) : NaN;
+      await r.hSet(K.game(g.id), {
+        prizePoolCurrency: g.prize_pool_currency ?? "USD",
+        languages: JSON.stringify(resolveTargetLanguages(g.language, g.target_languages)),
+        category: g.category ?? "mixed",
+        questionsCount: String(g.questions_count ?? 10),
+        title: cleanTopic(g.title),
+        pregameDurationMs: String(runMode === "auto" ? PREGAME_WARMUP_MS : 0),
+        ...(Number.isFinite(firstQAtMs)
+          ? { firstQuestionStartsAt: String(firstQAtMs) } : {}),
+      });
     }
     gameRoomNames.set(g.id, roomName);
     const gameCommon = {

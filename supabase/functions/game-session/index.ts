@@ -189,6 +189,10 @@ Deno.serve(async (req: Request) => {
         serverTime: serverNow,
         livekit: { roomName, token: livekitToken },
         language: lang,
+        // Full game state for clients that connect after the one-shot
+        // GAME_STARTED — carries the static start fields, live stats, the
+        // current question and this user's participant status.
+        snapshot: await buildSnapshot(redis as unknown as RedisLike, gameId, user.id, lang),
       });
     }
 
@@ -209,6 +213,8 @@ Deno.serve(async (req: Request) => {
       const userState = await (redis as { hGetAll: (k: string) => Promise<Record<string,string>> })
         .hGetAll(redisKeys.userState(gameId, user.id));
 
+      const lang = new URL(req.url).searchParams.get("lang") ?? "en";
+
       // Fetch localized question payload (no correctOptionId — §13.4)
       let questionPayload: Record<string, unknown> | null = null;
       if (gameState.currentQuestionStatus === "active" && gameState.currentQuestionIndex) {
@@ -217,7 +223,6 @@ Deno.serve(async (req: Request) => {
           .hGetAll(redisKeys.questionState(gameId, qIdx));
         if (qState?.questionId) {
           const { localizedPayload: _, correctOptionId: __, ...safeQState } = qState;
-          const lang = new URL(req.url).searchParams.get("lang") ?? "en";
           let localized: unknown = null;
           try { localized = qState.localizedPayload ? JSON.parse(qState.localizedPayload) : null; }
           catch { /* ignore */ }
@@ -236,6 +241,9 @@ Deno.serve(async (req: Request) => {
 
       return successResponse({
         source: "redis",
+        // Authoritative full snapshot — same contract as POST /join. Prefer this
+        // over the flat fields below, which are kept for backward compatibility.
+        snapshot: await buildSnapshot(redis as unknown as RedisLike, gameId, user.id, lang),
         gameStatus: gameState.gameStatus,
         gameMode: gameState.gameMode,
         participantCount: gameState.participantCount ? parseInt(gameState.participantCount,10) : 0,
@@ -323,4 +331,105 @@ Deno.serve(async (req: Request) => {
 
 async function safeJson(req: Request): Promise<Record<string, unknown>> {
   try { return await req.json() as Record<string, unknown>; } catch { return {}; }
+}
+
+type RedisLike = { hGetAll: (k: string) => Promise<Record<string, string>> };
+
+/**
+ * Assemble a complete, client-safe game snapshot from Redis. Returned by both
+ * POST /join and GET /state so a client that connects AFTER the one-shot
+ * GAME_STARTED (or a reconnecting client) can reconstruct the full game state:
+ * the static start fields (languages, category, title, prize pool, warmup
+ * timing) + live stats + the current question + its own participant status.
+ * Never includes correctOptionId (§13.4). Returns null when Redis has no game
+ * hash yet (caller falls back to the DB).
+ */
+async function buildSnapshot(
+  redis: RedisLike,
+  gameId: string,
+  userId: string,
+  lang: string,
+): Promise<Record<string, unknown> | null> {
+  const gs = await redis.hGetAll(redisKeys.gameState(gameId));
+  if (!gs?.gameStatus) return null;
+
+  const intOr = (v: string | undefined, d = 0) =>
+    v != null && v !== "" ? parseInt(v, 10) : d;
+  const participantCount = intOr(gs.participantCount);
+  const eliminatedCount  = intOr(gs.eliminatedUserCount);
+  const spectatorCount   = intOr(gs.spectatorCount);
+  const activeSurvivorCount = Math.max(0, participantCount - eliminatedCount);
+
+  // prizePool is the raw NUMERIC(12,2) dollar string. The projection mirrors
+  // the orchestrator's QUESTION_CLOSED rule: null when no pool is configured,
+  // 0 when a pool exists but no survivors remain, else pool / survivors.
+  const prizePool = gs.prizePool != null && gs.prizePool !== ""
+    ? Number(gs.prizePool) : null;
+  const projectedPrizePerSurvivor = prizePool === null
+    ? null
+    : activeSurvivorCount > 0
+      ? Math.round((prizePool / activeSurvivorCount) * 100) / 100
+      : 0;
+
+  let languages: string[] = [];
+  try { languages = gs.languages ? JSON.parse(gs.languages) as string[] : []; }
+  catch { languages = []; }
+
+  const serverNow = Date.now();
+  const endsAt = gs.currentQuestionEndsAt ? parseInt(gs.currentQuestionEndsAt, 10) : null;
+
+  // Current question — exposed only while active, never carrying correctOptionId.
+  let currentQuestion: Record<string, unknown> | null = null;
+  if (gs.currentQuestionStatus === "active" && gs.currentQuestionIndex) {
+    const qIdx = parseInt(gs.currentQuestionIndex, 10);
+    const qState = await redis.hGetAll(redisKeys.questionState(gameId, qIdx));
+    if (qState?.questionId) {
+      const { localizedPayload: _lp, correctOptionId: _co, ...safeQState } = qState;
+      let localizedAll: unknown = null;
+      try { localizedAll = qState.localizedPayload ? JSON.parse(qState.localizedPayload) : null; }
+      catch { /* ignore */ }
+      currentQuestion = {
+        ...safeQState,
+        questionIndex: qIdx,
+        status: gs.currentQuestionStatus,
+        endsAt,
+        remainingTimeMs: endsAt ? Math.max(0, endsAt - serverNow) : null,
+        localized: Array.isArray(localizedAll)
+          ? (localizedAll as Array<{ language: string }>).find(l => l.language === lang) ?? localizedAll[0]
+          : localizedAll,
+      };
+    }
+  }
+
+  const us = await redis.hGetAll(redisKeys.userState(gameId, userId));
+  const me = us?.userStatus ? {
+    userStatus: us.userStatus,
+    wrongCount: intOr(us.wrongCount),
+    correctCount: intOr(us.correctCount),
+    remainingLives: us.remainingLives ? parseInt(us.remainingLives, 10) : null,
+    eliminated: us.userStatus === "eliminated" || us.eliminationReason != null,
+    eliminationReason: us.eliminationReason ?? null,
+    canSubmitAnswer: us.userStatus === "participant",
+  } : null;
+
+  return {
+    game: {
+      gameId,
+      gameStatus: gs.gameStatus,
+      runMode: gs.gameMode ?? "auto",
+      category: gs.category ?? null,
+      languages,
+      questionsCount: gs.questionsCount ? parseInt(gs.questionsCount, 10) : null,
+      title: gs.title ?? null,
+      prizePool,
+      prizePoolCurrency: gs.prizePoolCurrency ?? null,
+      projectedPrizePerSurvivor,
+      pregameDurationMs: gs.pregameDurationMs ? parseInt(gs.pregameDurationMs, 10) : null,
+      firstQuestionStartsAt: gs.firstQuestionStartsAt ? parseInt(gs.firstQuestionStartsAt, 10) : null,
+    },
+    stats: { participantCount, spectatorCount, eliminatedCount, activeSurvivorCount },
+    currentQuestion,
+    me,
+    serverTime: serverNow,
+  };
 }
