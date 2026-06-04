@@ -384,6 +384,75 @@ async function broadcastToIdentity(
   }
 }
 
+// ─── Elimination helpers ──────────────────────────────────────────────────────
+
+// In-memory cache of livekit_room_name per gameId. Populated by handleStartGame
+// and recoverRunningGames; lazily filled by resolveRoomName when missing.
+const gameRoomNames = new Map<string, string>();
+
+async function resolveRoomName(gameId: string): Promise<string> {
+  const cached = gameRoomNames.get(gameId);
+  if (cached) return cached;
+  const rows = await dbSelect("games", `id=eq.${gameId}&select=livekit_room_name`);
+  const name = (rows[0]?.livekit_room_name as string | null) ?? `quiz-${gameId}`;
+  gameRoomNames.set(gameId, name);
+  return name;
+}
+
+/**
+ * Sync a user's elimination across Redis, Postgres, and LiveKit. Idempotent:
+ * the DB PATCH is a no-op when the row is already eliminated, the SREM is a
+ * no-op when the user is no longer in the participants set, and the broadcast
+ * is best-effort. Callers must have already updated Redis user state
+ * (userStatus / wrongCount / remainingLives / eliminatedAt / eliminationReason).
+ */
+async function applyElimination(params: {
+  gameId: string;
+  userId: string;
+  roomName: string;
+  wrongCount: number;
+  remainingLives: number | null;
+  eliminationReason: string;
+  eliminatedAtMs: number;
+  questionId?: string | null;
+  questionIndex?: number | null;
+}): Promise<void> {
+  const { gameId, userId, roomName, wrongCount, remainingLives,
+    eliminationReason, eliminatedAtMs, questionId, questionIndex } = params;
+
+  // 1. Remove from Redis participants set so subsequent SDIFF rounds skip them.
+  const r = await getRedis();
+  await r.sRem(K.parts(gameId), userId).catch((e: unknown) =>
+    console.error(`[orchestrator] sRem participants game=${gameId} user=${userId}:`,
+      e instanceof Error ? e.message : e));
+
+  // 2. Persist authoritative elimination state on game_participants so
+  //    compute_game_ranks / distribute_prizes never pays an eliminated user.
+  await dbUpdate("game_participants",
+    { game_id: gameId, user_id: userId },
+    {
+      participant_role:   "eliminated",
+      eliminated:         true,
+      eliminated_at:      new Date(eliminatedAtMs).toISOString(),
+      elimination_reason: eliminationReason,
+      wrong_count:        wrongCount,
+      ...(remainingLives !== null ? { lives_remaining: remainingLives } : {}),
+    });
+
+  // 3. Broadcast — clients flip the local user to "spectator" UI on receipt.
+  void broadcast(roomName, {
+    type: "USER_ELIMINATED",
+    gameId, userId,
+    reason: eliminationReason,
+    wrongCount,
+    remainingLives,
+    questionId: questionId ?? null,
+    questionIndex: questionIndex ?? null,
+    eliminatedAt: eliminatedAtMs,
+    serverTime: Date.now(),
+  }, "USER_ELIMINATED");
+}
+
 // ─── OpenAI question generator ────────────────────────────────────────────────
 
 interface GenQuestion {
@@ -739,14 +808,25 @@ async function closeQuestion(game: {
   const r = await getRedis();
   const correctOpt = await r.hGet(K.game(gameId), "currentQuestionCorrectOptionId") as string;
 
-  // Handle no-answer eliminations (§10.2)
+  // Handle no-answer eliminations (§10.2). Domain rule: a missed answer is
+  // treated identically to a wrong answer — one life is deducted; the user is
+  // eliminated when remainingLives hits 0 or wrongCount exceeds maxWrong.
   const maxWrong = game.maxWrongAnswers;
   // SDIFF over an empty set is encoded by cjson as `{}` (object), not `[]`.
   // Guard with Array.isArray so an empty result is a no-op instead of throwing
   // "object is not iterable" (which crashed the loop on every close — see logs).
   const notAnswered = Array.isArray(closeResult.notAnswered) ? closeResult.notAnswered : [];
+  let noAnswerEliminated = 0;
   for (const userId of notAnswered) {
     const userKey = K.user(gameId, userId);
+    // Skip users already eliminated by a prior round but lingering in the
+    // participants set (defence-in-depth — applyElimination prunes the set so
+    // this should be a no-op once the system stabilises on the new flow).
+    const status = await r.hGet(userKey, "userStatus") as string | null;
+    if (status && status !== "participant") {
+      await r.sRem(K.parts(gameId), userId).catch(() => {});
+      continue;
+    }
     const wrongRaw = await r.hGet(userKey, "wrongCount") as string | null;
     const rlRaw    = await r.hGet(userKey, "remainingLives") as string | null;
     const newWrong = (parseInt(wrongRaw ?? "0", 10)) + 1;
@@ -758,6 +838,24 @@ async function closeQuestion(game: {
       await r.hSet(userKey, "userStatus", "eliminated", "eliminatedAt", String(now),
         "eliminationReason", "no_answer");
       await r.hIncrBy(K.game(gameId), "eliminatedUserCount", 1);
+      noAnswerEliminated += 1;
+      await applyElimination({
+        gameId, userId, roomName,
+        wrongCount: newWrong, remainingLives: rl,
+        eliminationReason: "no_answer",
+        eliminatedAtMs: now,
+        questionId: closeResult.questionId ?? null,
+        questionIndex: idx,
+      });
+    } else {
+      // Still in the game — keep wrong_count and lives_remaining mirrored in
+      // Postgres so survivor checks against the DB stay accurate.
+      void dbUpdate("game_participants",
+        { game_id: gameId, user_id: userId },
+        {
+          wrong_count: newWrong,
+          ...(rl !== null ? { lives_remaining: rl } : {}),
+        });
     }
     // Async persist no-answer audit row
     void dbInsert("game_answers", {
@@ -778,10 +876,12 @@ async function closeQuestion(game: {
     questionId: closeResult.questionId, questionIndex: idx,
     correctOptionId: correctOpt,
     noAnswerCount: notAnswered.length,
+    noAnswerEliminatedCount: noAnswerEliminated,
     closedAt: now, serverTime: now,
   }, "QUESTION_CLOSED");
 
-  console.log(`[orchestrator] game=${gameId} question ${idx} closed; notAnswered=${notAnswered.length}`);
+  console.log(`[orchestrator] game=${gameId} question ${idx} closed; ` +
+    `notAnswered=${notAnswered.length} eliminated=${noAnswerEliminated}`);
 
   // In auto mode: pause 3 s then advance to the next question automatically.
   // In presenter mode: wait for the next PrepareQuestion / AdvanceQuestion command.
@@ -906,6 +1006,7 @@ async function handleStartGame(payload: any): Promise<void> {
   }
 
   const roomName: string = g.livekit_room_name ?? `quiz-${gameId}`;
+  gameRoomNames.set(gameId, roomName);
   const timeLimitSeconds: number = g.time_per_question ?? 10;
   const gracePeriodMs: number = g.grace_period_ms ?? 400;
   const maxWrongAnswers: number | null = g.allowed_wrong_answers ?? null;
@@ -1042,6 +1143,34 @@ async function handlePersistAnswer(payload: any): Promise<void> {
         correct_answers: (p.correct_answers ?? 0) + 1,
       });
     }
+  } else {
+    // Wrong answer — keep wrong_count and lives_remaining mirrored on the
+    // game_participants row so survivor checks and analytics stay accurate.
+    void dbUpdate("game_participants",
+      { game_id: payload.gameId, user_id: payload.userId },
+      {
+        wrong_count: payload.wrongCount,
+        ...(payload.remainingLives !== null && payload.remainingLives !== undefined
+          ? { lives_remaining: payload.remainingLives } : {}),
+      });
+  }
+
+  // Domain rule: a wrong-answer elimination must mirror to Postgres + remove
+  // the user from the active participants set in Redis + notify the room so
+  // clients flip the eliminated player to spectator UI immediately.
+  if (payload.eliminated) {
+    const roomName = await resolveRoomName(payload.gameId);
+    await applyElimination({
+      gameId: payload.gameId,
+      userId: payload.userId,
+      roomName,
+      wrongCount: payload.wrongCount ?? 0,
+      remainingLives: payload.remainingLives ?? null,
+      eliminationReason: payload.eliminationReason ?? "wrong_answer",
+      eliminatedAtMs: payload.serverReceivedAt ?? Date.now(),
+      questionId: payload.questionId ?? null,
+      questionIndex: payload.questionIndex ?? null,
+    });
   }
 }
 
@@ -1347,6 +1476,7 @@ async function recoverRunningGames(): Promise<void> {
     const runMode: string = g.run_mode ?? "auto";
     const grace     = g.grace_period_ms ?? 400;
     const roomName: string = g.livekit_room_name ?? `quiz-${g.id}`;
+    gameRoomNames.set(g.id, roomName);
     const gameCommon = {
       id: g.id, roomName,
       timeLimitSeconds: g.time_per_question ?? 10,
