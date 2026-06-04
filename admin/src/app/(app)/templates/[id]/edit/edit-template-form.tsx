@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { updateTemplate } from "@/lib/actions/templates";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { LanguageMultiSelect } from "@/components/language-multi-select";
 import { nextCronRuns, isValidCron } from "@/lib/cron";
 import { formatDateTime, formatRelative } from "@/lib/utils";
 import { AvatarPicker } from "./avatar-picker";
@@ -49,6 +50,7 @@ export interface EditableTemplate {
   category?: string | null;
   difficulty?: string | null;
   language?: string | null;
+  target_languages?: string[] | null;
   entry_fee?: number | string | null;
   prize_pool?: number | string | null;
   prize_pool_currency?: string | null;
@@ -80,6 +82,9 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
   const [category, setCategory] = useState(template.category ?? "");
   const [difficulty, setDifficulty] = useState(template.difficulty ?? "Medium");
   const [language, setLanguage] = useState(template.language ?? "en");
+  const [targetLanguages, setTargetLanguages] = useState<string[]>(
+    template.target_languages?.length ? template.target_languages : ["en", "ar", "fa", "tr"],
+  );
   const [entryFee, setEntryFee] = useState(String(template.entry_fee ?? "0"));
   const [prizePool, setPrizePool] = useState(String(template.prize_pool ?? "0"));
   const [currency, setCurrency] = useState(template.prize_pool_currency ?? "USD");
@@ -117,6 +122,7 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
         category: category.trim() || undefined,
         difficulty: (difficulty || undefined) as "Easy" | "Medium" | "Hard" | undefined,
         language: language as "en" | "ar" | "fa" | "tr",
+        target_languages: Array.from(new Set([language, ...targetLanguages])) as ("en" | "ar" | "fa" | "tr")[],
         entry_fee: parseFloat(entryFee) || 0,
         prize_pool: parseFloat(prizePool) || 0,
         prize_pool_currency: currency as (typeof SUPPORTED_CURRENCIES)[number],
@@ -194,6 +200,11 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
                     {LANG_OPTIONS.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="md:col-span-2 lg:col-span-4 space-y-1.5">
+                <Label>Generate in languages</Label>
+                <LanguageMultiSelect value={targetLanguages} primary={language} onChange={setTargetLanguages} />
+                <p className="text-xs text-muted-foreground">Every question is generated in all checked languages. The primary language is always included.</p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="et-cat">Category</Label>

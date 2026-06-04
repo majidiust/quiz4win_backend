@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/shell/page-header";
 import { updateGame } from "@/lib/actions/games";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { LanguageMultiSelect } from "@/components/language-multi-select";
 
 export interface EditableGame {
   title?: string | null;
@@ -23,6 +24,7 @@ export interface EditableGame {
   category?: string | null;
   difficulty?: string | null;
   language?: string | null;
+  target_languages?: string[] | null;
   entry_fee?: number | string | null;
   prize_pool?: number | string | null;
   prize_pool_currency?: string | null;
@@ -62,6 +64,9 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
   const [category, setCategory] = useState(game.category ?? "");
   const [difficulty, setDifficulty] = useState(game.difficulty ?? "Medium");
   const [language, setLanguage] = useState(game.language ?? "en");
+  const [targetLanguages, setTargetLanguages] = useState<string[]>(
+    game.target_languages?.length ? game.target_languages : [game.language ?? "en"],
+  );
   const [entryFee, setEntryFee] = useState(String(game.entry_fee ?? "0"));
   const [prizePool, setPrizePool] = useState(String(game.prize_pool ?? "0"));
   const [prizePoolCurrency, setPrizePoolCurrency] = useState<string>(game.prize_pool_currency ?? "USD");
@@ -104,6 +109,7 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
         category: category.trim() || undefined,
         difficulty: difficulty as "Easy" | "Medium" | "Hard" | undefined,
         language: language as "en" | "ar" | "fa" | "tr",
+        target_languages: Array.from(new Set([language, ...targetLanguages])) as ("en" | "ar" | "fa" | "tr")[],
         entry_fee: parseFloat(entryFee) || 0,
         prize_pool: parseFloat(prizePool) || 0,
         prize_pool_currency: prizePoolCurrency as (typeof SUPPORTED_CURRENCIES)[number],
@@ -186,6 +192,11 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
                   {["en", "ar", "fa", "tr"].map((l) => <SelectItem key={l} value={l}>{l.toUpperCase()}</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label>Generate in languages</Label>
+              <LanguageMultiSelect value={targetLanguages} primary={language} onChange={setTargetLanguages} />
+              <p className="text-xs text-muted-foreground">Every question is generated in all checked languages. The primary language is always included.</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="eg-category">Category</Label>

@@ -47,6 +47,8 @@ Last updated: 2026-05-22
 | R-09 | Wallet balance debit and game join are a single atomic DB transaction |
 | R-10 | No agent may override another agent's authority domain without escalation |
 | R-11 | Locked-down auth & Redis wiring — `getPublicClient()` on `/auth/v1/*`, flat `${REDIS_PASSWORD}` expansion in `docker-compose.yml`, CRLF-free `.env`; changes require `[BLOCKED]` task + human approval |
+| R-12 | Migrations applied exclusively by `db-maintainer` container — never `supabase db push`, `psql -f`, or any manual SQL; deploy with `docker compose up -d --force-recreate db-maintainer` |
+
 
 ---
 

@@ -32,7 +32,7 @@ const MAX_ASSET_BYTES = 10 * 1024 * 1024;
 const WRITABLE_FIELDS = [
   "name", "description", "icon", "thumbnail_url", "poster_url",
   "cron_expression", "cron_description", "duration_minutes", "start_buffer_seconds",
-  "mode", "category", "difficulty", "language",
+  "mode", "category", "difficulty", "language", "target_languages",
   "entry_fee", "prize_pool", "prize_pool_currency",
   "max_players", "questions_count", "time_per_question", "allowed_wrong_answers",
   "prize_breakdown", "prize_distribution", "rules", "tags", "is_featured",

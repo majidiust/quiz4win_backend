@@ -30,6 +30,9 @@ const TemplateSchema = z.object({
   category: z.string().trim().max(100).optional(),
   difficulty: z.enum(DIFF).optional(),
   language: z.enum(LANG).default("en"),
+  // Full set of languages every generated question must be produced in.
+  // `language` is the default display language and is always force-included.
+  target_languages: z.array(z.enum(LANG)).min(1).default([...LANG]),
   entry_fee: z.number().min(0).default(0),
   prize_pool: z.number().min(0).default(0),
   prize_pool_currency: z.enum(SUPPORTED_CURRENCIES).default("USD"),

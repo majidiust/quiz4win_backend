@@ -193,6 +193,7 @@ export interface Game {
   difficulty: GameDifficulty;
   category: string | null;
   language: Language;
+  target_languages?: string[] | null;
   entry_fee: number;
   max_players: number;
   player_count: number;

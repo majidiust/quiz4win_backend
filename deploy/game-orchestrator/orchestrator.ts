@@ -63,6 +63,10 @@ const QUESTION_DEDUP_MAX_RETRIES =
 // window so OpenAI latency is hidden behind the visible countdown.
 const PREGAME_WARMUP_MS =
   Number(Deno.env.get("PREGAME_WARMUP_MS") ?? "120000") || 120000;
+// The complete set of languages the platform supports. Every game's
+// target_languages is a subset of this; the primary language is always one of
+// them. Kept in sync with the DB CHECK constraints and the Language type.
+const SUPPORTED_LANGUAGES = ["en", "ar", "fa", "tr"] as const;
 
 if (!RABBITMQ_URL) { console.error("[orchestrator] FATAL: RABBITMQ_URL required"); Deno.exit(1); }
 if (!SUPABASE_URL || !SERVICE_KEY) { console.error("[orchestrator] FATAL: SUPABASE_* required"); Deno.exit(1); }
@@ -332,7 +336,13 @@ async function broadcast(roomName: string, event: object, topic: string): Promis
     iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000)+60,
     video: { roomAdmin:true, room:roomName },
   });
-  const data = new TextEncoder().encode(JSON.stringify({ topic, ...event }));
+  // serverTime is stamped HERE — at the actual send moment, immediately before
+  // SendData — so it honours its documented contract ("server epoch ms when the
+  // event was sent") and gives clients an accurate clock-offset reference. Any
+  // serverTime set by the caller is intentionally overridden; the game-logic
+  // timestamps (startsAt/endsAt/firstQuestionStartsAt/eliminatedAt/closedAt) are
+  // separate absolute fields and are left untouched.
+  const data = new TextEncoder().encode(JSON.stringify({ topic, ...event, serverTime: Date.now() }));
   const body = { room:roomName, data:btoa(String.fromCharCode(...data)), kind:1, topic };
   try {
     const res = await fetch(`${httpBase}/twirp/livekit.RoomService/SendData`, {
@@ -364,7 +374,8 @@ async function broadcastToIdentity(
     iat: Math.floor(Date.now()/1000), exp: Math.floor(Date.now()/1000)+60,
     video: { roomAdmin:true, room:roomName },
   });
-  const data = new TextEncoder().encode(JSON.stringify({ topic, ...event }));
+  // serverTime stamped at the send moment (see broadcast()).
+  const data = new TextEncoder().encode(JSON.stringify({ topic, ...event, serverTime: Date.now() }));
   const body = {
     room: roomName,
     data: btoa(String.fromCharCode(...data)),
@@ -546,6 +557,37 @@ interface GenQuestion {
   safetyFlags: string[];
 }
 
+/**
+ * Strips the auto-generated "_MMDD_HHMM" schedule slug that
+ * generate_game_from_template appends to games.title (e.g.
+ * "Science Quiz_0604_1400" → "Science Quiz"), so the LLM receives the real
+ * subject instead of the timestamped game instance name.
+ */
+function cleanTopic(title: string | null | undefined): string {
+  return (title ?? "").replace(/_\d{4}_\d{4}$/, "").trim() || "general knowledge";
+}
+
+/**
+ * Builds the ordered, deduped set of languages every question must be generated
+ * in. The primary display language (`games.language`) is always placed FIRST —
+ * it becomes the generator's baseLanguage (canonicalText) — followed by the
+ * remaining `target_languages`. Anything outside SUPPORTED_LANGUAGES is dropped,
+ * and the result is never empty (falls back to ["en"]).
+ */
+function resolveTargetLanguages(
+  primary: string | null | undefined,
+  target: string[] | null | undefined,
+): string[] {
+  const supported = SUPPORTED_LANGUAGES as readonly string[];
+  const candidate = Array.isArray(target) && target.length
+    ? target
+    : [...supported];
+  const ordered = [primary ?? "en", ...candidate]
+    .filter((l): l is string => typeof l === "string" && supported.includes(l));
+  const deduped = [...new Set(ordered)];
+  return deduped.length ? deduped : ["en"];
+}
+
 async function generateQuestion(params: {
   topic?: string; category?: string; difficulty?: string;
   targetLanguages: string[]; timeLimitSeconds?: number;
@@ -557,29 +599,58 @@ async function generateQuestion(params: {
   temperature?: number;
 }): Promise<GenQuestion> {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not set");
+
+  // The generated content must faithfully reflect the template-derived game
+  // config (topic/category/difficulty/language). baseLanguage is the game's
+  // single configured language: canonicalText is written in it and it is the
+  // only entry expected in localizedPayloads.
+  const targetLanguages = params.targetLanguages.length ? params.targetLanguages : ["en"];
+  const baseLanguage = targetLanguages[0] ?? "en";
+  const topic = params.topic ?? "general knowledge";
+  const category = params.category ?? "mixed";
+  const difficulty = params.difficulty ?? "medium";
+
   const sys = `You are a multilingual quiz question generator acting as a live game-show host.
+You MUST strictly honour the generation parameters in the user message:
+- "topic": the exact subject the question must be about — do NOT drift to another subject.
+- "category": the category the question must belong to.
+- "difficulty": produce a question of EXACTLY this difficulty level.
+- "baseLanguage": the language of "canonicalText" and its "options".
+- "targetLanguages": the COMPLETE set of languages "localizedPayloads" must cover —
+  exactly one entry per language, no more and no fewer, each a faithful translation.
 Rules:
 - Generate ONE question with FOUR options: A, B, C, D.
+- "canonicalText" and its options MUST be written in "baseLanguage".
+- "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages",
+  using that exact code verbatim in the "language" field.
 - Option IDs are IDENTICAL across all languages.
 - Exactly one correct answer.
+- The question MUST match the requested topic, category and difficulty.
 - Avoid political/hate/sexual/religious/illegal/ambiguous content.
 - The question MUST be original and clearly DIFFERENT from every entry in the
   "avoid" list — a different fact/topic, not a reworded variant of the same one.
 - Output ONLY valid JSON, no markdown.
 
 Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionId":"A",
-"localizedPayloads":[{"language":"en","questionText":"","options":[{"id":"A","text":""},...]},...]
+"localizedPayloads":[{"language":"<one of targetLanguages>","questionText":"","options":[{"id":"A","text":""},...]},...]
 ,"explanation":"","estimatedAnswerTimeSec":10,"safetyFlags":[]}`;
 
   // Cap the avoid-list (most-recent first) so the prompt stays bounded.
-  const { avoidTexts, temperature, ...rest } = params;
+  const { avoidTexts, temperature } = params;
   const userPayload = {
-    ...rest,
+    topic, category, difficulty, baseLanguage, targetLanguages,
+    timeLimitSeconds: params.timeLimitSeconds,
     avoid: (avoidTexts ?? []).slice(-40),
     // A fresh seed every call pushes the model off its default answer so two
     // back-to-back generations with identical params still differ.
     diversitySeed: crypto.randomUUID(),
   };
+
+  // Log the exact inputs sent to the model so a mismatch between the template
+  // and the generated game can be traced (no secrets — config values only).
+  console.log(`[orchestrator] LLM gen request: ` +
+    `topic="${topic}" category="${category}" difficulty="${difficulty}" ` +
+    `baseLanguage="${baseLanguage}" targetLanguages=[${targetLanguages.join(",")}]`);
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method:"POST",
@@ -597,6 +668,19 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   const json = await res.json() as any;
   const parsed = JSON.parse(json.choices[0].message.content) as GenQuestion;
   if (!["A","B","C","D"].includes(parsed.correctOptionId)) throw new Error("Invalid correctOptionId");
+
+  // Validate that every requested target language is present in the output, so a
+  // template asking for e.g. 'ar' content is never silently served English only.
+  const producedLangs = (parsed.localizedPayloads ?? []).map(p => p.language);
+  const missingLangs = targetLanguages.filter(l => !producedLangs.includes(l));
+  if (missingLangs.length) {
+    console.warn(`[orchestrator] LLM response missing target language(s) ` +
+      `[${missingLangs.join(",")}] for topic="${topic}" — produced=[${producedLangs.join(",")}]`);
+  }
+  console.log(`[orchestrator] LLM gen result: topic="${topic}" ` +
+    `langs=[${producedLangs.join(",")}] correctOptionId=${parsed.correctOptionId} ` +
+    `canonical="${(parsed.canonicalText ?? "").slice(0, 80)}"`);
+
   return parsed;
 }
 
@@ -700,8 +784,12 @@ async function prefillQueue(gameId: string, config: {
  * unreachable, so callers can fall back to a local UUID and keep the game live.
  */
 async function claimQuestion(q: GenQuestion, meta: {
-  category: string; difficulty: string;
+  category: string; difficulty: string; targetLanguages?: string[];
 }): Promise<{ id: string; wasRecent: boolean } | null> {
+  // Persist the canonical row tagged with the game's configured language (not a
+  // hard-coded "en"), so the question bank stays faithful to the template config.
+  // p_language only sets the stored row's language column — content_hash (and
+  // therefore dedup) is derived from the normalized text alone, so this is safe.
   const rows = await dbRpc("claim_question", {
     p_text: q.canonicalText,
     p_options: q.options.map(o => o.text),
@@ -711,7 +799,7 @@ async function claimQuestion(q: GenQuestion, meta: {
     p_localized: q.localizedPayloads,
     p_category: meta.category,
     p_difficulty: meta.difficulty,
-    p_language: "en",
+    p_language: meta.targetLanguages?.[0] ?? "en",
     p_cooldown_seconds: QUESTION_REASK_COOLDOWN_SECONDS,
   });
   if (!Array.isArray(rows) || rows.length === 0) return null;
@@ -840,6 +928,8 @@ async function startQuestionLoop(game: {
       type: "QUESTION_STARTED",
       gameId, questionId: dbQuestionId, questionIndex: idx,
       questionText: q.canonicalText, options: q.options,
+      primaryLanguage: game.targetLanguages[0] ?? "en",
+      languages: game.targetLanguages,
       localizedPayloads: q.localizedPayloads.map(lp => ({...lp, options: lp.options})),
       startsAt: now, endsAt, timeLimitSeconds, serverTime: now,
     }, "QUESTION_STARTED");
@@ -1073,7 +1163,7 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,category,difficulty`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1164,8 +1254,8 @@ async function handleStartGame(payload: any): Promise<void> {
   const gameCommon = {
     id: gameId, roomName, timeLimitSeconds,
     maxQuestions: g.questions_count ?? 10,
-    targetLanguages: [g.language ?? "en"],
-    topic: g.title ?? "general knowledge",
+    targetLanguages: resolveTargetLanguages(g.language, g.target_languages),
+    topic: cleanTopic(g.title),
     category: g.category ?? "mixed",
     difficulty: g.difficulty ?? "medium",
     gracePeriodMs, maxWrongAnswers,
@@ -1439,6 +1529,8 @@ async function handleStartQuestion(payload: any): Promise<void> {
     gameId, questionId, questionIndex: idx,
     questionText: q.canonicalText,
     options: q.options,
+    primaryLanguage: config.targetLanguages[0] ?? "en",
+    languages: config.targetLanguages,
     localizedPayloads: q.localizedPayloads,
     startsAt: now, endsAt, timeLimitSeconds: timeLimit,
     serverTime: now,
@@ -1593,7 +1685,7 @@ async function startConsumer(): Promise<void> {
 async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
-    `grace_period_ms,questions_count,language,category,difficulty,run_mode,` +
+    `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
     `started_at,first_question_starts_at`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
@@ -1610,8 +1702,8 @@ async function recoverRunningGames(): Promise<void> {
       id: g.id, roomName,
       timeLimitSeconds: g.time_per_question ?? 10,
       maxQuestions: g.questions_count ?? 10,
-      targetLanguages: [g.language ?? "en"],
-      topic: g.title ?? "general knowledge",
+      targetLanguages: resolveTargetLanguages(g.language, g.target_languages),
+      topic: cleanTopic(g.title),
       category: g.category ?? "mixed",
       difficulty: g.difficulty ?? "medium",
       gracePeriodMs: grace,

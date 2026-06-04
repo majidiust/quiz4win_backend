@@ -1,6 +1,6 @@
 # Quiz4Win Backend — Universal Rules
 
-Last updated: 2026-06-05 (rev 3)
+Last updated: 2026-06-04 (rev 4)
 Owner: A-02 (Project Memory Guardian)
 
 > These rules are **non-negotiable**. No agent may override them. Any violation must be flagged immediately in `Change_Log_AI.md` with the `[RULE]` prefix, and all work on the affected area must halt until resolved.
@@ -160,3 +160,33 @@ The following code/config patterns have been debugged and fixed multiple times. 
 - Reference audit entry: top of `Change_Log_AI.md` (`[2026-06-05] [A-01] [AUDIT] Invalid API key — 4th documented cause`).
 
 **Action:** Before editing any file touched by R-11.1 / R-11.2 / R-11.3, an agent MUST (a) re-read the linked commit(s) and audit entries, (b) post a `[BLOCKED]` task with the failing log line and the exact line(s) it intends to change, (c) wait for human approval. A diff that re-introduces any of the forbidden patterns above is an automatic revert target for A-02.
+
+---
+
+## R-12 — Database Migrations Are Applied by `db-maintainer` — Never Manually
+
+The `db-maintainer` container is the **sole, authoritative mechanism** for applying SQL migrations to the database. No agent, script, or human operator may apply migrations by any other means.
+
+### How it works
+
+- `./supabase/migrations/` (host) is mounted read-only at `/migrations` inside the container.
+- On every container startup, `deploy/db-maintainer/migrate.sh` scans `*.sql` files sorted by filename, checks `public.schema_migrations` for each version, and runs any unapplied file inside a single `BEGIN … COMMIT` transaction.
+- A successful run writes `/tmp/db-maintainer-ready`, which unblocks the `api`, `game-orchestrator`, and `template-generator` containers (all declare `depends_on: db-maintainer: condition: service_healthy`).
+
+### Rules
+
+1. **All migrations go in `supabase/migrations/`** — name them `YYYYMMDDHHMMSS_description.sql`. The timestamp prefix is the sort key; order is deterministic.
+2. **Never run `supabase db push`, `psql -f`, or any ad-hoc SQL** against the production database to apply a migration. Use the container.
+3. **Never hardcode migration SQL in application code**, Edge Functions, or scripts outside `supabase/migrations/`.
+4. **To apply new migrations**, restart the container:
+   ```bash
+   docker compose up -d --force-recreate db-maintainer
+   ```
+   All dependent services restart automatically once the healthcheck passes.
+5. **Full-stack deploy** (new migration + app code change):
+   ```bash
+   docker compose up -d --build --force-recreate db-maintainer game-orchestrator admin api
+   ```
+6. **Never skip the `db-maintainer` healthcheck** by adding `--no-deps` or removing the `depends_on` condition. That guard exists so app containers never start against a stale schema.
+
+**Action:** Any instruction, script, or changelog entry that tells an agent or developer to apply a migration manually (via `supabase db push`, `psql`, Supabase Studio SQL editor, etc.) is a rule violation. Correct it immediately and log a `[RULE]` entry in `Change_Log_AI.md`.

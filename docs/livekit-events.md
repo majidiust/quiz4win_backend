@@ -9,7 +9,7 @@ Every payload includes:
 - `type` — the event name (table below)
 - `topic` — equal to `type` (also set as LiveKit's `topic` field; usable for filtering)
 - `gameId` — UUID of the game
-- `serverTime` — server epoch ms when the event was sent
+- `serverTime` — server epoch ms, stamped the instant the event is sent (immediately before the LiveKit `SendData` call, after all DB/Redis work). Use it for **clock-offset correction**: on receipt compute `clockOffset = serverTime - Date.now()`, then schedule everything against the event's *absolute* timestamps — `firstQuestionStartsAt` (GAME_STARTED), `startsAt`/`endsAt` (QUESTION_STARTED) — as `localTarget = absoluteTimestamp - clockOffset`. Do **not** derive countdowns from `serverTime + duration`; the absolute fields are authoritative and identical for every participant (a single server-side broadcast), so each client lands on the same wall-clock moment regardless of its own network latency.
 
 Lifecycle ordering for one game:
 `GAME_STARTED` → (`QUESTION_PREPARED` for presenter mode only) → `QUESTION_STARTED` → `PLAYER_WRONG_ANSWER` / `PLAYER_ELIMINATED` (zero or more, any time inside a question window or at close) → `QUESTION_CLOSED` → (loop) → `GAME_ENDED` → `GAME_RESULT`.
@@ -48,17 +48,82 @@ Sent **only** to the AI presenter identity via per-identity broadcast — regula
 
 ## 3. `QUESTION_STARTED`
 Question is live. Start a countdown to `endsAt`. Enable answer buttons. **No `correctOptionId`** — that ships in `QUESTION_CLOSED`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `questionText` | `string` | Canonical question text (in `primaryLanguage`). |
+| `options` | `Option[]` | Canonical options (in `primaryLanguage`). |
+| `primaryLanguage` | `string` | The game's primary display language (first element of `languages`). Use this to select the default `localizedPayloads` entry for display. |
+| `languages` | `string[]` | Full set of languages this question was generated in — one `localizedPayloads` entry per code. |
+| `localizedPayloads` | `Localized[]` | One entry per language. Each entry has `language`, `questionText`, and `options` (same option IDs across all languages). |
+| `startsAt` / `endsAt` | `number` | Absolute epoch-ms timestamps. Schedule your countdown as `endsAt - clockOffset` (see §0). |
+
 ```json
 {
-  "type": "QUESTION_STARTED", "topic": "QUESTION_STARTED",
-  "gameId": "uuid", "questionId": "uuid", "questionIndex": 0,
+  "type": "QUESTION_STARTED",
+  "topic": "QUESTION_STARTED",
+  "gameId": "a1b2c3d4-0000-0000-0000-000000000001",
+  "questionId": "q9f8e7d6-0000-0000-0000-000000000001",
+  "questionIndex": 0,
   "questionText": "Which planet is closest to the Sun?",
-  "options": [{"id":"A","text":"Mercury"}, ...],
-  "localizedPayloads": [{"language":"en","questionText":"...","options":[...]}],
-  "startsAt": 1748721720000, "endsAt": 1748721735000,
-  "timeLimitSeconds": 15, "serverTime": 1748721720000
+  "options": [
+    { "id": "A", "text": "Mercury" },
+    { "id": "B", "text": "Venus" },
+    { "id": "C", "text": "Earth" },
+    { "id": "D", "text": "Mars" }
+  ],
+  "primaryLanguage": "en",
+  "languages": ["en", "ar", "fa", "tr"],
+  "localizedPayloads": [
+    {
+      "language": "en",
+      "questionText": "Which planet is closest to the Sun?",
+      "options": [
+        { "id": "A", "text": "Mercury" },
+        { "id": "B", "text": "Venus" },
+        { "id": "C", "text": "Earth" },
+        { "id": "D", "text": "Mars" }
+      ]
+    },
+    {
+      "language": "ar",
+      "questionText": "أي كوكب هو الأقرب إلى الشمس؟",
+      "options": [
+        { "id": "A", "text": "عطارد" },
+        { "id": "B", "text": "الزهرة" },
+        { "id": "C", "text": "الأرض" },
+        { "id": "D", "text": "المريخ" }
+      ]
+    },
+    {
+      "language": "fa",
+      "questionText": "کدام سیاره به خورشید نزدیک‌تر است؟",
+      "options": [
+        { "id": "A", "text": "عطارد" },
+        { "id": "B", "text": "زهره" },
+        { "id": "C", "text": "زمین" },
+        { "id": "D", "text": "مریخ" }
+      ]
+    },
+    {
+      "language": "tr",
+      "questionText": "Güneş'e en yakın gezegen hangisidir?",
+      "options": [
+        { "id": "A", "text": "Merkür" },
+        { "id": "B", "text": "Venüs" },
+        { "id": "C", "text": "Dünya" },
+        { "id": "D", "text": "Mars" }
+      ]
+    }
+  ],
+  "startsAt": 1748721720000,
+  "endsAt": 1748721735000,
+  "timeLimitSeconds": 15,
+  "serverTime": 1748721720050
 }
 ```
+
+**Client rendering guidance:** use `primaryLanguage` to select the default `localizedPayloads` entry on first render; offer a language switcher built from `languages` so the user can toggle to their preferred language without a round-trip.
 
 ## 4. `PLAYER_WRONG_ANSWER`
 A player lost a chance but is still in the game. Fires both for wrong submissions (immediately after the answer is processed) and for no-answer / late / disconnected players (at question close).
@@ -161,7 +226,7 @@ type Option = { id: string; text: string };
 type Localized = { language: string; questionText: string; options: Option[] };
 export type GameEvent =
   | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; recovered?: boolean; serverTime: number }
-  | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
+  | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; primaryLanguage: string; languages: string[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
   | { type: "PLAYER_WRONG_ANSWER"; gameId: string; userId: string; wrongAnswersCount: number; remainingChances: number|null; reason: Reason; serverTime: number }
   | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId: string|null; questionIndex: number|null; eliminatedAt: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; serverTime: number }
   | { type: "QUESTION_CLOSED"; gameId: string; questionId: string; questionIndex: number; correctOptionId: string; noAnswerCount: number; noAnswerEliminatedCount: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; closedAt: number; serverTime: number }

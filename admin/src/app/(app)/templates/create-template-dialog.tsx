@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { createTemplate } from "@/lib/actions/templates";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { LanguageMultiSelect } from "@/components/language-multi-select";
 import { AvatarPicker } from "./[id]/edit/avatar-picker";
 import { VoicePicker } from "./[id]/edit/voice-picker";
 
@@ -56,6 +57,7 @@ export function CreateTemplateDialog() {
   const [category, setCategory] = useState("");
   const [difficulty, setDifficulty] = useState<string>("Medium");
   const [language, setLanguage] = useState("en");
+  const [targetLanguages, setTargetLanguages] = useState<string[]>(["en", "ar", "fa", "tr"]);
   const [entryFee, setEntryFee] = useState("0");
   const [prizePool, setPrizePool] = useState("0");
   const [currency, setCurrency] = useState<string>("USD");
@@ -77,7 +79,7 @@ export function CreateTemplateDialog() {
   function reset() {
     setName(""); setDescription("");
     setCron("0 * * * *"); setCronDescription("Every hour"); setDuration("15"); setStartBuffer("120");
-    setCategory(""); setDifficulty("Medium"); setLanguage("en");
+    setCategory(""); setDifficulty("Medium"); setLanguage("en"); setTargetLanguages(["en", "ar", "fa", "tr"]);
     setEntryFee("0"); setPrizePool("0"); setCurrency("USD"); setMaxPlayers("");
     setQuestionsCount("10"); setTimePerQuestion("15"); setAllowedWrong("");
     setQCategory(""); setQDifficulty(""); setQLanguage("");
@@ -104,6 +106,7 @@ export function CreateTemplateDialog() {
         category: category.trim() || undefined,
         difficulty: (difficulty || undefined) as "Easy" | "Medium" | "Hard" | undefined,
         language: language as "en" | "ar" | "fa" | "tr",
+        target_languages: Array.from(new Set([language, ...targetLanguages])) as ("en" | "ar" | "fa" | "tr")[],
         entry_fee: parseFloat(entryFee) || 0,
         prize_pool: parseFloat(prizePool) || 0,
         prize_pool_currency: currency as (typeof SUPPORTED_CURRENCIES)[number],
@@ -168,6 +171,11 @@ export function CreateTemplateDialog() {
                     {LANG_OPTIONS.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label>Generate in languages</Label>
+                <LanguageMultiSelect value={targetLanguages} primary={language} onChange={setTargetLanguages} />
+                <p className="text-xs text-muted-foreground">Every question is generated in all checked languages. The primary language is always included.</p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="ct-cat">Category</Label>

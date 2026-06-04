@@ -105,6 +105,9 @@ const GameSchema = z.object({
   category: z.string().trim().max(80).optional(),
   difficulty: z.enum(["Easy", "Medium", "Hard"]).optional(),
   language: z.enum(["en", "ar", "fa", "tr"]).optional(),
+  // Full set of languages every generated question must be produced in.
+  // `language` is the default display language and is always force-included.
+  target_languages: z.array(z.enum(["en", "ar", "fa", "tr"])).min(1).optional(),
   entry_fee: z.number().min(0),
   prize_pool: z.number().min(0),
   prize_pool_currency: z.enum(SUPPORTED_CURRENCIES).optional(),
