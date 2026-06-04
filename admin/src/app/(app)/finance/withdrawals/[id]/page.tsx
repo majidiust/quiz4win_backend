@@ -19,7 +19,11 @@ interface ProfileShape {
   country?: string | null;
   kyc_status?: string | null;
   wallet_balance?: string | number | null;
+  earnings_balance?: string | number | null;
 }
+
+// INV-05 (updated): KYC required only for withdrawals above this amount.
+const KYC_THRESHOLD = 1_000;
 
 export default async function WithdrawalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdmin(["super_admin", "admin", "finance"]);
@@ -29,13 +33,14 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
   const { data: w, error } = await db
     .from("withdrawals")
     .select(
-      "id, user_id, amount, method, account_details, status, aml_flagged, rejection_reason, transaction_reference, internal_note, requested_at, reviewed_at, completed_at, profiles!withdrawals_user_id_fkey(email, full_name, country, kyc_status, wallet_balance)",
+      "id, user_id, amount, method, account_details, status, aml_flagged, rejection_reason, transaction_reference, internal_note, requested_at, reviewed_at, completed_at, profiles!withdrawals_user_id_fkey(email, full_name, country, kyc_status, wallet_balance, earnings_balance)",
     )
     .eq("id", id)
     .maybeSingle();
   if (error || !w) notFound();
 
   const profile = (w.profiles as unknown as ProfileShape | null) ?? null;
+  const kycBypassed = Number(w.amount ?? 0) <= KYC_THRESHOLD;
 
   // Recent withdrawal history for the same player (context).
   const { data: history } = await db
@@ -72,6 +77,7 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
           <CardContent className="space-y-2 text-sm">
             <Row label="Status"><StatusBadge value={w.status} /></Row>
             <Row label="Amount"><span className="font-mono">{formatMoneyDecimal(w.amount)}</span></Row>
+            <Row label="Source"><span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-medium text-emerald-600">Earnings</span></Row>
             <Row label="Method">{w.method.replace(/_/g, " ")}</Row>
             <Row label="AML flagged">{w.aml_flagged ? <StatusBadge value="aml" /> : <span className="text-muted-foreground">No</span>}</Row>
             <Row label="Requested">{formatDateTime(w.requested_at)}</Row>
@@ -102,7 +108,13 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
             <Row label="Email">{profile?.email ?? "—"}</Row>
             <Row label="Country">{profile?.country ?? "—"}</Row>
             <Row label="KYC"><StatusBadge value={profile?.kyc_status ?? "unknown"} /></Row>
+            <Row label="Earnings"><span className="font-mono">{formatMoneyDecimal(profile?.earnings_balance ?? 0)}</span></Row>
             <Row label="Wallet"><span className="font-mono">{formatMoneyDecimal(profile?.wallet_balance)}</span></Row>
+            {kycBypassed ? (
+              <p className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600">
+                KYC not required — amount is ≤ €{KYC_THRESHOLD.toLocaleString()} (INV-05).
+              </p>
+            ) : null}
             <Button asChild variant="outline" size="sm" className="mt-2 w-full">
               <Link href={`/users/${w.user_id}`}>Open player profile</Link>
             </Button>

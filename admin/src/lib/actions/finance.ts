@@ -87,19 +87,20 @@ export async function rejectWithdrawal(input: z.infer<typeof RejectSchema>): Pro
     .eq("id", parsed.data.id);
   if (updErr) return { ok: false, message: "Failed to reject" };
 
-  // Refund the held amount back to the player's wallet + write a refund tx.
+  // Refund the held amount back to earnings_balance (INV-15: withdrawals debit
+  // earnings, so rejections refund to earnings — not wallet).
   const amountStr = String(w.amount);
-  const { data: profile } = await db.from("profiles").select("wallet_balance").eq("id", w.user_id).maybeSingle();
+  const { data: profile } = await db.from("profiles").select("earnings_balance").eq("id", w.user_id).maybeSingle();
   if (profile) {
-    const nextBalance = Number.parseFloat(String(profile.wallet_balance)) + Number.parseFloat(amountStr);
-    await db.from("profiles").update({ wallet_balance: nextBalance, updated_at: now }).eq("id", w.user_id);
+    const nextBalance = Number.parseFloat(String(profile.earnings_balance ?? "0")) + Number.parseFloat(amountStr);
+    await db.from("profiles").update({ earnings_balance: nextBalance.toFixed(2), updated_at: now }).eq("id", w.user_id);
   }
   await db.from("transactions").insert({
     user_id: w.user_id,
     type: "refund",
     amount: amountStr,
     status: "completed",
-    description: `Refund: withdrawal rejected (${parsed.data.reason})`,
+    description: `Refund to earnings: withdrawal rejected (${parsed.data.reason})`,
     created_at: now,
   });
 
@@ -107,7 +108,7 @@ export async function rejectWithdrawal(input: z.infer<typeof RejectSchema>): Pro
     user_id: w.user_id,
     type: "withdrawal_rejected",
     title: "Withdrawal rejected",
-    body: `Your withdrawal request was rejected: ${parsed.data.reason}. The amount has been refunded to your wallet.`,
+    body: `Your withdrawal request was rejected: ${parsed.data.reason}. The amount has been returned to your earnings balance.`,
     is_read: false,
     created_at: now,
   });

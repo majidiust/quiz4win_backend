@@ -33,7 +33,7 @@ Deno.serve(async (req: Request) => {
     // compatibility; the underlying columns are `full_name` and `country`.
     // PostgREST `alias:source` syntax renames them in the response.
     if (!path && req.method === "GET") {
-      const cols = "id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, referral_code, created_at, nationality:country";
+      const cols = "id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, earnings_balance, score_balance, referral_code, created_at, nationality:country";
       const { data, error } = await supabase
         .from("profiles")
         .select(cols)

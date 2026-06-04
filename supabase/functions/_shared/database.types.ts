@@ -25,7 +25,7 @@ export type ParticipantRole     = 'player' | 'viewer' | 'host';
 export type ParticipantStatus   = 'active' | 'completed' | 'disqualified';
 export type TransactionType     =
   | 'topup' | 'withdrawal' | 'game_entry_fee' | 'prize'
-  | 'referral_bonus' | 'refund' | 'admin_adjustment';
+  | 'referral_bonus' | 'refund' | 'admin_adjustment' | 'earnings_transfer';
 export type TransactionStatus   = 'pending' | 'completed' | 'failed';
 export type WithdrawalMethod    = 'bank_transfer' | 'crypto' | 'paypal';
 export type WithdrawalStatus    = 'pending' | 'processing' | 'completed' | 'rejected';

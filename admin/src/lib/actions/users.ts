@@ -58,6 +58,7 @@ export async function updateUserStatus(
 const WalletSchema = z.object({
   id: z.string().uuid(),
   type: z.enum(["credit", "debit"]),
+  target: z.enum(["wallet", "earnings"]).default("wallet"),
   amount: z.number().positive().max(100_000),
   reason: z.string().trim().min(3).max(500),
 });
@@ -69,30 +70,31 @@ export async function adjustWallet(
   const parsed = WalletSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: "Invalid input" };
 
-  const { id, type, amount, reason } = parsed.data;
+  const { id, type, target, amount, reason } = parsed.data;
+  const balanceCol = target === "earnings" ? "earnings_balance" : "wallet_balance";
   const db = createSupabaseAdminClient();
 
   // Read current balance first (for debit guard)
   const { data: profile, error: profileErr } = await db
     .from("profiles")
-    .select("wallet_balance")
+    .select("wallet_balance, earnings_balance")
     .eq("id", id)
     .maybeSingle();
 
   if (profileErr || !profile) return { ok: false, message: "User not found" };
 
-  const currentBalance = parseFloat(String(profile.wallet_balance ?? "0"));
+  const currentBalance = parseFloat(String((profile as Record<string, unknown>)[balanceCol] ?? "0"));
   const delta = type === "credit" ? amount : -amount;
   const newBalance = currentBalance + delta;
 
-  if (newBalance < 0) return { ok: false, message: "Insufficient wallet balance for debit" };
+  if (newBalance < 0) return { ok: false, message: `Insufficient ${target} balance for debit` };
 
   const { error: updateErr } = await db
     .from("profiles")
-    .update({ wallet_balance: newBalance.toFixed(2), updated_at: new Date().toISOString() })
+    .update({ [balanceCol]: newBalance.toFixed(2), updated_at: new Date().toISOString() })
     .eq("id", id);
 
-  if (updateErr) return { ok: false, message: "Failed to update wallet" };
+  if (updateErr) return { ok: false, message: "Failed to update balance" };
 
   // Append-only transaction record (R-05)
   await db.from("transactions").insert({
@@ -100,21 +102,21 @@ export async function adjustWallet(
     type: "admin_adjustment",
     amount: amount.toFixed(2),
     status: "completed",
-    description: `Admin ${type}: ${reason}`,
+    description: `Admin ${type} on ${target}: ${reason}`,
     created_at: new Date().toISOString(),
   });
 
   await db.from("admin_audit_log").insert({
     admin_id: admin.id,
-    action: `wallet_${type}`,
+    action: `${target}_${type}`,
     target_type: "user",
     target_id: id,
-    details: { amount, reason },
+    details: { amount, reason, target },
     created_at: new Date().toISOString(),
   });
 
   revalidatePath(`/users/${id}`);
-  return { ok: true, message: `Wallet ${type} of $${amount.toFixed(2)} applied` };
+  return { ok: true, message: `${target === "earnings" ? "Earnings" : "Wallet"} ${type} of €${amount.toFixed(2)} applied` };
 }
 
 /* ----------------------------- NOTIFY ----------------------------- */

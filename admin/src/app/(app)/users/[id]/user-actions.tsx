@@ -113,12 +113,13 @@ function BanButton({ userId, currentStatus }: Props) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Wallet adjust                                                        */
+/* Wallet adjust (supports wallet and earnings targets)                 */
 /* ------------------------------------------------------------------ */
 function WalletDialog({ userId }: { userId: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [type, setType] = useState<"credit" | "debit">("credit");
+  const [target, setTarget] = useState<"wallet" | "earnings">("wallet");
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [pending, startTransition] = useTransition();
@@ -128,7 +129,7 @@ function WalletDialog({ userId }: { userId: string }) {
     if (!n || n <= 0) { toast.error("Enter a valid positive amount"); return; }
     if (reason.trim().length < 3) { toast.error("Reason is required"); return; }
     startTransition(async () => {
-      const res = await adjustWallet({ id: userId, type, amount: n, reason: reason.trim() });
+      const res = await adjustWallet({ id: userId, type, target, amount: n, reason: reason.trim() });
       if (res.ok) { toast.success(res.message); setOpen(false); setAmount(""); setReason(""); router.refresh(); }
       else toast.error(res.message);
     });
@@ -137,14 +138,24 @@ function WalletDialog({ userId }: { userId: string }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm"><Wallet className="size-3.5" /> Adjust wallet</Button>
+        <Button variant="outline" size="sm"><Wallet className="size-3.5" /> Adjust balance</Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Manual wallet adjustment</DialogTitle>
-          <DialogDescription>Adds or removes funds from the player's wallet. An audit record is created.</DialogDescription>
+          <DialogTitle>Manual balance adjustment</DialogTitle>
+          <DialogDescription>Adds or removes funds from the player's wallet or earnings. An audit record is created.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>Target balance</Label>
+            <Select value={target} onValueChange={(v) => setTarget(v as "wallet" | "earnings")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="wallet">Wallet (play money)</SelectItem>
+                <SelectItem value="earnings">Earnings (withdrawable)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1.5">
             <Label>Operation</Label>
             <Select value={type} onValueChange={(v) => setType(v as "credit" | "debit")}>
@@ -156,7 +167,7 @@ function WalletDialog({ userId }: { userId: string }) {
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="wallet-amount">Amount ($)</Label>
+            <Label htmlFor="wallet-amount">Amount (€)</Label>
             <Input id="wallet-amount" type="number" min="0.01" step="0.01" max="100000"
               value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
           </div>

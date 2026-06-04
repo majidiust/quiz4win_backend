@@ -261,17 +261,18 @@ Each award:
 | User wallet adjustment | `/users/:id` → Adjust Wallet button |
 | User game history & prizes earned | `/users/:id` |
 
-### 5.2 Gaps — not yet in admin panel ⚠️
+### 5.2 Admin panel — implemented ✅
 
-| Gap | Impact | Recommended addition |
-|-----|--------|---------------------|
-| `earnings_balance` not shown on user detail page | Finance team cannot see earnings | Add stat card beside Wallet balance |
-| `score_balance` not shown on user detail page | Support cannot answer leaderboard queries | Add stat card |
-| Wallet adjustment only targets `wallet_balance` | No way to correct earnings balance | Add "target" selector (wallet / earnings) to Adjust Wallet dialog |
-| `score_events` not viewable | No audit trail for score awards | Add Score History tab on user detail page |
-| Withdrawal list shows no balance source label | Unclear that withdrawal debits earnings, not wallet | Add "Source: Earnings" badge on withdrawal rows |
-| `earnings_transfer` transaction type not labelled | Shows as raw string in Recent Transactions | Already renders via `t.type.replace(/_/g, " ")` — works automatically ✅ |
-| KYC threshold not visible | Finance team cannot tell why a withdrawal was allowed without KYC | Add "KYC bypassed (≤ €1,000)" note on withdrawal detail |
+| Item | Where | Status |
+|------|-------|--------|
+| `earnings_balance` shown on user detail page | `/users/:id` → "Earnings balance" stat card | ✅ |
+| `score_balance` shown on user detail page | `/users/:id` → "Score balance" stat card | ✅ |
+| Balance adjustment can target `wallet` or `earnings` | `/users/:id` → Adjust balance dialog (Target selector) | ✅ |
+| `score_events` viewable | `/users/:id` → Score history table | ✅ |
+| Withdrawal source labelled | `/finance/withdrawals/:id` → "Source: Earnings" badge | ✅ |
+| `earnings_transfer` transaction type labelled | Renders via `t.type.replace(/_/g, " ")` | ✅ |
+| KYC threshold visible | `/finance/withdrawals/:id` → "KYC not required (≤ €1,000)" note when applicable | ✅ |
+| Rejected withdrawal refunds to `earnings_balance` | `rejectWithdrawal` action | ✅ |
 
 ---
 

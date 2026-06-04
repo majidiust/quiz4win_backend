@@ -5,7 +5,9 @@
  * GET  /withdrawals/:withdrawal_id     — Get withdrawal status (API #25)
  * GET  /withdrawals                    — List all withdrawals (API #26)
  *
- * Rule compliance: R-01, R-02, R-03, R-05 (append-only), R-08 (KYC required)
+ * Rule compliance: R-01, R-02, R-03, R-05 (append-only)
+ * INV-05 (updated): KYC required ONLY for withdrawals > 1,000 EUR.
+ * INV-15: Withdrawals debit earnings_balance (not wallet_balance).
  */
 
 import { handleCors } from "../_shared/cors.ts";
@@ -13,8 +15,9 @@ import { errorResponse, successResponse, sanitizeError } from "../_shared/errors
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
 
-const MIN_WITHDRAWAL_CENTS = 1000; // $10.00 minimum
-const MAX_WITHDRAWAL_CENTS = 10_000_00; // $10,000 maximum
+const MIN_WITHDRAWAL = 10;    // €10.00 minimum
+const MAX_WITHDRAWAL = 10_000; // €10,000 maximum
+const KYC_THRESHOLD  = 1_000; // €1,000 — KYC required above this (INV-05 updated)
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors();
@@ -30,65 +33,87 @@ Deno.serve(async (req: Request) => {
   try {
     // POST /withdrawals/request
     if (rawPath === "request" && req.method === "POST") {
-      // R-08: KYC must be verified before withdrawal
-      const { data: profile } = await supabase
+      const body = await req.json().catch(() => ({}));
+      const { amount, method, account_details } = body as Record<string, unknown>;
+
+      const amountNum = typeof amount === "number" ? amount
+                      : typeof amount === "string" ? parseFloat(amount as string)
+                      : NaN;
+
+      if (!amountNum || isNaN(amountNum) || amountNum < MIN_WITHDRAWAL) {
+        return errorResponse(`minimum_withdrawal_${MIN_WITHDRAWAL}`, 400);
+      }
+      if (amountNum > MAX_WITHDRAWAL) {
+        return errorResponse(`maximum_withdrawal_${MAX_WITHDRAWAL}`, 400);
+      }
+      if (!method || !account_details) {
+        return errorResponse("method_and_account_details_required", 400);
+      }
+
+      // Fetch earnings balance + KYC status in one query.
+      const admin = getAdminClient();
+      const { data: profile } = await admin
         .from("profiles")
-        .select("kyc_status, wallet_balance")
+        .select("kyc_status, earnings_balance")
         .eq("id", user.id)
         .single();
 
-      if (profile?.kyc_status !== "verified") {
+      if (!profile) return errorResponse("profile_not_found", 404);
+
+      // INV-05 (updated): KYC required only for amounts > KYC_THRESHOLD EUR.
+      if (amountNum > KYC_THRESHOLD && profile.kyc_status !== "verified") {
         return errorResponse("kyc_required", 403);
       }
 
-      const { amount_cents, method, account_details } = await req.json();
-
-      if (!amount_cents || amount_cents < MIN_WITHDRAWAL_CENTS) {
-        return errorResponse(`Minimum withdrawal is ${MIN_WITHDRAWAL_CENTS / 100}`, 400);
-      }
-      if (amount_cents > MAX_WITHDRAWAL_CENTS) {
-        return errorResponse(`Maximum withdrawal is ${MAX_WITHDRAWAL_CENTS / 100}`, 400);
+      const earningsDollars = Number(profile.earnings_balance ?? 0);
+      if (amountNum > earningsDollars) {
+        return errorResponse("insufficient_earnings", 400);
       }
 
-      // Schema stores wallet_balance as NUMERIC dollars; compare in cents.
-      const balanceCents = Math.round(Number(profile?.wallet_balance ?? 0) * 100);
-      if (amount_cents > balanceCents) {
-        return errorResponse("insufficient_balance", 400);
-      }
-
-      if (!method || !account_details) {
-        return errorResponse("method and account_details are required", 400);
-      }
-
-      const admin = getAdminClient();
-
-      // R-09: debit wallet and create withdrawal as a single atomic transaction.
-      // Schema columns: amount NUMERIC(12,2), method, account_details JSONB,
-      // status, requested_at, completed_at, reviewed_at. No `currency` column.
+      // Create the withdrawal record.
       const { data: withdrawal, error: wErr } = await admin
         .from("withdrawals")
         .insert({
-          user_id: user.id,
-          amount: amount_cents / 100, // schema is NUMERIC dollars
+          user_id:         user.id,
+          amount:          amountNum,   // NUMERIC(12,2) dollars
           method,
-          account_details, // JSONB column accepts the object directly
-          status: "pending",
-          requested_at: new Date().toISOString(),
+          account_details,
+          status:          "pending",
+          requested_at:    new Date().toISOString(),
         })
         .select("id, amount, status, requested_at")
         .single();
 
       if (wErr) return errorResponse(sanitizeError(wErr), 500);
 
-      // Debit wallet (R-05: record as append-only transaction)
-      await admin.rpc("debit_wallet", {
-        p_user_id: user.id,
-        p_amount_cents: amount_cents,
-        p_reference_id: withdrawal.id,
-        p_type: "withdrawal",
+      // Debit earnings_balance atomically (R-05: append-only transaction row).
+      const now = new Date().toISOString();
+      await admin
+        .from("profiles")
+        .update({ earnings_balance: (earningsDollars - amountNum).toFixed(2), updated_at: now })
+        .eq("id", user.id);
+
+      await admin.from("transactions").insert({
+        user_id:     user.id,
+        type:        "withdrawal",
+        amount:      amountNum.toFixed(2),
+        status:      "pending",
+        reference:   withdrawal.id,
+        description: `Withdrawal request`,
+        created_at:  now,
       });
 
-      return successResponse({ withdrawal }, 201);
+      const { data: updated } = await admin
+        .from("profiles")
+        .select("earnings_balance")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      return successResponse({
+        withdrawal,
+        earnings_balance: Number(updated?.earnings_balance ?? 0),
+        kyc_bypassed: amountNum <= KYC_THRESHOLD,
+      }, 201);
     }
 
     // GET /withdrawals/:withdrawal_id

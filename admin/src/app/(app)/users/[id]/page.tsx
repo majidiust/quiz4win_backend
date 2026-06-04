@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ShieldCheck, Wallet, Trophy, AlertOctagon, Gamepad2 } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Wallet, Trophy, AlertOctagon, Gamepad2, TrendingUp, Star } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,7 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const db = createSupabaseAdminClient();
 
-  const [{ data: user }, { data: txs }, { data: games }, { data: wins }, authRes] = await Promise.all([
+  const [{ data: user }, { data: txs }, { data: games }, { data: wins }, { data: scoreEvents }, authRes] = await Promise.all([
     db.from("profiles").select("*").eq("id", id).maybeSingle(),
     db
       .from("transactions")
@@ -43,6 +43,12 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
       .gt("prize_earned", 0)
       .order("rank", { ascending: true })
       .limit(50),
+    db
+      .from("score_events")
+      .select("id, game_id, points, reason, created_at")
+      .eq("user_id", id)
+      .order("created_at", { ascending: false })
+      .limit(30),
     db.auth.admin.getUserById(id),
   ]);
 
@@ -126,6 +132,8 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
         <div className="lg:col-span-2 space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <StatCard label="Wallet balance" value={formatMoneyDecimal(user.wallet_balance)} icon={Wallet} />
+            <StatCard label="Earnings balance" value={formatMoneyDecimal(user.earnings_balance ?? 0)} icon={TrendingUp} />
+            <StatCard label="Score balance" value={(user.score_balance ?? 0).toLocaleString() + " pts"} icon={Star} />
             <StatCard label="Lifetime prizes" value={formatMoneyDecimal(user.total_prizes_won)} icon={Trophy} />
             <StatCard label="Total deposited" value={formatMoneyDecimal(user.total_deposited)} icon={ShieldCheck} />
             <StatCard label="Total withdrawn" value={formatMoneyDecimal(user.total_withdrawn)} icon={AlertOctagon} />
@@ -209,6 +217,36 @@ export default async function UserDetailPage({ params }: { params: Promise<{ id:
                 </Table>
               ) : (
                 <div className="px-6 pb-6 text-sm text-muted-foreground">No games played yet.</div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Star className="size-4 text-purple-500" /> Score history</CardTitle>
+            </CardHeader>
+            <CardContent className="px-0 pt-0">
+              {scoreEvents && scoreEvents.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Reason</TableHead>
+                      <TableHead className="text-right">Points</TableHead>
+                      <TableHead>When</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {scoreEvents.map((e) => (
+                      <TableRow key={e.id}>
+                        <TableCell className="text-sm font-medium capitalize">{e.reason.replace(/_/g, " ")}</TableCell>
+                        <TableCell className="text-right font-mono text-xs">+{e.points.toLocaleString()}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{formatRelative(e.created_at)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <div className="px-6 pb-6 text-sm text-muted-foreground">No score events yet.</div>
               )}
             </CardContent>
           </Card>
