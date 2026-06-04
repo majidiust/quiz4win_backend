@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, CalendarClock, Gamepad2, Bot, Settings2, CheckCircle2, XCircle } from "lucide-react";
+import { ArrowLeft, Save, CalendarClock, Gamepad2, Bot, Settings2, CheckCircle2, XCircle, Palette, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,6 +67,11 @@ export interface EditableTemplate {
   ai_sound_id?: string | null;
   ai_duration?: number | null;
   ai_language?: string | null;
+  // Styling
+  accent_color?: string | null;
+  glow_color?: string | null;
+  gradient_colors?: string[] | null;
+  sponsor?: string | null;
 }
 
 export function EditTemplateForm({ templateId, template }: { templateId: string; template: EditableTemplate }) {
@@ -103,6 +108,18 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
   const [aiSoundId, setAiSoundId] = useState(template.ai_sound_id ?? "");
   const [aiDuration, setAiDuration] = useState(String(template.ai_duration ?? 300));
   const [aiLanguage, setAiLanguage] = useState(template.ai_language ?? "");
+  // Styling
+  const [accentColor, setAccentColor] = useState(template.accent_color ?? "#6366f1");
+  const [glowColor, setGlowColor] = useState(template.glow_color ?? "#818cf8");
+  const [gradientColors, setGradientColors] = useState<string[]>(template.gradient_colors ?? []);
+  const [gradientInput, setGradientInput] = useState("#6366f1");
+  const [sponsor, setSponsor] = useState(template.sponsor ?? "");
+
+  function addGradient() {
+    if (gradientInput && !gradientColors.includes(gradientInput)) {
+      setGradientColors([...gradientColors, gradientInput]);
+    }
+  }
 
   function save() {
     if (!name.trim()) { toast.error("Name is required"); return; }
@@ -138,6 +155,10 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
         ai_sound_id: aiEnabled ? aiSoundId.trim() : undefined,
         ai_duration: aiEnabled ? (parseInt(aiDuration, 10) || undefined) : undefined,
         ai_language: aiEnabled ? ((aiLanguage || language) as "en" | "ar" | "fa" | "tr") : undefined,
+        accent_color: accentColor || undefined,
+        glow_color: glowColor || undefined,
+        gradient_colors: gradientColors.length ? gradientColors : undefined,
+        sponsor: sponsor.trim() || undefined,
       });
       if (res.ok) {
         toast.success(res.message);
@@ -176,10 +197,11 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
       </div>
 
       <Tabs defaultValue="basic" className="w-full">
-        <TabsList className="mb-4 grid w-full grid-cols-4">
+        <TabsList className="mb-4 grid w-full grid-cols-5">
           <TabsTrigger value="basic"><Settings2 className="mr-1.5 size-3.5" /> Basic</TabsTrigger>
           <TabsTrigger value="schedule"><CalendarClock className="mr-1.5 size-3.5" /> Schedule</TabsTrigger>
           <TabsTrigger value="gameplay"><Gamepad2 className="mr-1.5 size-3.5" /> Gameplay</TabsTrigger>
+          <TabsTrigger value="styling"><Palette className="mr-1.5 size-3.5" /> Styling</TabsTrigger>
           <TabsTrigger value="ai"><Bot className="mr-1.5 size-3.5" /> AI Presenter</TabsTrigger>
         </TabsList>
 
@@ -366,6 +388,64 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* ---- STYLING ---- */}
+        <TabsContent value="styling" className="mt-0">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Palette className="size-4" /> Styling
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Accent color</Label>
+                <div className="flex gap-2">
+                  <input type="color" value={accentColor} onChange={(e) => setAccentColor(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={accentColor} onChange={(e) => setAccentColor(e.target.value)} className="font-mono" />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Glow color</Label>
+                <div className="flex gap-2">
+                  <input type="color" value={glowColor} onChange={(e) => setGlowColor(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={glowColor} onChange={(e) => setGlowColor(e.target.value)} className="font-mono" />
+                </div>
+              </div>
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label>Gradient colors</Label>
+                <div className="flex gap-2">
+                  <input type="color" value={gradientInput} onChange={(e) => setGradientInput(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={gradientInput} onChange={(e) => setGradientInput(e.target.value)} className="font-mono flex-1" />
+                  <Button type="button" size="sm" variant="outline" onClick={addGradient}>Add</Button>
+                </div>
+                {gradientColors.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {gradientColors.map((c, i) => (
+                      <span key={i} className="flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-mono">
+                        <span className="inline-block size-3 rounded-sm border" style={{ background: c }} />
+                        {c}
+                        <button type="button" onClick={() => setGradientColors(gradientColors.filter((_, j) => j !== i))}>
+                          <X className="size-3 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label htmlFor="et-sponsor">Sponsor</Label>
+                <Input id="et-sponsor" value={sponsor} onChange={(e) => setSponsor(e.target.value)} placeholder="Sponsor name" />
+              </div>
+              <p className="sm:col-span-2 text-xs text-muted-foreground">
+                These styles are inherited by every game generated from this template.
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ---- AI PRESENTER ---- */}

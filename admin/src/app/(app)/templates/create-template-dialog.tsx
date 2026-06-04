@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,6 +69,12 @@ export function CreateTemplateDialog() {
   const [qCategory, setQCategory] = useState("");
   const [qDifficulty, setQDifficulty] = useState<string>("");
   const [qLanguage, setQLanguage] = useState<string>("");
+  // Styling
+  const [accentColor, setAccentColor] = useState("#6366f1");
+  const [glowColor, setGlowColor] = useState("#818cf8");
+  const [gradientColors, setGradientColors] = useState<string[]>([]);
+  const [gradientInput, setGradientInput] = useState("#6366f1");
+  const [sponsor, setSponsor] = useState("");
   // AI
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiAvatarId, setAiAvatarId] = useState("");
@@ -83,7 +89,14 @@ export function CreateTemplateDialog() {
     setEntryFee("0"); setPrizePool("0"); setCurrency("USD"); setMaxPlayers("");
     setQuestionsCount("10"); setTimePerQuestion("15"); setAllowedWrong("");
     setQCategory(""); setQDifficulty(""); setQLanguage("");
+    setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1"); setSponsor("");
     setAiEnabled(false); setAiAvatarId(""); setAiSoundId(""); setAiDuration("300"); setAiLanguage("");
+  }
+
+  function addGradientColor() {
+    if (gradientInput && !gradientColors.includes(gradientInput)) {
+      setGradientColors([...gradientColors, gradientInput]);
+    }
   }
 
   function submit() {
@@ -118,6 +131,10 @@ export function CreateTemplateDialog() {
         question_category: qCategory.trim() || undefined,
         question_difficulty: (qDifficulty || undefined) as "Easy" | "Medium" | "Hard" | undefined,
         question_language: (qLanguage || undefined) as "en" | "ar" | "fa" | "tr" | undefined,
+        accent_color: accentColor || undefined,
+        glow_color: glowColor || undefined,
+        gradient_colors: gradientColors.length ? gradientColors : undefined,
+        sponsor: sponsor.trim() || undefined,
         enable_streaming: true,
         ai_enabled: aiEnabled,
         ai_avatar_id: aiEnabled ? aiAvatarId.trim() : undefined,
@@ -154,6 +171,7 @@ export function CreateTemplateDialog() {
             <TabsTrigger value="basic" className="flex-1">Basic</TabsTrigger>
             <TabsTrigger value="schedule" className="flex-1">Schedule</TabsTrigger>
             <TabsTrigger value="questions" className="flex-1">Questions</TabsTrigger>
+            <TabsTrigger value="styling" className="flex-1">Styling</TabsTrigger>
             <TabsTrigger value="ai" className="flex-1">AI Presenter</TabsTrigger>
           </TabsList>
 
@@ -290,6 +308,56 @@ export function CreateTemplateDialog() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="styling">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="ct-accent">Accent color</Label>
+                <div className="flex gap-2">
+                  <input type="color" id="ct-accent" value={accentColor} onChange={(e) => setAccentColor(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={accentColor} onChange={(e) => setAccentColor(e.target.value)} placeholder="#6366f1" className="font-mono" />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ct-glow">Glow color</Label>
+                <div className="flex gap-2">
+                  <input type="color" id="ct-glow" value={glowColor} onChange={(e) => setGlowColor(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={glowColor} onChange={(e) => setGlowColor(e.target.value)} placeholder="#818cf8" className="font-mono" />
+                </div>
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label>Gradient colors</Label>
+                <div className="flex gap-2">
+                  <input type="color" value={gradientInput} onChange={(e) => setGradientInput(e.target.value)}
+                    className="h-9 w-10 cursor-pointer rounded border border-input p-0.5" />
+                  <Input value={gradientInput} onChange={(e) => setGradientInput(e.target.value)} placeholder="#6366f1" className="font-mono flex-1" />
+                  <Button type="button" size="sm" variant="outline" onClick={addGradientColor}>Add</Button>
+                </div>
+                {gradientColors.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {gradientColors.map((c, i) => (
+                      <span key={i} className="flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-mono">
+                        <span className="inline-block size-3 rounded-sm border" style={{ background: c }} />
+                        {c}
+                        <button type="button" onClick={() => setGradientColors(gradientColors.filter((_, j) => j !== i))}>
+                          <X className="size-3 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="ct-sponsor">Sponsor</Label>
+                <Input id="ct-sponsor" value={sponsor} onChange={(e) => setSponsor(e.target.value)} placeholder="Sponsor name" />
+              </div>
+              <p className="col-span-2 text-xs text-muted-foreground">
+                These styles are inherited by every game generated from this template.
+              </p>
             </div>
           </TabsContent>
 
