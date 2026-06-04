@@ -12,7 +12,7 @@ Every payload includes:
 - `serverTime` — server epoch ms when the event was sent
 
 Lifecycle ordering for one game:
-`GAME_STARTED` → (`QUESTION_PREPARED` for presenter mode only) → `QUESTION_STARTED` → `PLAYER_CORRECT_ANSWER` / `PLAYER_WRONG_ANSWER` / `PLAYER_ELIMINATED` (zero or more, any time inside a question window or at close) → `QUESTION_CLOSED` → (loop) → `GAME_ENDED` → `GAME_RESULT`.
+`GAME_STARTED` → (`QUESTION_PREPARED` for presenter mode only) → `QUESTION_STARTED` → `PLAYER_WRONG_ANSWER` / `PLAYER_ELIMINATED` (zero or more, any time inside a question window or at close) → `QUESTION_CLOSED` → (loop) → `GAME_ENDED` → `GAME_RESULT`.
 
 ---
 
@@ -60,30 +60,7 @@ Question is live. Start a countdown to `endsAt`. Enable answer buttons. **No `co
 }
 ```
 
-## 4. `PLAYER_CORRECT_ANSWER`
-A player answered correctly. Fires immediately after the answer is processed for every correct submission. Use this to update the solver's remaining-lives indicator, the room's cumulative eliminated-player counter, and the live prize estimate shown in the HUD.
-```json
-{
-  "type": "PLAYER_CORRECT_ANSWER", "topic": "PLAYER_CORRECT_ANSWER",
-  "gameId": "uuid", "userId": "uuid",
-  "questionId": "uuid", "questionIndex": 3,
-  "remainingLives": 2,
-  "eliminatedCount": 5,
-  "activeSurvivorCount": 47,
-  "prizePool": 9400.00,
-  "projectedPrizePerSurvivor": 200.00,
-  "serverTime": 1748721730100
-}
-```
-| Field | Description |
-|---|---|
-| `remainingLives` | How many more wrong answers the solver can afford. `null` if the game has no life limit. |
-| `eliminatedCount` | Total players eliminated so far in this game (cumulative). |
-| `activeSurvivorCount` | Players still actively in the game at the moment of this answer. |
-| `prizePool` | Current total prize pool. `null` if not yet set for the game. |
-| `projectedPrizePerSurvivor` | `prizePool / activeSurvivorCount` rounded to 2 d.p. `null` when `prizePool` is unavailable. |
-
-## 5. `PLAYER_WRONG_ANSWER`
+## 4. `PLAYER_WRONG_ANSWER`
 A player lost a chance but is still in the game. Fires both for wrong submissions (immediately after the answer is processed) and for no-answer / late / disconnected players (at question close).
 ```json
 {
@@ -96,7 +73,7 @@ A player lost a chance but is still in the game. Fires both for wrong submission
 ```
 `reason` ∈ `"WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT"`. `remainingChances` is `null` if the game has no life limit.
 
-## 6. `PLAYER_ELIMINATED`
+## 5. `PLAYER_ELIMINATED`
 A player has used all chances. Update local state to spectator; the server will reject any further answer submissions from this user with `reason="eliminated_cannot_answer"`. Eliminated players are excluded from final ranking and the prize pool.
 ```json
 {
@@ -110,7 +87,7 @@ A player has used all chances. Update local state to spectator; the server will 
 }
 ```
 
-## 7. `USER_ELIMINATED` *(legacy — kept for back-compat)*
+## 6. `USER_ELIMINATED` *(legacy — kept for back-compat)*
 Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_ELIMINATED` and ignore this one. Slated for removal once the iOS/Android builds shipped before 2026-06-05 are out of the field.
 ```json
 {
@@ -123,7 +100,7 @@ Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_
 }
 ```
 
-## 8. `QUESTION_CLOSED`
+## 7. `QUESTION_CLOSED`
 Answer window has closed. Reveal the correct option. `noAnswerCount` is the number of players who did not submit; `noAnswerEliminatedCount` is the subset of those who were eliminated by this close.
 ```json
 {
@@ -135,13 +112,13 @@ Answer window has closed. Reveal the correct option. `noAnswerCount` is the numb
 }
 ```
 
-## 9. `GAME_ENDED`
+## 8. `GAME_ENDED`
 Last question is closed. The game has finished; ranks/prizes have not yet been distributed at this point — wait for `GAME_RESULT`.
 ```json
 { "type": "GAME_ENDED", "topic": "GAME_ENDED", "gameId": "uuid", "serverTime": 1748721900000 }
 ```
 
-## 10. `GAME_RESULT`
+## 9. `GAME_RESULT`
 Prize distribution complete. Render the podium / "X winners share $Y" screen from this payload — no extra REST round-trip required. `alreadyDistributed: true` means a previous orchestrator instance already paid out (idempotent replay).
 ```json
 {
@@ -175,7 +152,6 @@ type Localized = { language: string; questionText: string; options: Option[] };
 export type GameEvent =
   | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; recovered?: boolean; serverTime: number }
   | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
-  | { type: "PLAYER_CORRECT_ANSWER"; gameId: string; userId: string; questionId: string|null; questionIndex: number|null; remainingLives: number|null; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; serverTime: number }
   | { type: "PLAYER_WRONG_ANSWER"; gameId: string; userId: string; wrongAnswersCount: number; remainingChances: number|null; reason: Reason; serverTime: number }
   | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId: string|null; questionIndex: number|null; eliminatedAt: number; serverTime: number }
   | { type: "QUESTION_CLOSED"; gameId: string; questionId: string; questionIndex: number; correctOptionId: string; noAnswerCount: number; noAnswerEliminatedCount: number; closedAt: number; serverTime: number }
