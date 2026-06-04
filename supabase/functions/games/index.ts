@@ -2,6 +2,7 @@
  * Games Edge Function — Quiz4Win
  *
  * GET    /games                              — List games (API #27)
+ * GET    /games/history                      — My participation history (API #27a)
  * GET    /games/:id                          — Game detail (API #28)
  * POST   /games/:id/join                     — Join game (API #29)
  * DELETE /games/:id/join                     — Leave game (API #30)
@@ -12,7 +13,7 @@
  * POST   /games/:id/claim-prize              — Claim prize (API #35)
  * GET    /games/:id/leaderboard              — Game leaderboard (API #36)
  *
- * Rule compliance: R-01, R-02, R-03, R-05, R-09
+ * Rule compliance: R-01, R-02, R-03, R-04, R-05, R-09
  */
 
 import { handleCors } from "../_shared/cors.ts";
@@ -99,6 +100,108 @@ Deno.serve(async (req: Request) => {
       const games = rows.map((g: { id: string }) => ({ ...g, joined_by_me: joined.has(g.id) }));
 
       return successResponse({ games, pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) } });
+    }
+
+    // GET /games/history — caller's participation history.
+    // Route placement matters: `gameId === "history"` is matched here *before*
+    // the `/games/:id` detail branch below, otherwise PostgREST would attempt
+    // `games.id = 'history'` and 404. The query reads game_participants joined
+    // to games and scopes to user.id explicitly — game_participants_select_all
+    // is `USING (true)` for the authenticated role, so RLS alone would not
+    // restrict; the `.eq("user_id", user.id)` is the authoritative filter (R-01).
+    if (gameId === "history" && !action && req.method === "GET") {
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
+      const limit = Math.min(50, parseInt(url.searchParams.get("limit") ?? "20"));
+      const offset = (page - 1) * limit;
+      // Filters
+      const statusParam = url.searchParams.get("status"); // pipe-delimited set, e.g. "ended|cancelled"
+      const result = url.searchParams.get("result"); // won|lost|all (default all)
+      const from = url.searchParams.get("from"); // ISO timestamp filter on joined_at
+      const to = url.searchParams.get("to");
+      // Order: newest participation first by default; `oldest_first=true` flips it.
+      const oldestFirst = url.searchParams.get("oldest_first") === "true";
+
+      let query = supabase
+        .from("game_participants")
+        .select(
+          // Top-level participation columns + nested game projection.
+          // Nested `games!inner(...)` makes the row-filter on games NOT NULL
+          // (a deleted game would drop the participation row from the result).
+          "score, rank, correct_answers, wrong_answers, " +
+          "entry_fee_paid, prize_amount:prize_earned, " +
+          "eliminated, eliminated_at, elimination_reason, " +
+          "participant_role, joined_at, completed_at, " +
+          `games!inner(${GAME_FIELDS})`,
+          { count: "exact" },
+        )
+        .eq("user_id", user.id)
+        .order("joined_at", { ascending: oldestFirst })
+        .range(offset, offset + limit - 1);
+
+      if (statusParam) {
+        const statuses = statusParam.split("|").filter(Boolean);
+        if (statuses.length === 1) query = query.eq("games.status", statuses[0]);
+        else if (statuses.length > 1) query = query.in("games.status", statuses);
+      }
+      if (result === "won") query = query.gt("prize_earned", 0);
+      else if (result === "lost") query = query.eq("prize_earned", 0);
+      if (from) query = query.gte("joined_at", from);
+      if (to) query = query.lte("joined_at", to);
+
+      const { data, error, count } = await query;
+      if (error) {
+        console.error(`[games] history query failed: ${error.message}`, error);
+        return errorResponse("Failed to fetch history", 500);
+      }
+
+      // Flatten so each row looks like a GameSummary with a `participation`
+      // sub-object — same shape callers already use for /games/:id/result so
+      // the UI can render history cards without a second projection.
+      type Row = {
+        score: number | null;
+        rank: number | null;
+        correct_answers: number | null;
+        wrong_answers: number | null;
+        entry_fee_paid: number | null;
+        prize_amount: number | null;
+        eliminated: boolean | null;
+        eliminated_at: string | null;
+        elimination_reason: string | null;
+        participant_role: string | null;
+        joined_at: string;
+        completed_at: string | null;
+        games: Record<string, unknown> | null;
+      };
+      const games = ((data ?? []) as Row[])
+        .filter((r) => r.games !== null)
+        .map((r) => ({
+          ...(r.games as Record<string, unknown>),
+          joined_by_me: true,
+          participation: {
+            score: r.score,
+            rank: r.rank,
+            correct_answers: r.correct_answers,
+            wrong_answers: r.wrong_answers,
+            entry_fee_paid: r.entry_fee_paid,
+            prize_amount: r.prize_amount,
+            eliminated: r.eliminated,
+            eliminated_at: r.eliminated_at,
+            elimination_reason: r.elimination_reason,
+            participant_role: r.participant_role,
+            joined_at: r.joined_at,
+            completed_at: r.completed_at,
+          },
+        }));
+
+      return successResponse({
+        games,
+        pagination: {
+          page,
+          limit,
+          total: count ?? 0,
+          total_pages: Math.ceil((count ?? 0) / limit),
+        },
+      });
     }
 
     // GET /games/:id — game detail (same shape as GameSummary + joined_by_me)

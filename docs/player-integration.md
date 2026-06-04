@@ -371,14 +371,60 @@ Wrong or no answer: **0 pts**.
 ## 8. Lives & elimination
 
 Games may be configured with a limited number of lives (`allowed_wrong_answers`
-on the game row). Each wrong answer or no-answer costs one life.
+on the game row). Each wrong answer or no-answer costs one life. A late answer
+(server-received after `endsAt + gracePeriodMs`) is rejected by the server and
+counted as a no-answer by the close-question sweep.
 
 When `remainingLives` reaches `0`:
 - `eliminated = true` in the answer response
 - `participantRole` becomes `"eliminated"`
-- The player can no longer answer but remains in the room to watch
+- The player can no longer answer (the server rejects subsequent submissions
+  with `reason="eliminated_cannot_answer"`) but remains in the room to watch
 
-Display an elimination screen and switch to spectator view.
+### LiveKit events
+
+Two events fire on the room data channel for life/elimination state changes;
+both are also pushed for no-answer / timeout players caught by the close-
+question sweep. Reasons use the uppercase enum `WRONG_ANSWER`, `NO_ANSWER`,
+or `TIMEOUT`.
+
+`PLAYER_WRONG_ANSWER` — emitted when a player loses a chance but is still in
+the game.
+```json
+{
+  "type": "PLAYER_WRONG_ANSWER",
+  "gameId": "uuid",
+  "userId": "uuid",
+  "wrongAnswersCount": 1,
+  "remainingChances": 1,
+  "reason": "NO_ANSWER",
+  "serverTime": 1748721630000
+}
+```
+
+`PLAYER_ELIMINATED` — emitted when a player has used all chances. The legacy
+`USER_ELIMINATED` event is still emitted alongside this one for back-compat
+with older client builds; new clients should consume `PLAYER_ELIMINATED`.
+```json
+{
+  "type": "PLAYER_ELIMINATED",
+  "gameId": "uuid",
+  "userId": "uuid",
+  "wrongAnswersCount": 2,
+  "allowed_wrong_answers": 2,
+  "remainingChances": 0,
+  "status": "SPECTATOR",
+  "reason": "WRONG_ANSWER",
+  "questionId": "uuid",
+  "questionIndex": 4,
+  "eliminatedAt": 1748721640000,
+  "serverTime": 1748721640000
+}
+```
+
+On receipt of `PLAYER_ELIMINATED` for the local user, display an elimination
+screen and switch to spectator view. Eliminated players are excluded from the
+final ranking and the prize pool is distributed only among survivors.
 
 ---
 

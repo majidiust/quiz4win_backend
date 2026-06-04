@@ -400,6 +400,45 @@ async function resolveRoomName(gameId: string): Promise<string> {
 }
 
 /**
+ * Map an internal lowercase reason (`wrong_answer` / `no_answer` / `late` / `timeout`)
+ * to the spec-defined uppercase enum surfaced on LiveKit events
+ * (`WRONG_ANSWER` / `NO_ANSWER` / `TIMEOUT`). Unknown values default to
+ * `WRONG_ANSWER` so clients always see a valid enum.
+ */
+function reasonToSpec(reason: string): "WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT" {
+  switch (reason) {
+    case "no_answer":   return "NO_ANSWER";
+    case "late":
+    case "timeout":     return "TIMEOUT";
+    case "wrong_answer":
+    default:            return "WRONG_ANSWER";
+  }
+}
+
+/**
+ * Broadcast `PLAYER_WRONG_ANSWER` for a player who lost a chance but is still
+ * in the game (Allowed-Wrong-Answers spec). Emitted from both the wrong-answer
+ * path (`handlePersistAnswer`) and the no-answer path (`closeQuestion`).
+ */
+function broadcastPlayerWrongAnswer(
+  roomName: string,
+  gameId: string,
+  userId: string,
+  wrongAnswersCount: number,
+  remainingChances: number | null,
+  reason: string,
+): void {
+  void broadcast(roomName, {
+    type: "PLAYER_WRONG_ANSWER",
+    gameId, userId,
+    wrongAnswersCount,
+    remainingChances,
+    reason: reasonToSpec(reason),
+    serverTime: Date.now(),
+  }, "PLAYER_WRONG_ANSWER");
+}
+
+/**
  * Sync a user's elimination across Redis, Postgres, and LiveKit. Idempotent:
  * the DB PATCH is a no-op when the row is already eliminated, the SREM is a
  * no-op when the user is no longer in the participants set, and the broadcast
@@ -416,9 +455,11 @@ async function applyElimination(params: {
   eliminatedAtMs: number;
   questionId?: string | null;
   questionIndex?: number | null;
+  allowedWrongAnswers?: number | null;
 }): Promise<void> {
   const { gameId, userId, roomName, wrongCount, remainingLives,
-    eliminationReason, eliminatedAtMs, questionId, questionIndex } = params;
+    eliminationReason, eliminatedAtMs, questionId, questionIndex,
+    allowedWrongAnswers } = params;
 
   // 1. Remove from Redis participants set so subsequent SDIFF rounds skip them.
   const r = await getRedis();
@@ -440,6 +481,11 @@ async function applyElimination(params: {
     });
 
   // 3. Broadcast — clients flip the local user to "spectator" UI on receipt.
+  // Emit both the legacy `USER_ELIMINATED` (kept for back-compat with the
+  // 2026-06-05 client) and the spec-aligned `PLAYER_ELIMINATED` event. The
+  // spec payload uses snake_case `allowed_wrong_answers` verbatim and the
+  // uppercase status enum (`SPECTATOR`) per Domain_Knowledge.md.
+  const reasonSpec = reasonToSpec(eliminationReason);
   void broadcast(roomName, {
     type: "USER_ELIMINATED",
     gameId, userId,
@@ -451,6 +497,19 @@ async function applyElimination(params: {
     eliminatedAt: eliminatedAtMs,
     serverTime: Date.now(),
   }, "USER_ELIMINATED");
+  void broadcast(roomName, {
+    type: "PLAYER_ELIMINATED",
+    gameId, userId,
+    wrongAnswersCount: wrongCount,
+    allowed_wrong_answers: allowedWrongAnswers ?? null,
+    remainingChances: remainingLives,
+    status: "SPECTATOR",
+    reason: reasonSpec,
+    questionId: questionId ?? null,
+    questionIndex: questionIndex ?? null,
+    eliminatedAt: eliminatedAtMs,
+    serverTime: Date.now(),
+  }, "PLAYER_ELIMINATED");
 }
 
 // ─── OpenAI question generator ────────────────────────────────────────────────
@@ -846,16 +905,19 @@ async function closeQuestion(game: {
         eliminatedAtMs: now,
         questionId: closeResult.questionId ?? null,
         questionIndex: idx,
+        allowedWrongAnswers: maxWrong,
       });
     } else {
       // Still in the game — keep wrong_count and lives_remaining mirrored in
-      // Postgres so survivor checks against the DB stay accurate.
+      // Postgres so survivor checks against the DB stay accurate, and notify
+      // clients of the lost chance per the Allowed-Wrong-Answers spec.
       void dbUpdate("game_participants",
         { game_id: gameId, user_id: userId },
         {
           wrong_count: newWrong,
           ...(rl !== null ? { lives_remaining: rl } : {}),
         });
+      broadcastPlayerWrongAnswer(roomName, gameId, userId, newWrong, rl, "no_answer");
     }
     // Async persist no-answer audit row
     void dbInsert("game_answers", {
@@ -1155,9 +1217,24 @@ async function handlePersistAnswer(payload: any): Promise<void> {
       });
   }
 
+  // Resolve `maxWrongAnswers` once from Redis for the events below (cheap HGET;
+  // returns null for games without a configured limit). Used by both the
+  // `PLAYER_WRONG_ANSWER` non-elim broadcast and the `PLAYER_ELIMINATED`
+  // payload's `allowed_wrong_answers` field.
+  let allowedWrongAnswers: number | null = null;
+  if (!payload.isCorrect) {
+    try {
+      const r = await getRedis();
+      const raw = await r.hGet(K.game(payload.gameId), "maxWrongAnswers") as string | null;
+      allowedWrongAnswers = raw !== null ? parseInt(raw, 10) : null;
+    } catch (_e) { /* best-effort */ }
+  }
+
   // Domain rule: a wrong-answer elimination must mirror to Postgres + remove
   // the user from the active participants set in Redis + notify the room so
-  // clients flip the eliminated player to spectator UI immediately.
+  // clients flip the eliminated player to spectator UI immediately. When the
+  // wrong answer does NOT eliminate, surface a `PLAYER_WRONG_ANSWER` event so
+  // the client can decrement the visible chances counter.
   if (payload.eliminated) {
     const roomName = await resolveRoomName(payload.gameId);
     await applyElimination({
@@ -1170,7 +1247,16 @@ async function handlePersistAnswer(payload: any): Promise<void> {
       eliminatedAtMs: payload.serverReceivedAt ?? Date.now(),
       questionId: payload.questionId ?? null,
       questionIndex: payload.questionIndex ?? null,
+      allowedWrongAnswers,
     });
+  } else if (!payload.isCorrect) {
+    const roomName = await resolveRoomName(payload.gameId);
+    broadcastPlayerWrongAnswer(
+      roomName, payload.gameId, payload.userId,
+      payload.wrongCount ?? 0,
+      payload.remainingLives ?? null,
+      "wrong_answer",
+    );
   }
 }
 

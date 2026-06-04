@@ -115,6 +115,69 @@ All responses are JSON: `{ "data": { ... } }` on success, `{ "error": "<code>" }
 
 ---
 
+### `GET /games/history` — My Participation History
+
+Returns every game the authenticated user has joined, with their per-game result (score, rank, prize, elimination state). Most recent participation first. Eliminated and cancelled games are included by default — filter via `status`/`result` to narrow.
+
+**Query Parameters**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `page` | number | `1` | Pagination page |
+| `limit` | number | `20` | Results per page (max 50) |
+| `status` | string | — | Filter by `games.status`. Pipe-delimit for OR, e.g. `ended\|cancelled`. Allowed: `upcoming`, `open`, `live`, `ended`, `cancelled`. |
+| `result` | string | — | `won` (prize earned > 0), `lost` (prize earned = 0). Omit for all. |
+| `from` | string | — | ISO timestamp lower bound on `joined_at` (inclusive). |
+| `to` | string | — | ISO timestamp upper bound on `joined_at` (inclusive). |
+| `oldest_first` | string | `false` | If `true`, sorts by `joined_at` ascending instead of descending. |
+
+**Response**
+
+Each row is a `GameSummary` (same fields as `GET /games`) **plus** a `participation` sub-object carrying the caller's per-game state.
+
+```json
+{
+  "data": {
+    "games": [
+      {
+        "id": "uuid",
+        "title": "Champions League Quiz",
+        "status": "ended",
+        "mode": "live",
+        "entry_fee": 5.00,
+        "prize_pool": 500.00,
+        "prize_pool_currency": "USD",
+        "start_time": "2026-05-25T20:00:00Z",
+        "end_time": "2026-05-25T20:42:11Z",
+        "joined_by_me": true,
+        "participation": {
+          "score": 8500,
+          "rank": 3,
+          "correct_answers": 8,
+          "wrong_answers": 2,
+          "entry_fee_paid": 5.00,
+          "prize_amount": 25.00,
+          "eliminated": false,
+          "eliminated_at": null,
+          "elimination_reason": null,
+          "participant_role": "participant",
+          "joined_at": "2026-05-25T19:55:00Z",
+          "completed_at": "2026-05-25T20:42:11Z"
+        }
+      }
+    ],
+    "pagination": { "page": 1, "limit": 20, "total": 7, "total_pages": 1 }
+  }
+}
+```
+
+**Notes**
+- `participation.rank` is `null` for eliminated players (see migration `20260605200000_compute_game_ranks_exclude_eliminated.sql`).
+- `participation.prize_amount` is dollars (NUMERIC), not cents, to match the rest of the customer API.
+- For a still-running game, `completed_at` and `rank` will be `null` until `compute_game_ranks`/`distribute_prizes` finalizes the game.
+
+---
+
 ### `GET /games/:id` — Game Detail
 
 Returns the same object shape as a `GameSummary` row (see field reference above) plus `joined_by_me`.
