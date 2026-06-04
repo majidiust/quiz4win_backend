@@ -102,3 +102,22 @@ Every agent session MUST complete this checklist before touching any file:
 - [ ] 8. Confirm your agent role and authority in this file (§1)
 - [ ] 9. Identify if task requires cross-agent coordination (§4)
 - [ ] 10. Log session start in `Change_Log_AI.md` with `[AUDIT]` prefix
+
+---
+
+## 8. Live API Testing — Test Account
+
+When an agent needs to verify a developed API endpoint against the **production** deployment at `https://api.quiz4win.com`, it MUST use the dedicated test account stored in `.env`:
+
+| Variable | Purpose |
+|----------|---------|
+| `TEST_USER_EMAIL` | Email for the shared test account |
+| `TEST_USER_PASSWORD` | Password for the shared test account |
+
+**Rules:**
+- Read both values from `.env` at runtime — **never hardcode** them in scripts or source files (R-01).
+- Use `scripts/test-login.py` as the reference smoke-test; it reads credentials from `.env`, calls `POST /auth/signin`, and prints only metadata (HTTP status, token presence, user ID) — never the secret values.
+- If `POST /auth/signin` returns `401 invalid_credentials`, run the R-11.3 diagnostic **before** assuming wrong credentials:
+  1. Probe GoTrue directly: `python3 scripts/test-login.py` output will distinguish a stale container key from a bad password.
+  2. If GoTrue accepts the key and the credentials directly but the app returns 401 → run `bash scripts/deploy-api.sh` on the production server to force-recreate the `api` container.
+- **Never share or print** `TEST_USER_PASSWORD` in logs, comments, `Change_Log_AI.md` entries, or agent responses.

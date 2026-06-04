@@ -146,6 +146,15 @@ CREATE POLICY "user_own_rows" ON public.my_table
 - DB interactions in tests use a local Supabase instance (`supabase start`)
 - No mocking of the DB layer — prefer integration-style tests against local DB
 
+### Live API Smoke-Testing (production)
+
+When testing a newly implemented endpoint against `https://api.quiz4win.com`:
+
+1. **Obtain a JWT** by running `python3 scripts/test-login.py` — it reads `TEST_USER_EMAIL` and `TEST_USER_PASSWORD` from `.env`, signs in via `POST /auth/signin`, and prints the token presence and user ID without revealing secrets.
+2. **Use the returned `access_token`** as `Authorization: Bearer <token>` in subsequent API calls.
+3. **Never hardcode** `TEST_USER_EMAIL` or `TEST_USER_PASSWORD` in any source file or script — always read from `.env` (R-01).
+4. If login fails with `401`, follow the R-11.3 diagnostic (`agents.md §8`) before assuming wrong credentials — the container may have a stale anon key.
+
 ---
 
 ## 8. Version Control
