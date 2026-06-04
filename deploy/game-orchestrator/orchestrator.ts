@@ -1030,7 +1030,7 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,category,difficulty`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,category,difficulty,prize_pool`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1082,6 +1082,7 @@ async function handleStartGame(payload: any): Promise<void> {
     gracePeriodMs: String(gracePeriodMs),
     questionTimeLimitSeconds: String(timeLimitSeconds),
     ...(maxWrongAnswers !== null ? { maxWrongAnswers: String(maxWrongAnswers) } : {}),
+    ...(g.prize_pool !== null && g.prize_pool !== undefined ? { prizePool: String(g.prize_pool) } : {}),
     participantCount: "0", spectatorCount: "0",
     eliminatedUserCount: "0", redisNamespace: namespace,
   });
@@ -1205,6 +1206,37 @@ async function handlePersistAnswer(payload: any): Promise<void> {
         correct_answers: (p.correct_answers ?? 0) + 1,
       });
     }
+    // Broadcast PLAYER_CORRECT_ANSWER — notifies the entire room of the solver's
+    // remaining lives, cumulative elimination tally, and live prize projection.
+    // Best-effort: a Redis failure must never block the answer acknowledgement.
+    try {
+      const rr = await getRedis();
+      const [elimRaw, prizeRaw, survivorCount] = await Promise.all([
+        rr.hGet(K.game(payload.gameId), "eliminatedUserCount") as Promise<string | null>,
+        rr.hGet(K.game(payload.gameId), "prizePool") as Promise<string | null>,
+        rr.sCard(K.parts(payload.gameId)),
+      ]);
+      const eliminatedCount = parseInt(elimRaw ?? "0", 10);
+      const prizePool = prizeRaw !== null ? Number(prizeRaw) : null;
+      const projectedPrizePerSurvivor =
+        (prizePool !== null && survivorCount > 0)
+          ? Math.round((prizePool / survivorCount) * 100) / 100
+          : null;
+      const rn = await resolveRoomName(payload.gameId);
+      void broadcast(rn, {
+        type: "PLAYER_CORRECT_ANSWER",
+        gameId: payload.gameId,
+        userId: payload.userId,
+        questionId: payload.questionId ?? null,
+        questionIndex: payload.questionIndex ?? null,
+        remainingLives: payload.remainingLives ?? null,
+        eliminatedCount,
+        activeSurvivorCount: survivorCount,
+        prizePool: prizePool ?? null,
+        projectedPrizePerSurvivor: projectedPrizePerSurvivor ?? null,
+        serverTime: Date.now(),
+      }, "PLAYER_CORRECT_ANSWER");
+    } catch (_e) { /* best-effort */ }
   } else {
     // Wrong answer — keep wrong_count and lives_remaining mirrored on the
     // game_participants row so survivor checks and analytics stay accurate.
