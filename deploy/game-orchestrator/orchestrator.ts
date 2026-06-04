@@ -1267,7 +1267,7 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1313,12 +1313,16 @@ async function handleStartGame(payload: any): Promise<void> {
 
   // Initialise Redis game state (§18.1 — Orchestrator initializes namespace)
   const r = await getRedis();
+  // prize_pool in DB is NUMERIC(12,2) dollars; store as the raw decimal string
+  // so reads via hGet return the original value without float conversion error.
+  const prizePoolStr = g.prize_pool != null ? String(g.prize_pool) : null;
   await r.hSet(K.game(gameId), {
     gameId, gameStatus:"running", gameMode: g.run_mode ?? "auto",
     joinPolicy: g.join_policy ?? "first_question_only",
     gracePeriodMs: String(gracePeriodMs),
     questionTimeLimitSeconds: String(timeLimitSeconds),
     ...(maxWrongAnswers !== null ? { maxWrongAnswers: String(maxWrongAnswers) } : {}),
+    ...(prizePoolStr !== null ? { prizePool: prizePoolStr } : {}),
     participantCount: "0", spectatorCount: "0",
     eliminatedUserCount: "0", redisNamespace: namespace,
   });
@@ -1848,7 +1852,7 @@ async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
     `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
-    `started_at,first_question_starts_at`);
+    `started_at,first_question_starts_at,prize_pool`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -1859,6 +1863,14 @@ async function recoverRunningGames(): Promise<void> {
     const runMode: string = g.run_mode ?? "auto";
     const grace     = g.grace_period_ms ?? 400;
     const roomName: string = g.livekit_room_name ?? `quiz-${g.id}`;
+    // Back-fill prizePool in Redis if it was missing (e.g. set before this fix,
+    // or Redis key expired and was re-initialized without it).
+    if (g.prize_pool != null) {
+      const existingPrize = await r.hGet(K.game(g.id), "prizePool") as string | null;
+      if (!existingPrize) {
+        await r.hSet(K.game(g.id), { prizePool: String(g.prize_pool) });
+      }
+    }
     gameRoomNames.set(g.id, roomName);
     const gameCommon = {
       id: g.id, roomName,

@@ -176,7 +176,9 @@ Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_
 ```
 
 ## 7. `QUESTION_CLOSED`
-Answer window has closed. Reveal the correct option. `noAnswerCount` is the number of players who did not submit; `noAnswerEliminatedCount` is the subset of those who were eliminated by this close. Also carries a post-close game snapshot so the HUD (survivor count, prize projection) can be updated from this single event.
+Answer window has closed. Reveal the correct option. `noAnswerCount` is the number of players who did not submit (Redis not-answered + ghost sweep); `noAnswerEliminatedCount` is the subset of those who were eliminated by this close. Also carries a post-close game snapshot so the HUD (survivor count, prize projection) can be updated from this single event.
+
+`prizePool` and `projectedPrizePerSurvivor` are dollar amounts (NUMERIC, 2 decimal places) matching the game's `prize_pool` column. Both are `null` when the game has no configured prize pool.
 ```json
 {
   "type": "QUESTION_CLOSED", "topic": "QUESTION_CLOSED",
