@@ -29,6 +29,7 @@ Last updated: 2026-05-22
 | `project-brain/Open_Tasks_AI.md` | A-01 | Priority queue (P0–P3) of outstanding work |
 
 > **All agents MUST read every file in `/project-brain/` before starting any task.**
+> Agents touching game flow, orchestrator, or game-session code MUST also read **`docs/game-logic.md`** (event timing, scoring formula, elimination rules, Redis TTLs).
 
 ---
 
@@ -97,6 +98,7 @@ Every agent session MUST complete this checklist before touching any file:
 - [ ] 1. Read `project-brain/Rules.md` in full
 - [ ] 2. Read `project-brain/Architecture_Map.md`
 - [ ] 3. Read `project-brain/Domain_Knowledge.md`
+- [ ] 3a. Read `docs/game-logic.md` (game flow, event timing, scoring, Redis TTLs — required for any orchestrator or game-session task)
 - [ ] 4. Read `project-brain/Coding_Standards.md`
 - [ ] 5. Read `project-brain/Collaboration_Protocol.md`
 - [ ] 6. Read last 10 entries in `project-brain/Change_Log_AI.md`

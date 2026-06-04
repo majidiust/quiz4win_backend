@@ -36,6 +36,8 @@ upcoming → open (accepting joins) → live (in progress) → completed
 - `entry_fee` and `prize_pool` are set at game creation (by admin); both are immutable once status = `live` (INV-03)
 - Prize pool may be seeded (guaranteed) or dynamic (sum of entry fees minus platform cut)
 
+> **Full event-timing reference** — question loop timing, answer window rules, scoring formula, elimination flow, Redis TTLs, and clock-sync recipe: **`docs/game-logic.md`** (required reading for any orchestrator or game-session task).
+
 ### 2.4 Game Modes
 | Mode | Description |
 |------|-------------|
