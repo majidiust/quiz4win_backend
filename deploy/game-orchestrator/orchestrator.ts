@@ -595,6 +595,54 @@ function resolveTargetLanguages(
   return deduped.length ? deduped : ["en"];
 }
 
+/**
+ * Shuffles the four answer options (A/B/C/D) into a random order and rewrites
+ * `correctOptionId` to point to wherever the correct answer landed.
+ * The same permutation is applied to every localized payload so option IDs
+ * stay consistent across all languages.
+ *
+ * LLMs are strongly biased toward placing the correct answer first (A), so this
+ * must be applied to every generated question before it is stored or broadcast.
+ */
+function shuffleQuestionOptions(q: GenQuestion): GenQuestion {
+  const LABELS = ["A", "B", "C", "D"] as const;
+
+  // Build a shuffled index array [0..3] using Fisher-Yates.
+  const indices = [0, 1, 2, 3];
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  const oldCorrectIndex = LABELS.indexOf(q.correctOptionId as typeof LABELS[number]);
+
+  // Rebuild canonical options: position i gets the text from old slot indices[i],
+  // but retains the label for position i (A, B, C, D).
+  const newOptions = indices.map((oldIdx, newIdx) => ({
+    id: LABELS[newIdx],
+    text: q.options[oldIdx]?.text ?? "",
+  }));
+
+  // The correct answer now lives at whichever new position holds the old index.
+  const newCorrectIndex = indices.indexOf(oldCorrectIndex);
+  const newCorrectOptionId = LABELS[newCorrectIndex];
+
+  // Apply the exact same permutation to every localized payload.
+  const newLocalizedPayloads = (q.localizedPayloads ?? []).map(lp => ({
+    ...lp,
+    options: indices.map((oldIdx, newIdx) => ({
+      id: LABELS[newIdx],
+      text: lp.options?.[oldIdx]?.text ?? "",
+    })),
+  }));
+
+  console.log(`[orchestrator] shuffleQuestionOptions: ` +
+    `original correct=${q.correctOptionId} → shuffled correct=${newCorrectOptionId} ` +
+    `permutation=[${indices.join(",")}]`);
+
+  return { ...q, options: newOptions, correctOptionId: newCorrectOptionId, localizedPayloads: newLocalizedPayloads };
+}
+
 async function generateQuestion(params: {
   topic?: string; category?: string; difficulty?: string;
   targetLanguages: string[]; timeLimitSeconds?: number;
@@ -673,8 +721,11 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   });
   if (!res.ok) throw new Error(`OpenAI ${res.status}`);
   const json = await res.json() as any;
-  const parsed = JSON.parse(json.choices[0].message.content) as GenQuestion;
-  if (!["A","B","C","D"].includes(parsed.correctOptionId)) throw new Error("Invalid correctOptionId");
+  const raw = JSON.parse(json.choices[0].message.content) as GenQuestion;
+  if (!["A","B","C","D"].includes(raw.correctOptionId)) throw new Error("Invalid correctOptionId");
+
+  // Shuffle options so the correct answer is NOT always position A (LLM bias fix).
+  const parsed = shuffleQuestionOptions(raw);
 
   // Validate that every requested target language is present in the output, so a
   // template asking for e.g. 'ar' content is never silently served English only.
