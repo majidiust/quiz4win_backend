@@ -1361,6 +1361,8 @@ async function handleStartGame(payload: any): Promise<void> {
     runMode,
     pregameDurationMs: runMode === "auto" ? PREGAME_WARMUP_MS : 0,
     firstQuestionStartsAt: firstQuestionStartsAtMs, // epoch ms; null for presenter mode
+    languages: resolveTargetLanguages(g.language, g.target_languages),
+    category: g.category ?? "mixed",
   }, "GAME_STARTED");
 
   const gameCommon = {
@@ -1997,6 +1999,8 @@ async function recoverRunningGames(): Promise<void> {
         pregameDurationMs: PREGAME_WARMUP_MS,
         firstQuestionStartsAt: Number.isFinite(firstQAt) ? firstQAt : null,
         recovered: true,
+        languages: resolveTargetLanguages(g.language, g.target_languages),
+        category: g.category ?? "mixed",
       }, "GAME_STARTED");
 
       // Pre-generate questions while waiting out the remaining warmup.

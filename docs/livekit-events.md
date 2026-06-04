@@ -18,6 +18,12 @@ Lifecycle ordering for one game:
 
 ## 1. `GAME_STARTED`
 Fires when the game enters the running state. Auto mode emits this immediately and the first question fires `pregameDurationMs` later (default 120 000 ms). Re-broadcast on orchestrator restart with `recovered: true`.
+
+| Field | Description |
+|-------|-------------|
+| `languages` | All languages this game's questions are generated in (subset of `["en","ar","fa","tr"]`). Use this to build the in-game language switcher before the first `QUESTION_STARTED`. |
+| `category` | Game category (e.g. `"science"`, `"sports"`, `"mixed"`). Display in the pre-game lobby. |
+
 ```json
 {
   "type": "GAME_STARTED", "topic": "GAME_STARTED",
@@ -25,6 +31,8 @@ Fires when the game enters the running state. Auto mode emits this immediately a
   "runMode": "auto",
   "pregameDurationMs": 120000,
   "firstQuestionStartsAt": 1748721720000,
+  "languages": ["en", "ar", "fa", "tr"],
+  "category": "science",
   "recovered": false
 }
 ```
@@ -231,7 +239,7 @@ type Reason = "WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT";
 type Option = { id: string; text: string };
 type Localized = { language: string; questionText: string; options: Option[] };
 export type GameEvent =
-  | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; recovered?: boolean; serverTime: number }
+  | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; languages: string[]; category: string; recovered?: boolean; serverTime: number }
   | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; primaryLanguage: string; languages: string[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
   | { type: "PLAYER_WRONG_ANSWER"; gameId: string; userId: string; wrongAnswersCount: number; remainingChances: number|null; reason: Reason; serverTime: number }
   | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId?: string|null; questionIndex?: number|null; eliminatedAt?: number; eliminatedCount?: number; activeSurvivorCount?: number; prizePool?: number|null; projectedPrizePerSurvivor?: number|null; lateJoin?: boolean; missedQuestions?: number; serverTime: number }
