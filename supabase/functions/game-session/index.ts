@@ -59,34 +59,97 @@ Deno.serve(async (req: Request) => {
         return errorResponse("game_not_joinable", 400);
       }
 
-      // 2. Atomic Redis join (§7 join rules)
+      // 2. Check for ghost-sweep pre-charged state.
+      //    If the ghost sweep already charged this player for closed questions
+      //    (they paid but never called /game-session/join), pass those DB values
+      //    to the Lua script so it only charges the currently-active question (+1)
+      //    and avoids double-counting.
+      const { data: existingParticipant } = await admin
+        .from("game_participants")
+        .select("wrong_count, lives_remaining, eliminated")
+        .eq("game_id", gameId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      const preChargedWrong: number = existingParticipant?.wrong_count ?? 0;
+      const preChargedLives: number | null = existingParticipant?.lives_remaining ?? null;
+      // Track pre-join eliminated status: if already eliminated by ghost sweep,
+      // skip LATE_JOIN_RECONCILE (those events are already broadcast).
+      const preChargedEliminated: boolean = existingParticipant?.eliminated ?? false;
+
+      // 3. Atomic Redis join (§7 join rules + late-join missed-answer rule).
+      //    Read the live currentQuestionIndex first so the Lua script can mark a
+      //    surviving late joiner as having "answered" the in-progress question
+      //    (already charged as missed) — preventing a double charge / re-attempt.
       const redis = await getRedis();
-      const keys = joinGameKeys(gameId, user.id);
+      const qIdxRaw = await (redis as { hGet: (k: string, f: string) => Promise<string | null> })
+        .hGet(redisKeys.gameState(gameId), "currentQuestionIndex");
+      const qIdx = qIdxRaw ? parseInt(qIdxRaw, 10) : 0;
+      const keys = joinGameKeys(gameId, user.id, qIdx);
       const now = Date.now().toString();
+      // ARGV[6]/ARGV[7]: pass pre-charged counts only when ghost sweep ran (wrong_count > 0)
+      const preChargedArgv = preChargedWrong > 0
+        ? [String(preChargedWrong), preChargedLives !== null ? String(preChargedLives) : ""]
+        : ["", ""];
       const luaResult = await evalScript(redis, JOIN_GAME_SCRIPT, keys,
-        [user.id, sessionId, deviceId, now]) as string;
+        [user.id, sessionId, deviceId, now, qIdxRaw ?? "", ...preChargedArgv]) as string;
       const joinResult = JSON.parse(luaResult) as {
         status: string; reason?: string; reconnect: boolean;
         userStatus: string; wrongCount: number;
         remainingLives: number | null; correctCount: number;
+        eliminated: boolean; eliminationReason: string | null;
+        missedQuestions: number;
       };
       if (joinResult.status === "error") {
         return errorResponse(joinResult.reason ?? "join_failed", 400);
       }
 
-      // 3. Upsert game_participants in DB (persistent record — async to game)
+      // 3. Upsert game_participants in DB (persistent record — async to game).
+      //    Late joiners carry their pre-charged missed answers, reduced lives,
+      //    and (when over the limit) the late_join_missed elimination state.
       if (!joinResult.reconnect) {
         await admin.from("game_participants").upsert({
           game_id: gameId,
           user_id: user.id,
           role: joinResult.userStatus === "participant" ? "player" : "viewer",
           participant_role: joinResult.userStatus,
-          wrong_count: 0,
-          lives_remaining: game.allowed_wrong_answers ?? null,
+          wrong_count: joinResult.wrongCount,
+          lives_remaining: joinResult.remainingLives,
+          eliminated: joinResult.eliminated,
+          ...(joinResult.eliminated
+            ? {
+              elimination_reason: joinResult.eliminationReason,
+              eliminated_at: new Date().toISOString(),
+            }
+            : {}),
           session_id: sessionId || null,
           device_id: deviceId || null,
           joined_at: new Date().toISOString(),
         }, { onConflict: "game_id,user_id", ignoreDuplicates: false });
+
+        // 3b. Late-join reconciliation — let the orchestrator (sole LiveKit
+        //     broadcaster) tell the room about the pre-charged wrongs or the
+        //     on-arrival demotion. Best-effort; never blocks the join response.
+        // Only publish when there is a NEW charge (missedQuestions > 0) and the
+        // player was NOT already eliminated by a ghost sweep before this join
+        // (ghost-sweep events for closed questions are already broadcast).
+        if (joinResult.missedQuestions > 0 && !preChargedEliminated) {
+          void publish({
+            exchange: Deno.env.get("MQ_COMMAND_EXCHANGE") ?? "",
+            routingKey: Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.commands",
+            payload: {
+              type: "LATE_JOIN_RECONCILE",
+              gameId,
+              userId: user.id,
+              wrongCount: joinResult.wrongCount,
+              remainingLives: joinResult.remainingLives,
+              eliminated: joinResult.eliminated,
+              eliminationReason: joinResult.eliminationReason,
+              missedQuestions: joinResult.missedQuestions,
+              questionIndex: qIdx,
+              serverTime: Date.now(),
+            },
+          });
+        }
       } else {
         // On reconnect, just refresh session info
         await admin.from("game_participants")
@@ -113,6 +176,9 @@ Deno.serve(async (req: Request) => {
         wrongCount: joinResult.wrongCount,
         remainingLives: joinResult.remainingLives,
         correctCount: joinResult.correctCount,
+        eliminated: joinResult.eliminated,
+        eliminationReason: joinResult.eliminationReason,
+        missedQuestions: joinResult.missedQuestions,
         gameStatus: gameStateRaw.gameStatus ?? game.status,
         currentQuestionId: gameStateRaw.currentQuestionId ?? null,
         currentQuestionIndex: gameStateRaw.currentQuestionIndex

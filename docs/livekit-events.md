@@ -138,6 +138,8 @@ A player lost a chance but is still in the game. Fires both for wrong submission
 ```
 `reason` ∈ `"WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT"`. `remainingChances` is `null` if the game has no life limit.
 
+**Late join:** when a player joins after questions have started (under the `first_question_only` policy) and the missed questions do **not** exceed the limit, this event fires once with `reason="NO_ANSWER"` and `wrongAnswersCount` pre-charged to the number of missed questions (see §5 and INV-14).
+
 ## 5. `PLAYER_ELIMINATED`
 A player has used all chances. Update local state to spectator; the server will reject any further answer submissions from this user with `reason="eliminated_cannot_answer"`. Eliminated players are excluded from final ranking and the prize pool. Also carries a post-elimination game snapshot so the HUD can be updated without a REST round-trip.
 ```json
@@ -157,6 +159,8 @@ A player has used all chances. Update local state to spectator; the server will 
 }
 ```
 `eliminatedCount` — cumulative total eliminated so far. `activeSurvivorCount` — players still in the game after this elimination. `prizePool` / `projectedPrizePerSurvivor` are `null` if the game has no configured prize pool.
+
+**Late-join demotion:** when a player joins so late that their missed questions already meet/exceed `allowed_wrong_answers` (INV-14), they are demoted to spectator on arrival. This event then carries `reason="NO_ANSWER"`, `lateJoin: true`, and `missedQuestions` (the number of questions counted against them). Because the joiner never occupied a survivor slot, the game-snapshot fields (`questionId`, `questionIndex`, `eliminatedAt`, `eliminatedCount`, `activeSurvivorCount`, `prizePool`, `projectedPrizePerSurvivor`) are omitted from the late-join variant.
 
 ## 6. `USER_ELIMINATED` *(legacy — kept for back-compat)*
 Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_ELIMINATED` and ignore this one. Slated for removal once the iOS/Android builds shipped before 2026-06-05 are out of the field.
@@ -228,7 +232,7 @@ export type GameEvent =
   | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; recovered?: boolean; serverTime: number }
   | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; primaryLanguage: string; languages: string[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
   | { type: "PLAYER_WRONG_ANSWER"; gameId: string; userId: string; wrongAnswersCount: number; remainingChances: number|null; reason: Reason; serverTime: number }
-  | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId: string|null; questionIndex: number|null; eliminatedAt: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; serverTime: number }
+  | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId?: string|null; questionIndex?: number|null; eliminatedAt?: number; eliminatedCount?: number; activeSurvivorCount?: number; prizePool?: number|null; projectedPrizePerSurvivor?: number|null; lateJoin?: boolean; missedQuestions?: number; serverTime: number }
   | { type: "QUESTION_CLOSED"; gameId: string; questionId: string; questionIndex: number; correctOptionId: string; noAnswerCount: number; noAnswerEliminatedCount: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; closedAt: number; serverTime: number }
   | { type: "GAME_ENDED"; gameId: string; serverTime: number }
   | { type: "GAME_RESULT"; gameId: string; totalWinners: number; totalPrize: number; prizePool: number; currency: string; sharePerWinner: number; winnerUserIds: string[]; winners: {user_id:string;rank:number;prize_amount:number}[]; distributedAt: string|null; alreadyDistributed: boolean; serverTime: number };

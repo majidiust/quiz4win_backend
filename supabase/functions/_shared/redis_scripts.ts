@@ -10,15 +10,38 @@
  * script touches must appear in KEYS[] (cluster-safe).
  */
 
-// ─── JOIN_GAME (§7) ──────────────────────────────────────────────────────────
+// ─── JOIN_GAME (§7 + late-join rule + ghost-sweep pre-charged path) ──────────
+// Late-join rule (first_question_only policy): every question already presented
+// counts as a missed (wrong) answer. missed = currentQuestionIndex + 1 (the
+// in-progress question started before the player arrived, so it counts too).
+// Once missed >= maxWrongAnswers the player joins demoted to spectator and may
+// never answer. Below the limit they join as a participant with reduced lives
+// and are blocked from the already-counted in-progress question.
+//   maxWrong=3, join during Q1(idx0)→missed1 / Q2(idx1)→missed2 → participant
+//   maxWrong=3, join during Q3(idx2)→missed3 ≥ 3 → spectator (eliminated)
+//   maxWrong=1, join during Q2(idx1)→missed2 ≥ 1 → spectator (eliminated)
+// The `any_time` policy keeps its no-penalty behavior; `closed` rejects.
+//
+// Ghost-sweep pre-charged path (ARGV[6] non-empty):
+//   When the ghost sweep has already charged this player for all closed questions
+//   (players who paid but never called /game-session/join), ARGV[6] carries the
+//   pre-charged wrongCount and ARGV[7] the pre-charged livesRemaining so the Lua
+//   script only charges the currently-active question (+1) to avoid double-counting.
+//
 // KEYS[1] = gameState hash
 // KEYS[2] = userState hash
 // KEYS[3] = participants set
 // KEYS[4] = spectators set
+// KEYS[5] = userAnswers set       (questionIds this user has answered)
+// KEYS[6] = questionAnswered set  (userIds who answered current question, by ARGV[5])
 // ARGV[1] = userId
 // ARGV[2] = sessionId
 // ARGV[3] = deviceId
 // ARGV[4] = serverTimeMs (epoch milliseconds as string)
+// ARGV[5] = currentQuestionIndex as read by the caller ("" when none) — guards
+//           the KEYS[6] block against an index that advanced mid-request.
+// ARGV[6] = preChargedWrong ("" | "<number>") — DB wrong_count from ghost sweep
+// ARGV[7] = preChargedLives ("" | "<number>") — DB lives_remaining from ghost sweep
 export const JOIN_GAME_SCRIPT = `
 local gameStatus = redis.call("HGET", KEYS[1], "gameStatus")
 if not gameStatus then
@@ -38,42 +61,93 @@ if existingStatus then
   local wc = tonumber(redis.call("HGET", KEYS[2], "wrongCount") or "0")
   local rl = redis.call("HGET", KEYS[2], "remainingLives")
   local cc = tonumber(redis.call("HGET", KEYS[2], "correctCount") or "0")
+  local er = redis.call("HGET", KEYS[2], "eliminationReason")
   return cjson.encode({status="ok", reconnect=true, userStatus=existingStatus,
-    wrongCount=wc, remainingLives=rl and tonumber(rl) or cjson.null, correctCount=cc})
+    wrongCount=wc, remainingLives=rl and tonumber(rl) or cjson.null, correctCount=cc,
+    eliminated=(existingStatus ~= "participant"), eliminationReason=er or cjson.null,
+    missedQuestions=0})
 end
-local role
-if joinPolicy == "any_time" then
-  role = "participant"
-else
-  local qIdx = redis.call("HGET", KEYS[1], "currentQuestionIndex")
-  local qEndsAt = redis.call("HGET", KEYS[1], "currentQuestionEndsAt")
-  local grace = tonumber(redis.call("HGET", KEYS[1], "gracePeriodMs") or "400")
-  local now = tonumber(ARGV[4])
-  if not qIdx then
-    role = "participant"
-  elseif qIdx == "0" and qEndsAt and now <= (tonumber(qEndsAt) + grace) then
-    role = "participant"
-  elseif qIdx == "0" and not qEndsAt then
-    role = "participant"
-  else
-    role = "spectator"
-  end
-end
+-- ─── Late-join charge calculation ─────────────────────────────────────────────
+local qIdxLive = redis.call("HGET", KEYS[1], "currentQuestionIndex")
+local qStatus  = redis.call("HGET", KEYS[1], "currentQuestionStatus")
 local maxWrong = redis.call("HGET", KEYS[1], "maxWrongAnswers")
-local rl = maxWrong and tonumber(maxWrong) or nil
+local maxW     = maxWrong and tonumber(maxWrong) or nil
+local role = "participant"
+local eliminated = false
+local elimReason = cjson.null
+local wrongCount = 0
+local remainingLives = maxW      -- nil means no limit
+-- missedQuestions returned to caller: counts only NEW charges so the edge
+-- function only publishes LATE_JOIN_RECONCILE when there is a fresh event to
+-- broadcast (ghost-sweep events for closed questions are already published).
+local missedQuestions = 0
+-- Whether to block the currently-active question (prevent double-charge and
+-- reject re-attempts via SUBMIT for an already-counted question).
+local shouldBlock = false
+
+-- ARGV[6] non-empty = ghost-sweep pre-charged path: the orchestrator already
+-- charged this player for all closed questions via the DB ghost sweep. Only the
+-- currently-active question (if any) is a new charge.
+local preChargedWrong = ARGV[6] ~= "" and tonumber(ARGV[6]) or nil
+if preChargedWrong ~= nil then
+  local preChargedLives = ARGV[7] ~= "" and tonumber(ARGV[7]) or nil
+  -- Charge 1 for the in-progress question, 0 if between questions.
+  local inCharge = (qIdxLive ~= nil and qStatus == "active") and 1 or 0
+  wrongCount = preChargedWrong + inCharge
+  if maxW ~= nil then
+    local baseLives = preChargedLives ~= nil and preChargedLives or math.max(maxW - preChargedWrong, 0)
+    remainingLives = math.max(baseLives - inCharge, 0)
+    if remainingLives <= 0 then
+      remainingLives = 0; role = "spectator"; eliminated = true; elimReason = "late_join_missed"
+    end
+  else
+    remainingLives = preChargedLives  -- nil = unlimited
+  end
+  missedQuestions = inCharge   -- only the NEW in-progress charge
+  shouldBlock = inCharge == 1
+else
+  -- Original path: compute missed from currentQuestionIndex.
+  local missed = 0
+  if joinPolicy ~= "any_time" and qIdxLive then
+    missed = tonumber(qIdxLive) + 1
+  end
+  wrongCount = missed
+  if maxW ~= nil then
+    remainingLives = maxW - missed
+    if remainingLives <= 0 then
+      remainingLives = 0; role = "spectator"; eliminated = true; elimReason = "late_join_missed"
+    end
+  end
+  missedQuestions = missed
+  shouldBlock = missed > 0
+end
+-- ─── Write Redis state ─────────────────────────────────────────────────────────
 redis.call("HSET", KEYS[2], "userId", ARGV[1], "sessionId", ARGV[2],
-  "deviceId", ARGV[3], "userStatus", role, "wrongCount", "0",
+  "deviceId", ARGV[3], "userStatus", role, "wrongCount", tostring(wrongCount),
   "correctCount", "0", "joinTime", ARGV[4])
-if rl then redis.call("HSET", KEYS[2], "remainingLives", tostring(rl)) end
+if remainingLives ~= nil then
+  redis.call("HSET", KEYS[2], "remainingLives", tostring(remainingLives))
+end
+if eliminated then
+  redis.call("HSET", KEYS[2], "eliminatedAt", ARGV[4], "eliminationReason", elimReason)
+end
 if role == "participant" then
   redis.call("SADD", KEYS[3], ARGV[1])
   redis.call("HINCRBY", KEYS[1], "participantCount", 1)
+  -- Block the already-charged in-progress question: mark it answered so the
+  -- no-answer sweep skips this user and SUBMIT rejects a re-attempt.
+  if shouldBlock and qStatus == "active" and ARGV[5] ~= "" and qIdxLive == ARGV[5] then
+    local curQId = redis.call("HGET", KEYS[1], "currentQuestionId")
+    if curQId then redis.call("SADD", KEYS[5], curQId) end
+    redis.call("SADD", KEYS[6], ARGV[1])
+  end
 else
   redis.call("SADD", KEYS[4], ARGV[1])
   redis.call("HINCRBY", KEYS[1], "spectatorCount", 1)
 end
 return cjson.encode({status="ok", reconnect=false, userStatus=role,
-  wrongCount=0, remainingLives=rl or cjson.null, correctCount=0})
+  wrongCount=wrongCount, remainingLives=remainingLives or cjson.null, correctCount=0,
+  eliminated=eliminated, eliminationReason=elimReason, missedQuestions=missedQuestions})
 `;
 
 // ─── SUBMIT_ANSWER (§9.3) ────────────────────────────────────────────────────

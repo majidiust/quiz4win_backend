@@ -123,6 +123,7 @@ const K = {
   q:         (id: string, i: number)   => `${NS}:game:${id}:q:${i}:state`,
   user:      (id: string, u: string)   => `${NS}:game:${id}:u:${u}:state`,
   parts:     (id: string)              => `${NS}:game:${id}:participants`,
+  specs:     (id: string)              => `${NS}:game:${id}:spectators`,
   qAnswered: (id: string, i: number)   => `${NS}:game:${id}:q:${i}:answered`,
   /** Staging area for presenter mode — one prepared (not-yet-active) question per game. */
   staged:    (id: string)              => `${NS}:game:${id}:q:staged`,
@@ -418,7 +419,8 @@ async function resolveRoomName(gameId: string): Promise<string> {
  */
 function reasonToSpec(reason: string): "WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT" {
   switch (reason) {
-    case "no_answer":   return "NO_ANSWER";
+    case "no_answer":
+    case "late_join_missed": return "NO_ANSWER";
     case "late":
     case "timeout":     return "TIMEOUT";
     case "wrong_answer":
@@ -1044,6 +1046,106 @@ async function closeQuestion(game: {
     });
   }
 
+  // §10.3 — Ghost participant sweep: players who paid entry (have a DB row) but
+  // never established Redis state by calling POST /game-session/:id/join.
+  // These players are absent from the Redis participants and spectators sets, so
+  // the SDIFF-based notAnswered list above misses them entirely. The same rule
+  // applies: any question without a valid submission = missed/wrong answer.
+  let ghostNoAnswer = 0;
+  let ghostEliminated = 0;
+  try {
+    // Collect every userId already tracked in Redis for this game.
+    const [redisParts, redisSpecs] = await Promise.all([
+      r.sMembers(K.parts(gameId)) as Promise<string[]>,
+      r.sMembers(K.specs(gameId)) as Promise<string[]>,
+    ]);
+    const redisKnown = new Set([...redisParts, ...redisSpecs]);
+
+    // Query all active (non-eliminated) DB participants for this game.
+    // participant_role NOT IN ('spectator','eliminated') ensures we skip players
+    // already demoted via a previous sweep or join-time demotion.
+    const dbRows = await dbSelect(
+      "game_participants",
+      `select=user_id,wrong_count,lives_remaining` +
+      `&game_id=eq.${gameId}&role=eq.player&eliminated=eq.false` +
+      `&participant_role=not.in.(spectator,eliminated)`,
+    ) as Array<{ user_id: string; wrong_count: number | null; lives_remaining: number | null }>;
+
+    // Ghost users = in DB but not in Redis (never called /game-session/join or
+    // Redis state expired and was never re-established).
+    const ghostUsers = dbRows.filter(p => !redisKnown.has(p.user_id));
+    ghostNoAnswer = ghostUsers.length;
+
+    for (const ghost of ghostUsers) {
+      const dbWrong = ghost.wrong_count ?? 0;
+      const dbLives = ghost.lives_remaining;
+      const newWrong = dbWrong + 1;
+      // Compute new lives: decrement tracked value or derive from maxWrong.
+      const newLives = maxWrong !== null
+        ? (dbLives !== null ? Math.max(dbLives - 1, 0) : Math.max(maxWrong - newWrong, 0))
+        : null;
+      const elim = (newLives !== null && newLives === 0)
+        || (maxWrong !== null && newWrong >= maxWrong);
+
+      if (elim) {
+        ghostEliminated++;
+        void dbUpdate("game_participants",
+          { game_id: gameId, user_id: ghost.user_id },
+          {
+            participant_role:   "eliminated",
+            eliminated:         true,
+            eliminated_at:      new Date(now).toISOString(),
+            elimination_reason: "no_answer",
+            wrong_count:        newWrong,
+            ...(newLives !== null ? { lives_remaining: newLives } : {}),
+          });
+        // Legacy + spec-aligned elimination events (ghost users were never in a
+        // Redis survivor slot so game-snapshot fields are omitted per docs §5).
+        void broadcast(roomName, {
+          type: "USER_ELIMINATED", gameId, userId: ghost.user_id,
+          reason: "no_answer", wrongCount: newWrong, remainingLives: newLives,
+          questionId: closeResult.questionId ?? null, questionIndex: idx,
+          eliminatedAt: now,
+        }, "USER_ELIMINATED");
+        void broadcast(roomName, {
+          type: "PLAYER_ELIMINATED", gameId, userId: ghost.user_id,
+          wrongAnswersCount: newWrong, allowed_wrong_answers: maxWrong ?? null,
+          remainingChances: newLives, status: "SPECTATOR", reason: "NO_ANSWER",
+          questionId: closeResult.questionId ?? null, questionIndex: idx,
+          eliminatedAt: now,
+        }, "PLAYER_ELIMINATED");
+      } else {
+        void dbUpdate("game_participants",
+          { game_id: gameId, user_id: ghost.user_id },
+          {
+            wrong_count: newWrong,
+            ...(newLives !== null ? { lives_remaining: newLives } : {}),
+          });
+        broadcastPlayerWrongAnswer(roomName, gameId, ghost.user_id, newWrong, newLives, "no_answer");
+      }
+      // Audit row — identical shape to the Redis notAnswered path.
+      void dbInsert("game_answers", {
+        id: crypto.randomUUID(), game_id: gameId, question_id: closeResult.questionId,
+        round_number: idx, was_no_answer: true, was_late: false, was_duplicate: false,
+        is_correct: false, correct_option_id: correctOpt, points_earned: 0,
+        server_received_at: new Date(now).toISOString(),
+        question_ends_at:   new Date(now - gracePeriodMs).toISOString(),
+        wrong_count_after: newWrong, remaining_lives_after: newLives,
+        user_status_after: elim ? "eliminated" : "participant",
+        elimination_reason: elim ? "no_answer" : null,
+      });
+    }
+
+    if (ghostUsers.length > 0) {
+      console.log(`[orchestrator] game=${gameId} q=${idx} ghost sweep: ` +
+        `${ghostUsers.length} ghost users, ${ghostEliminated} eliminated`);
+    }
+  } catch (ghostErr) {
+    // Ghost sweep is best-effort — a DB error must never crash the close flow.
+    console.error(`[orchestrator] game=${gameId} q=${idx} ghost sweep error:`,
+      ghostErr instanceof Error ? ghostErr.message : ghostErr);
+  }
+
   // Broadcast QUESTION_CLOSED with the correct answer revealed (§13.4 after close).
   // Enrich with a post-close game-state snapshot so clients can update the HUD
   // (survivor count, prize projection) from a single authoritative event.
@@ -1066,8 +1168,10 @@ async function closeQuestion(game: {
     type: "QUESTION_CLOSED", gameId,
     questionId: closeResult.questionId, questionIndex: idx,
     correctOptionId: correctOpt,
-    noAnswerCount: notAnswered.length,
-    noAnswerEliminatedCount: noAnswerEliminated,
+    // noAnswerCount includes both Redis participants who didn't answer AND ghost
+    // participants (never-joined players swept from the DB in §10.3).
+    noAnswerCount: notAnswered.length + ghostNoAnswer,
+    noAnswerEliminatedCount: noAnswerEliminated + ghostEliminated,
     eliminatedCount: qcElimCount,
     activeSurvivorCount: qcSurvivorCount,
     prizePool: qcPrizePool,
@@ -1076,7 +1180,7 @@ async function closeQuestion(game: {
   }, "QUESTION_CLOSED");
 
   console.log(`[orchestrator] game=${gameId} question ${idx} closed; ` +
-    `notAnswered=${notAnswered.length} eliminated=${noAnswerEliminated}`);
+    `notAnswered=${notAnswered.length} ghost=${ghostNoAnswer} eliminated=${noAnswerEliminated + ghostEliminated}`);
 
   // In auto mode: pause 3 s then advance to the next question automatically.
   // In presenter mode: wait for the next PrepareQuestion / AdvanceQuestion command.
@@ -1393,6 +1497,63 @@ async function handlePersistAnswer(payload: any): Promise<void> {
   }
 }
 
+/**
+ * Late-join reconciliation (late-join missed-answer rule). The game-session
+ * edge function has already charged the missed questions and written the
+ * authoritative `game_participants` row inside the atomic join; this handler
+ * only mirrors that decision to the room over LiveKit. We do NOT re-PATCH the
+ * DB here (unlike `applyElimination`) so a late joiner who never played keeps
+ * `participant_role="spectator"` rather than being relabelled "eliminated".
+ *   • over the limit → USER_ELIMINATED + PLAYER_ELIMINATED (status SPECTATOR)
+ *   • under the limit → PLAYER_WRONG_ANSWER carrying the pre-charged count
+ */
+async function handleLateJoinReconcile(payload: any): Promise<void> {
+  const { gameId, userId, wrongCount, remainingLives, eliminated,
+    eliminationReason, missedQuestions, questionIndex } = payload;
+  const roomName = await resolveRoomName(gameId);
+
+  if (!eliminated) {
+    broadcastPlayerWrongAnswer(
+      roomName, gameId, userId,
+      wrongCount ?? 0, remainingLives ?? null, "late_join_missed",
+    );
+    return;
+  }
+
+  // Resolve allowed_wrong_answers for the spec payload (cheap HGET).
+  let allowedWrongAnswers: number | null = null;
+  try {
+    const r = await getRedis();
+    const raw = await r.hGet(K.game(gameId), "maxWrongAnswers") as string | null;
+    allowedWrongAnswers = raw !== null ? parseInt(raw, 10) : null;
+  } catch (_e) { /* best-effort — missing limit is non-fatal */ }
+
+  const elimAtMs = payload.serverTime ?? Date.now();
+  void broadcast(roomName, {
+    type: "USER_ELIMINATED",
+    gameId, userId,
+    reason: eliminationReason ?? "late_join_missed",
+    wrongCount: wrongCount ?? 0,
+    remainingLives: remainingLives ?? 0,
+    questionId: null,
+    questionIndex: questionIndex ?? null,
+    eliminatedAt: elimAtMs,
+    serverTime: Date.now(),
+  }, "USER_ELIMINATED");
+  void broadcast(roomName, {
+    type: "PLAYER_ELIMINATED",
+    gameId, userId,
+    wrongAnswersCount: wrongCount ?? 0,
+    allowed_wrong_answers: allowedWrongAnswers,
+    remainingChances: remainingLives ?? 0,
+    status: "SPECTATOR",
+    reason: reasonToSpec(eliminationReason ?? "late_join_missed"),
+    lateJoin: true,
+    missedQuestions: missedQuestions ?? 0,
+    serverTime: Date.now(),
+  }, "PLAYER_ELIMINATED");
+}
+
 // ─── Presenter command handlers ───────────────────────────────────────────────
 
 /**
@@ -1657,6 +1818,7 @@ async function startConsumer(): Promise<void> {
               case "CloseQuestion":            await handleCloseQuestion(payload); break;
               case "AdvanceQuestion":          await handleAdvanceQuestion(payload); break;
               case "ANSWER_PERSIST_REQUESTED": await handlePersistAnswer(payload); break;
+              case "LATE_JOIN_RECONCILE":      await handleLateJoinReconcile(payload); break;
               default: console.warn(`[orchestrator] unknown message type: ${type}`);
             }
 

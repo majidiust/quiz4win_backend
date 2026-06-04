@@ -125,6 +125,26 @@ Withdrawals that cause a user's 24-hour total to exceed the AML threshold must c
 ### INV-13 — Voucher Fraud Prevention
 All voucher redemption attempts (success and failure) must be logged in `voucher_attempt_log`. Rate limits (`rate_limit_per_ip`, `rate_limit_per_user`) must be enforced before any redemption logic runs.
 
+### INV-14 — Any Unanswered Question = Missed/Wrong Answer (Unified Rule)
+**Any question that ends without a valid submission from a participant is counted as a missed (wrong) answer.** This rule applies deterministically across all player states:
+
+| Player state | Mechanism |
+|---|---|
+| **Joined Redis, did not answer** | `CLOSE_Q_SCRIPT` → `SDIFF(participants, questionAnswered)` → orchestrator notAnswered loop charges wrong, broadcasts event |
+| **Late join (first_question_only)** | `JOIN_GAME_SCRIPT` charges `missed = currentQuestionIndex + 1`; surviving late joiners are blocked on the in-progress question |
+| **Ghost participant** (paid, never called `/game-session/join`) | §10.3 orchestrator ghost sweep queries DB for players absent from Redis; increments `wrong_count`/`lives_remaining` in DB, broadcasts `PLAYER_WRONG_ANSWER` or `PLAYER_ELIMINATED` at each question close |
+| **Disconnected / Redis-expired** | If user re-establishes Redis state after disconnect, the existing `userState` hash is detected on reconnect; if the hash expired, they re-enter via the ghost-sweep pre-charged join path |
+| **any_time join policy** | No penalty for questions before join time; rule only starts from the question after they join |
+
+**Late-join detail** (`first_question_only`):
+- `missed = currentQuestionIndex + 1` (in-progress question counts because it started before they arrived)
+- `missed < allowed_wrong_answers` → join as **participant**, `lives_remaining = allowed_wrong_answers − missed`; in-progress question blocked (cannot double-answer)
+- `missed ≥ allowed_wrong_answers` → join **demoted to spectator**, `eliminated = true`, `elimination_reason = 'late_join_missed'`
+
+**Ghost-sweep pre-charged join path**: When a ghost player eventually calls `/game-session/join`, the edge function reads their DB `wrong_count`/`lives_remaining` (pre-charged by previous ghost sweeps) and passes them as `ARGV[6]`/`ARGV[7]` to `JOIN_GAME_SCRIPT`. The Lua script then only charges the currently-active question (+1) rather than recomputing from `currentQuestionIndex`, preventing double-counting. `LATE_JOIN_RECONCILE` is only published for this single new charge (not for already-broadcast ghost-sweep events).
+
+Games with no `allowed_wrong_answers` limit never eliminate on missed questions. State is authoritative in `game_participants` (DB) and mirrored to Redis user hashes; the orchestrator is the sole LiveKit broadcaster.
+
 ---
 
 ## 4. Regulatory & Compliance Notes

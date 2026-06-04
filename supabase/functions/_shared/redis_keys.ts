@@ -52,13 +52,21 @@ export const redisKeys = {
 /**
  * Build the complete set of keys for a game that an atomic Lua script needs.
  * Returns keys in the exact order the scripts expect them.
+ *
+ * `qIdx` is the live `currentQuestionIndex` (0 when no question is active). It
+ * is only used to build the `questionAnswered` key (KEYS[6]) so the late-join
+ * path can mark a surviving late joiner as having "answered" the in-progress
+ * question — which is already charged as a missed answer — so the no-answer
+ * sweep skips them and SUBMIT rejects a re-attempt as a duplicate.
  */
-export function joinGameKeys(gameId: string, userId: string) {
+export function joinGameKeys(gameId: string, userId: string, qIdx = 0) {
   return [
-    redisKeys.gameState(gameId),        // KEYS[1]
-    redisKeys.userState(gameId, userId), // KEYS[2]
-    redisKeys.participants(gameId),      // KEYS[3]
-    redisKeys.spectators(gameId),        // KEYS[4]
+    redisKeys.gameState(gameId),              // KEYS[1]
+    redisKeys.userState(gameId, userId),      // KEYS[2]
+    redisKeys.participants(gameId),           // KEYS[3]
+    redisKeys.spectators(gameId),             // KEYS[4]
+    redisKeys.userAnswers(gameId, userId),    // KEYS[5]
+    redisKeys.questionAnswered(gameId, qIdx), // KEYS[6]
   ];
 }
 
