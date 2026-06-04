@@ -13,7 +13,11 @@ There are **two channels** that deliver the same data, and they always agree:
 | Channel | Surface | When |
 |---|---|---|
 | **A. LiveKit DataChannel** | `GAME_RESULT` event broadcast to the game room | Real-time — within ~1 s of the last question closing |
-| **B. REST API** | `GET /public-games/:id/result` (public) and `summary` on `GET /games/:id/result` (auth) | Stable, idempotent — safe to poll / re-fetch any time after distribution |
+| **B. REST API** (`api.quiz4win.com`) | `GET /public-games/:id/result` (public) and `summary` on `GET /games/:id/result` (auth) | Stable, idempotent — safe to poll / re-fetch any time after distribution |
+
+> **Event transport:** the real-time channel is **LiveKit DataChannel only**
+> (same mechanism as `GAME_STARTED` / `QUESTION_STARTED` / `GAME_ENDED`). No
+> third-party realtime / pub-sub service is involved.
 
 The REST surface reads a JSONB column **persisted** by the `distribute_prizes()`
 RPC, so the payload is computed exactly once and every subsequent request
@@ -199,9 +203,9 @@ Migration `20260605120000_games_result_summary.sql`:
   read (the function fills the column from `game_participants` if it's NULL
   for an already-distributed game).
 
-No RLS changes — `public.games` already has `games_select_all FOR SELECT TO
-anon USING (true)`, so the new column is readable by the anon client used by
-the public edge function.
+No RLS changes — `public.games` already has a public `SELECT` policy, so the
+new column is readable by the unauthenticated `GET /public-games/:id/result`
+endpoint without any policy edits.
 
 ---
 
@@ -229,15 +233,17 @@ the public edge function.
 
 ## 7. Deploy notes (backend)
 
+All services are self-hosted Docker containers — no external CLI deploys.
+
 ```bash
-# 1. Apply DB migration
+# 1. Apply DB migration (db-maintainer runs migrations on boot)
 docker compose up -d --force-recreate db-maintainer
 
-# 2. Rebuild orchestrator with the new broadcast
+# 2. Rebuild orchestrator with the new GAME_RESULT broadcast
 docker compose up -d --build --force-recreate game-orchestrator
 
-# 3. Deploy edge functions
-supabase functions deploy public-games games
+# 3. Rebuild the REST API container with the new /result routes
+docker compose up -d --build --force-recreate api
 ```
 
 No environment variables added; no infra changes required.
