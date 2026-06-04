@@ -575,6 +575,16 @@ function cleanTopic(title: string | null | undefined): string {
 }
 
 /**
+ * Normalizes the free-text game/template description used to guide question
+ * generation. Returns "" when absent — the generator then relies solely on the
+ * category. The game TITLE is never used as a generation subject (see
+ * generateQuestion): questions must be driven by category + description only.
+ */
+function cleanDescription(description: string | null | undefined): string {
+  return (description ?? "").trim();
+}
+
+/**
  * Builds the ordered, deduped set of languages every question must be generated
  * in. The primary display language (`games.language`) is always placed FIRST —
  * it becomes the generator's baseLanguage (canonicalText) — followed by the
@@ -644,7 +654,7 @@ function shuffleQuestionOptions(q: GenQuestion): GenQuestion {
 }
 
 async function generateQuestion(params: {
-  topic?: string; category?: string; difficulty?: string;
+  category?: string; difficulty?: string; description?: string;
   targetLanguages: string[]; timeLimitSeconds?: number;
   // Canonical texts the model must NOT reproduce (already asked this game, or
   // a re-roll after a cross-platform cooldown collision).
@@ -656,31 +666,43 @@ async function generateQuestion(params: {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not set");
 
   // The generated content must faithfully reflect the template-derived game
-  // config (topic/category/difficulty/language). baseLanguage is the game's
+  // config (category/description/difficulty/language). baseLanguage is the game's
   // single configured language: canonicalText is written in it and it is the
   // only entry expected in localizedPayloads.
   const targetLanguages = params.targetLanguages.length ? params.targetLanguages : ["en"];
   const baseLanguage = targetLanguages[0] ?? "en";
-  const topic = params.topic ?? "general knowledge";
-  const category = params.category ?? "mixed";
+  const category = params.category ?? "general knowledge";
   const difficulty = params.difficulty ?? "medium";
+  // Free-text guidance from the game/template description. The game TITLE is
+  // deliberately NOT a generation input — subject is driven by category + description.
+  const description = cleanDescription(params.description);
 
   const sys = `You are a multilingual quiz question generator acting as a live game-show host.
 You MUST strictly honour the generation parameters in the user message:
-- "topic": the exact subject the question must be about — do NOT drift to another subject.
-- "category": the category the question must belong to.
+- "category": the subject area the question MUST belong to. This is the PRIMARY
+  driver of the question's subject.
+- "description": OPTIONAL extra guidance describing what the quiz is about and
+  what to focus on. When non-empty, the question MUST respect it. When empty,
+  rely SOLELY on "category". This is background guidance, NOT a question title —
+  never quote it back verbatim in the question.
 - "difficulty": produce a question of EXACTLY this difficulty level.
 - "baseLanguage": the language of "canonicalText" and its "options".
 - "targetLanguages": the COMPLETE set of languages "localizedPayloads" must cover —
   exactly one entry per language, no more and no fewer, each a faithful translation.
 Rules:
 - Generate ONE question with FOUR options: A, B, C, D.
+- FACTUAL ACCURACY IS MANDATORY. The question must have EXACTLY ONE unambiguously
+  correct answer that is verifiably true, and the other three options must be
+  clearly and verifiably WRONG. NEVER produce a question whose marked answer is
+  incorrect, debatable, outdated, or where more than one option could reasonably
+  be considered correct. If you are not certain of the correct answer, generate a
+  different question you ARE certain about.
 - "canonicalText" and its options MUST be written in "baseLanguage".
 - "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages",
   using that exact code verbatim in the "language" field.
 - Option IDs are IDENTICAL across all languages.
-- Exactly one correct answer.
-- The question MUST match the requested topic, category and difficulty.
+- The question MUST match the requested category and difficulty (and the
+  "description" when one is provided). Do NOT use the game's name/title as the subject.
 - Avoid political/hate/sexual/religious/illegal/ambiguous content.
 - The question MUST be original and clearly DIFFERENT from every entry in the
   "avoid" list — a different fact/topic, not a reworded variant of the same one.
@@ -693,7 +715,7 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   // Cap the avoid-list (most-recent first) so the prompt stays bounded.
   const { avoidTexts, temperature } = params;
   const userPayload = {
-    topic, category, difficulty, baseLanguage, targetLanguages,
+    category, difficulty, description, baseLanguage, targetLanguages,
     timeLimitSeconds: params.timeLimitSeconds,
     avoid: (avoidTexts ?? []).slice(-40),
     // A fresh seed every call pushes the model off its default answer so two
@@ -704,7 +726,8 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   // Log the exact inputs sent to the model so a mismatch between the template
   // and the generated game can be traced (no secrets — config values only).
   console.log(`[orchestrator] LLM gen request: ` +
-    `topic="${topic}" category="${category}" difficulty="${difficulty}" ` +
+    `category="${category}" difficulty="${difficulty}" ` +
+    `description="${description.slice(0, 60)}" ` +
     `baseLanguage="${baseLanguage}" targetLanguages=[${targetLanguages.join(",")}]`);
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -733,9 +756,9 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   const missingLangs = targetLanguages.filter(l => !producedLangs.includes(l));
   if (missingLangs.length) {
     console.warn(`[orchestrator] LLM response missing target language(s) ` +
-      `[${missingLangs.join(",")}] for topic="${topic}" — produced=[${producedLangs.join(",")}]`);
+      `[${missingLangs.join(",")}] for category="${category}" — produced=[${producedLangs.join(",")}]`);
   }
-  console.log(`[orchestrator] LLM gen result: topic="${topic}" ` +
+  console.log(`[orchestrator] LLM gen result: category="${category}" ` +
     `langs=[${producedLangs.join(",")}] correctOptionId=${parsed.correctOptionId} ` +
     `canonical="${(parsed.canonicalText ?? "").slice(0, 80)}"`);
 
@@ -756,7 +779,7 @@ interface PresenterGameConfig {
   timeLimitSeconds: number;
   maxQuestions: number;
   targetLanguages: string[];
-  topic: string;
+  description: string;
   category: string;
   difficulty: string;
   gracePeriodMs: number;
@@ -807,7 +830,7 @@ function normalizeText(t: string): string {
  * Module-level so it can be called from both auto-mode loop and presenter mode.
  */
 async function prefillQueue(gameId: string, config: {
-  topic: string; category: string; difficulty: string;
+  description: string; category: string; difficulty: string;
   targetLanguages: string[]; timeLimitSeconds: number;
 }): Promise<void> {
   const queue = questionQueue.get(gameId) ?? [];
@@ -821,7 +844,7 @@ async function prefillQueue(gameId: string, config: {
     ];
     try {
       const q = await generateQuestion({
-        topic: config.topic, category: config.category,
+        description: config.description, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
         timeLimitSeconds: config.timeLimitSeconds, avoidTexts,
       });
@@ -872,7 +895,7 @@ async function claimQuestion(q: GenQuestion, meta: {
  * stalling the game. Falls back to a local UUID if the DB is unreachable.
  */
 async function resolveUniqueQuestion(gameId: string, config: {
-  topic: string; category: string; difficulty: string;
+  description: string; category: string; difficulty: string;
   targetLanguages: string[]; timeLimitSeconds: number;
 }, first: GenQuestion): Promise<{ q: GenQuestion; id: string }> {
   const asked = askedQuestionIds.get(gameId) ?? new Set<string>();
@@ -902,7 +925,7 @@ async function resolveUniqueQuestion(gameId: string, config: {
     avoidTexts.add(normalizeText(q.canonicalText));
     try {
       q = await generateQuestion({
-        topic: config.topic, category: config.category,
+        description: config.description, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
         timeLimitSeconds: config.timeLimitSeconds,
         avoidTexts: [...avoidTexts],
@@ -932,7 +955,7 @@ async function resolveUniqueQuestion(gameId: string, config: {
 async function startQuestionLoop(game: {
   id: string; roomName: string; questionIndex: number;
   timeLimitSeconds: number; maxQuestions: number;
-  targetLanguages: string[]; topic: string; category: string; difficulty: string;
+  targetLanguages: string[]; description: string; category: string; difficulty: string;
   gracePeriodMs: number; maxWrongAnswers: number | null;
 }): Promise<void> {
   const { id: gameId, roomName, timeLimitSeconds, gracePeriodMs } = game;
@@ -1014,7 +1037,7 @@ async function startQuestionLoop(game: {
 async function closeQuestion(game: {
   id: string; roomName: string; timeLimitSeconds: number;
   maxQuestions: number; targetLanguages: string[];
-  topic: string; category: string; difficulty: string;
+  description: string; category: string; difficulty: string;
   gracePeriodMs: number; maxWrongAnswers: number | null;
 }, idx: number): Promise<void> {
   const { id: gameId, roomName, gracePeriodMs } = game;
@@ -1324,7 +1347,7 @@ async function handleStartGame(payload: any): Promise<void> {
 
   // Fetch game config from DB
   const rows = await dbSelect("games",
-    `id=eq.${gameId}&select=id,title,status,run_mode,livekit_room_name,time_per_question,` +
+    `id=eq.${gameId}&select=id,title,description,status,run_mode,livekit_room_name,time_per_question,` +
     `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool,prize_pool_currency`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
@@ -1438,7 +1461,7 @@ async function handleStartGame(payload: any): Promise<void> {
     id: gameId, roomName, timeLimitSeconds,
     maxQuestions: g.questions_count ?? 10,
     targetLanguages: resolveTargetLanguages(g.language, g.target_languages),
-    topic: cleanTopic(g.title),
+    description: cleanDescription(g.description),
     category: g.category ?? "mixed",
     difficulty: g.difficulty ?? "medium",
     gracePeriodMs, maxWrongAnswers,
@@ -1782,7 +1805,7 @@ async function handleStartQuestion(payload: any): Promise<void> {
   const gameParams = {
     id: gameId, roomName: config.roomName, timeLimitSeconds: timeLimit,
     maxQuestions: config.maxQuestions, targetLanguages: config.targetLanguages,
-    topic: config.topic, category: config.category, difficulty: config.difficulty,
+    description: config.description, category: config.category, difficulty: config.difficulty,
     gracePeriodMs: config.gracePeriodMs, maxWrongAnswers: config.maxWrongAnswers,
   };
   const timer = setTimeout(() => {
@@ -1827,7 +1850,7 @@ async function handleCloseQuestion(payload: any): Promise<void> {
     id: gameId, roomName: config.roomName,
     timeLimitSeconds: config.timeLimitSeconds,
     maxQuestions: config.maxQuestions, targetLanguages: config.targetLanguages,
-    topic: config.topic, category: config.category, difficulty: config.difficulty,
+    description: config.description, category: config.category, difficulty: config.difficulty,
     gracePeriodMs: config.gracePeriodMs, maxWrongAnswers: config.maxWrongAnswers,
   };
 
@@ -1925,7 +1948,7 @@ async function startConsumer(): Promise<void> {
 
 async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
-    `status=eq.live&select=id,title,livekit_room_name,time_per_question,allowed_wrong_answers,` +
+    `status=eq.live&select=id,title,description,livekit_room_name,time_per_question,allowed_wrong_answers,` +
     `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
     `started_at,first_question_starts_at,prize_pool,prize_pool_currency`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
@@ -1970,7 +1993,7 @@ async function recoverRunningGames(): Promise<void> {
       timeLimitSeconds: g.time_per_question ?? 10,
       maxQuestions: g.questions_count ?? 10,
       targetLanguages: resolveTargetLanguages(g.language, g.target_languages),
-      topic: cleanTopic(g.title),
+      description: cleanDescription(g.description),
       category: g.category ?? "mixed",
       difficulty: g.difficulty ?? "medium",
       gracePeriodMs: grace,

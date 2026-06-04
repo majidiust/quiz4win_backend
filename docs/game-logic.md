@@ -311,4 +311,32 @@ Never derive countdowns from `serverTime + duration`. Use the absolute `startsAt
 
 ---
 
+## 14. Question Generation (`generateQuestion`)
+
+Questions are produced by the OpenAI generator in `orchestrator.ts`. Generation
+is driven **only** by:
+
+| Input | Source column | Role |
+|-------|---------------|------|
+| `category` | `games.category` (← template) | **Primary** subject area — always honoured |
+| `description` | `games.description` (← `game_templates.description`) | **Optional** focusing guidance; when empty the generator relies solely on `category` |
+| `difficulty` | `games.difficulty` | Exact difficulty level |
+| `targetLanguages` | `games.language` + `target_languages` | One faithful `localizedPayload` per language |
+
+The game **title/name is NEVER an input** — `cleanTopic(games.title)` is used
+only for the display `title` field in Redis, not for generation.
+
+**Factual accuracy (mandatory):** the prompt requires exactly one verifiably
+correct answer with three verifiably wrong distractors. The model must skip any
+question it is not certain about rather than emit a debatable/incorrect answer.
+
+**Answer-position randomization:** every generated question is passed through
+`shuffleQuestionOptions()` (Fisher-Yates) before it is stored or broadcast. This
+rewrites `correctOptionId` to the shuffled position and applies the same
+permutation to all `localizedPayloads`, eliminating the LLM bias of always
+placing the correct answer in option A. Option labels stay `A/B/C/D` and remain
+identical across languages.
+
+---
+
 *Last updated: 2026-06-05. Owner: A-01 (Primary Builder). See also: `docs/livekit-events.md`, `docs/player-integration.md`.*
