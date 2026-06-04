@@ -493,8 +493,10 @@ async function applyElimination(params: {
     elimCount = parseInt(elimRaw ?? "0", 10);
     survivorCount = sc;
     prizePoolVal = prizeRaw !== null ? Number(prizeRaw) : null;
-    projectedPrize = (prizePoolVal !== null && survivorCount > 0)
-      ? Math.round((prizePoolVal / survivorCount) * 100) / 100
+    // When prizePool is known but there are no survivors (everyone eliminated),
+    // projectedPrizePerSurvivor is 0 — not null. null means "no prize pool".
+    projectedPrize = prizePoolVal !== null
+      ? (survivorCount > 0 ? Math.round((prizePoolVal / survivorCount) * 100) / 100 : 0)
       : null;
   } catch (_e) { /* best-effort — stats missing is non-fatal */ }
 
@@ -1160,8 +1162,10 @@ async function closeQuestion(game: {
     qcElimCount = parseInt(qcElimRaw ?? "0", 10);
     qcSurvivorCount = qcSc;
     qcPrizePool = qcPrizeRaw !== null ? Number(qcPrizeRaw) : null;
-    qcProjected = (qcPrizePool !== null && qcSurvivorCount > 0)
-      ? Math.round((qcPrizePool / qcSurvivorCount) * 100) / 100
+    // When prizePool is known but there are no survivors (everyone eliminated),
+    // projectedPrizePerSurvivor is 0 — not null. null means "no prize pool".
+    qcProjected = qcPrizePool !== null
+      ? (qcSurvivorCount > 0 ? Math.round((qcPrizePool / qcSurvivorCount) * 100) / 100 : 0)
       : null;
   } catch (_e) { /* best-effort */ }
   await broadcast(roomName, {
