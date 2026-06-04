@@ -247,15 +247,29 @@ Deno.serve(async (req: Request) => {
       return successResponse({ result });
     }
 
-    // GET /games/:id/result — my result. Schema fields: score, rank,
-    // prize_earned, correct_answers, wrong_answers, completed_at.
+    // GET /games/:id/result — my result + aggregate game summary.
+    // `result`  — per-user row from game_participants (unchanged contract).
+    // `summary` — persisted aggregate distribution from games.result_summary;
+    //             null if the game has not yet completed/distributed.
     if (gameId && action === "result" && req.method === "GET") {
-      const { data, error } = await supabase
-        .from("game_participants")
-        .select("score, rank, prize_amount:prize_earned, correct_answers, wrong_answers, completed_at")
-        .eq("game_id", gameId).eq("user_id", user.id).single();
+      const [{ data, error }, { data: gameRow }] = await Promise.all([
+        supabase
+          .from("game_participants")
+          .select("score, rank, prize_amount:prize_earned, correct_answers, wrong_answers, completed_at")
+          .eq("game_id", gameId).eq("user_id", user.id).single(),
+        supabase
+          .from("games")
+          .select("result_summary, status, prizes_distributed_at, ended_at")
+          .eq("id", gameId).single(),
+      ]);
       if (error || !data) return errorResponse("result_not_found", 404);
-      return successResponse({ result: data });
+      return successResponse({
+        result: data,
+        summary: gameRow?.result_summary ?? null,
+        game_status: gameRow?.status ?? null,
+        prizes_distributed_at: gameRow?.prizes_distributed_at ?? null,
+        ended_at: gameRow?.ended_at ?? null,
+      });
     }
 
     // POST /games/:id/claim-prize — manual prize claim fallback.

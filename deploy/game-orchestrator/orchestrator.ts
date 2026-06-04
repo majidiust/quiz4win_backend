@@ -807,6 +807,10 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   // Distribute prizes (atomic, idempotent — safe to call again from the
   // template-generator safety-net tick if this step fails). FCM fan-out to
   // winners is handled by the template-generator's prizeNotificationTick.
+  // The RPC now returns the canonical aggregate summary (persisted on
+  // games.result_summary); we forward it as a GAME_RESULT LiveKit event so
+  // every connected client renders the final podium / "X winners share $Y"
+  // screen without making an additional API round-trip.
   try {
     const res = await fetch(`${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/rpc/distribute_prizes`, {
       method: "POST",
@@ -821,8 +825,24 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
       const txt = await res.text().catch(() => "");
       console.error(`[orchestrator] distribute_prizes HTTP ${res.status} game=${gameId}: ${txt.slice(0, 200)}`);
     } else {
-      const out = await res.json().catch(() => null);
+      const out = await res.json().catch(() => null) as Record<string, unknown> | null;
       console.log(`[orchestrator] distribute_prizes game=${gameId} →`, out);
+      if (out && (out.distributed === true || out.already_distributed === true)) {
+        await broadcast(roomName, {
+          type:            "GAME_RESULT",
+          gameId,
+          serverTime:      Date.now(),
+          totalWinners:    Number(out.total_winners ?? 0),
+          totalPrize:      Number(out.total_prize ?? 0),
+          prizePool:       Number(out.prize_pool ?? 0),
+          currency:        String(out.currency ?? "USD"),
+          sharePerWinner:  Number(out.share_per_winner ?? 0),
+          winnerUserIds:   Array.isArray(out.winner_user_ids) ? out.winner_user_ids : [],
+          winners:         Array.isArray(out.winners) ? out.winners : [],
+          distributedAt:   out.distributed_at ?? null,
+          alreadyDistributed: out.already_distributed === true,
+        }, "GAME_RESULT");
+      }
     }
   } catch (err) {
     console.error(`[orchestrator] distribute_prizes failed game=${gameId}:`,

@@ -61,11 +61,41 @@ Deno.serve(async (req: Request) => {
   const gameId = parts[0] ?? null;
   const extra = parts[1] ?? null;
 
-  if (req.method !== "GET" || extra) return errorResponse("not_found", 404);
+  if (req.method !== "GET") return errorResponse("not_found", 404);
+  // Only `/public-games/:id/result` is a valid sub-path. Anything else 404s.
+  if (extra && extra !== "result") return errorResponse("not_found", 404);
 
   const supabase = getPublicClient();
 
   try {
+    // GET /public-games/:id/result — aggregate result + prize distribution.
+    // Returns the JSONB persisted by distribute_prizes() so the response is
+    // stable across calls (no recomputation) and matches the GAME_RESULT
+    // LiveKit broadcast emitted by the orchestrator.
+    if (gameId && extra === "result") {
+      const { data, error } = await supabase
+        .from("games")
+        .select("id, status, result_summary, prizes_distributed_at, ended_at")
+        .eq("id", gameId)
+        .single();
+      if (error || !data) return errorResponse("game_not_found", 404);
+      if (!data.result_summary) {
+        // Distribution still pending — surface a structured 409 so the client
+        // can poll/await instead of treating it as a hard failure.
+        return errorResponse(
+          data.status === "completed" ? "result_pending" : "game_not_completed",
+          409,
+        );
+      }
+      return successResponse({
+        game_id:               data.id,
+        status:                data.status,
+        ended_at:              data.ended_at,
+        prizes_distributed_at: data.prizes_distributed_at,
+        result:                data.result_summary,
+      });
+    }
+
     // GET /public-games/:id
     if (gameId) {
       const { data, error } = await supabase
