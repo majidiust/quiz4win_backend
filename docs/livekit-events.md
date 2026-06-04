@@ -74,7 +74,7 @@ A player lost a chance but is still in the game. Fires both for wrong submission
 `reason` ∈ `"WRONG_ANSWER" | "NO_ANSWER" | "TIMEOUT"`. `remainingChances` is `null` if the game has no life limit.
 
 ## 5. `PLAYER_ELIMINATED`
-A player has used all chances. Update local state to spectator; the server will reject any further answer submissions from this user with `reason="eliminated_cannot_answer"`. Eliminated players are excluded from final ranking and the prize pool.
+A player has used all chances. Update local state to spectator; the server will reject any further answer submissions from this user with `reason="eliminated_cannot_answer"`. Eliminated players are excluded from final ranking and the prize pool. Also carries a post-elimination game snapshot so the HUD can be updated without a REST round-trip.
 ```json
 {
   "type": "PLAYER_ELIMINATED", "topic": "PLAYER_ELIMINATED",
@@ -83,9 +83,15 @@ A player has used all chances. Update local state to spectator; the server will 
   "remainingChances": 0, "status": "SPECTATOR",
   "reason": "WRONG_ANSWER",
   "questionId": "uuid", "questionIndex": 4,
-  "eliminatedAt": 1748721735200, "serverTime": 1748721735200
+  "eliminatedAt": 1748721735200,
+  "eliminatedCount": 16,
+  "activeSurvivorCount": 84,
+  "prizePool": 500.00,
+  "projectedPrizePerSurvivor": 5.95,
+  "serverTime": 1748721735200
 }
 ```
+`eliminatedCount` — cumulative total eliminated so far. `activeSurvivorCount` — players still in the game after this elimination. `prizePool` / `projectedPrizePerSurvivor` are `null` if the game has no configured prize pool.
 
 ## 6. `USER_ELIMINATED` *(legacy — kept for back-compat)*
 Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_ELIMINATED` and ignore this one. Slated for removal once the iOS/Android builds shipped before 2026-06-05 are out of the field.
@@ -101,13 +107,17 @@ Emitted alongside every `PLAYER_ELIMINATED`. New clients should consume `PLAYER_
 ```
 
 ## 7. `QUESTION_CLOSED`
-Answer window has closed. Reveal the correct option. `noAnswerCount` is the number of players who did not submit; `noAnswerEliminatedCount` is the subset of those who were eliminated by this close.
+Answer window has closed. Reveal the correct option. `noAnswerCount` is the number of players who did not submit; `noAnswerEliminatedCount` is the subset of those who were eliminated by this close. Also carries a post-close game snapshot so the HUD (survivor count, prize projection) can be updated from this single event.
 ```json
 {
   "type": "QUESTION_CLOSED", "topic": "QUESTION_CLOSED",
   "gameId": "uuid", "questionId": "uuid", "questionIndex": 0,
   "correctOptionId": "A",
   "noAnswerCount": 3, "noAnswerEliminatedCount": 1,
+  "eliminatedCount": 15,
+  "activeSurvivorCount": 85,
+  "prizePool": 500.00,
+  "projectedPrizePerSurvivor": 5.88,
   "closedAt": 1748721735200, "serverTime": 1748721735200
 }
 ```
@@ -153,8 +163,8 @@ export type GameEvent =
   | { type: "GAME_STARTED"; gameId: string; runMode: "auto"|"presenter"; pregameDurationMs: number; firstQuestionStartsAt: number|null; recovered?: boolean; serverTime: number }
   | { type: "QUESTION_STARTED"; gameId: string; questionId: string; questionIndex: number; questionText: string; options: Option[]; localizedPayloads: Localized[]; startsAt: number; endsAt: number; timeLimitSeconds: number; serverTime: number }
   | { type: "PLAYER_WRONG_ANSWER"; gameId: string; userId: string; wrongAnswersCount: number; remainingChances: number|null; reason: Reason; serverTime: number }
-  | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId: string|null; questionIndex: number|null; eliminatedAt: number; serverTime: number }
-  | { type: "QUESTION_CLOSED"; gameId: string; questionId: string; questionIndex: number; correctOptionId: string; noAnswerCount: number; noAnswerEliminatedCount: number; closedAt: number; serverTime: number }
+  | { type: "PLAYER_ELIMINATED"; gameId: string; userId: string; wrongAnswersCount: number; allowed_wrong_answers: number|null; remainingChances: number|null; status: "SPECTATOR"; reason: Reason; questionId: string|null; questionIndex: number|null; eliminatedAt: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; serverTime: number }
+  | { type: "QUESTION_CLOSED"; gameId: string; questionId: string; questionIndex: number; correctOptionId: string; noAnswerCount: number; noAnswerEliminatedCount: number; eliminatedCount: number; activeSurvivorCount: number; prizePool: number|null; projectedPrizePerSurvivor: number|null; closedAt: number; serverTime: number }
   | { type: "GAME_ENDED"; gameId: string; serverTime: number }
   | { type: "GAME_RESULT"; gameId: string; totalWinners: number; totalPrize: number; prizePool: number; currency: string; sharePerWinner: number; winnerUserIds: string[]; winners: {user_id:string;rank:number;prize_amount:number}[]; distributedAt: string|null; alreadyDistributed: boolean; serverTime: number };
 ```

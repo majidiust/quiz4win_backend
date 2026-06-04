@@ -467,6 +467,24 @@ async function applyElimination(params: {
     console.error(`[orchestrator] sRem participants game=${gameId} user=${userId}:`,
       e instanceof Error ? e.message : e));
 
+  // Read aggregate game stats for the enriched PLAYER_ELIMINATED payload.
+  // Fetch AFTER sRem so activeSurvivorCount reflects the just-eliminated user.
+  let elimCount = 0, survivorCount = 0, prizePoolVal: number | null = null;
+  let projectedPrize: number | null = null;
+  try {
+    const [elimRaw, prizeRaw, sc] = await Promise.all([
+      r.hGet(K.game(gameId), "eliminatedUserCount") as Promise<string | null>,
+      r.hGet(K.game(gameId), "prizePool") as Promise<string | null>,
+      r.sCard(K.parts(gameId)),
+    ]);
+    elimCount = parseInt(elimRaw ?? "0", 10);
+    survivorCount = sc;
+    prizePoolVal = prizeRaw !== null ? Number(prizeRaw) : null;
+    projectedPrize = (prizePoolVal !== null && survivorCount > 0)
+      ? Math.round((prizePoolVal / survivorCount) * 100) / 100
+      : null;
+  } catch (_e) { /* best-effort — stats missing is non-fatal */ }
+
   // 2. Persist authoritative elimination state on game_participants so
   //    compute_game_ranks / distribute_prizes never pays an eliminated user.
   await dbUpdate("game_participants",
@@ -508,6 +526,10 @@ async function applyElimination(params: {
     questionId: questionId ?? null,
     questionIndex: questionIndex ?? null,
     eliminatedAt: eliminatedAtMs,
+    eliminatedCount: elimCount,
+    activeSurvivorCount: survivorCount,
+    prizePool: prizePoolVal,
+    projectedPrizePerSurvivor: projectedPrize,
     serverTime: Date.now(),
   }, "PLAYER_ELIMINATED");
 }
@@ -932,13 +954,34 @@ async function closeQuestion(game: {
     });
   }
 
-  // Broadcast QUESTION_CLOSED with the correct answer revealed (§13.4 after close)
+  // Broadcast QUESTION_CLOSED with the correct answer revealed (§13.4 after close).
+  // Enrich with a post-close game-state snapshot so clients can update the HUD
+  // (survivor count, prize projection) from a single authoritative event.
+  let qcElimCount = 0, qcSurvivorCount = 0, qcPrizePool: number | null = null;
+  let qcProjected: number | null = null;
+  try {
+    const [qcElimRaw, qcPrizeRaw, qcSc] = await Promise.all([
+      r.hGet(K.game(gameId), "eliminatedUserCount") as Promise<string | null>,
+      r.hGet(K.game(gameId), "prizePool") as Promise<string | null>,
+      r.sCard(K.parts(gameId)),
+    ]);
+    qcElimCount = parseInt(qcElimRaw ?? "0", 10);
+    qcSurvivorCount = qcSc;
+    qcPrizePool = qcPrizeRaw !== null ? Number(qcPrizeRaw) : null;
+    qcProjected = (qcPrizePool !== null && qcSurvivorCount > 0)
+      ? Math.round((qcPrizePool / qcSurvivorCount) * 100) / 100
+      : null;
+  } catch (_e) { /* best-effort */ }
   await broadcast(roomName, {
     type: "QUESTION_CLOSED", gameId,
     questionId: closeResult.questionId, questionIndex: idx,
     correctOptionId: correctOpt,
     noAnswerCount: notAnswered.length,
     noAnswerEliminatedCount: noAnswerEliminated,
+    eliminatedCount: qcElimCount,
+    activeSurvivorCount: qcSurvivorCount,
+    prizePool: qcPrizePool,
+    projectedPrizePerSurvivor: qcProjected,
     closedAt: now, serverTime: now,
   }, "QUESTION_CLOSED");
 
