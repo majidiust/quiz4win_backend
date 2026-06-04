@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, AlertTriangle } from "lucide-react";
+import { ArrowLeft, AlertTriangle, Bitcoin, Copy } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { PageHeader } from "@/components/shell/page-header";
@@ -33,7 +34,7 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
   const { data: w, error } = await db
     .from("withdrawals")
     .select(
-      "id, user_id, amount, method, account_details, status, aml_flagged, rejection_reason, transaction_reference, internal_note, requested_at, reviewed_at, completed_at, profiles!withdrawals_user_id_fkey(email, full_name, country, kyc_status, wallet_balance, earnings_balance)",
+      "id, user_id, amount, method, account_details, status, aml_flagged, rejection_reason, transaction_reference, internal_note, requested_at, reviewed_at, completed_at, crypto_coin, crypto_network, crypto_address, profiles!withdrawals_user_id_fkey(email, full_name, country, kyc_status, wallet_balance, earnings_balance)",
     )
     .eq("id", id)
     .maybeSingle();
@@ -41,11 +42,12 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
 
   const profile = (w.profiles as unknown as ProfileShape | null) ?? null;
   const kycBypassed = Number(w.amount ?? 0) <= KYC_THRESHOLD;
+  const isCrypto = w.method === "crypto";
 
   // Recent withdrawal history for the same player (context).
   const { data: history } = await db
     .from("withdrawals")
-    .select("id, amount, method, status, requested_at, completed_at")
+    .select("id, amount, method, status, requested_at, completed_at, crypto_coin, crypto_network")
     .eq("user_id", w.user_id)
     .neq("id", id)
     .order("requested_at", { ascending: false })
@@ -66,7 +68,7 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
             <Button asChild variant="outline" size="sm">
               <Link href="/finance/withdrawals"><ArrowLeft className="size-4" /> Back to queue</Link>
             </Button>
-            <WithdrawalActions id={w.id} status={w.status} />
+            <WithdrawalActions id={w.id} status={w.status} method={w.method} />
           </div>
         }
       />
@@ -122,9 +124,45 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
         </Card>
 
         <Card>
-          <CardHeader><CardTitle className="text-base">Destination</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              Destination
+              {isCrypto && w.crypto_coin ? (
+                <Badge variant="outline" className="gap-1 px-1.5 py-0 text-[11px] font-mono">
+                  <Bitcoin className="size-3" />{w.crypto_coin}
+                  {w.crypto_network ? <span className="ml-1 text-muted-foreground">· {w.crypto_network}</span> : null}
+                </Badge>
+              ) : null}
+            </CardTitle>
+          </CardHeader>
           <CardContent>
-            {accountDetails ? (
+            {isCrypto ? (
+              <div className="space-y-2">
+                {w.crypto_coin ? (
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <span className="text-muted-foreground">Coin</span>
+                    <span className="font-medium">{w.crypto_coin}</span>
+                    <span className="text-muted-foreground">Network</span>
+                    <span className="font-medium">{w.crypto_network ?? "—"}</span>
+                  </div>
+                ) : null}
+                {w.crypto_address ? (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-muted-foreground">Wallet address</p>
+                    <div className="flex items-start gap-2 rounded-md border bg-muted/40 p-2">
+                      <code className="flex-1 break-all text-[11px] leading-relaxed">{w.crypto_address}</code>
+                      <Copy className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                    </div>
+                  </div>
+                ) : null}
+                {w.transaction_reference ? (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">TX hash</p>
+                    <code className="block break-all rounded border bg-muted/40 p-2 text-[11px]">{w.transaction_reference}</code>
+                  </div>
+                ) : null}
+              </div>
+            ) : accountDetails ? (
               <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                 {Object.entries(accountDetails).map(([k, v]) => (
                   <Pair key={k} label={k}>{String(v ?? "—")}</Pair>
@@ -156,7 +194,16 @@ export default async function WithdrawalDetailPage({ params }: { params: Promise
                   {history.map((h) => (
                     <TableRow key={h.id}>
                       <TableCell className="font-mono text-xs">{formatMoneyDecimal(h.amount)}</TableCell>
-                      <TableCell className="text-xs">{h.method.replace(/_/g, " ")}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-xs capitalize">{h.method.replace(/_/g, " ")}</span>
+                          {h.method === "crypto" && h.crypto_coin ? (
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {h.crypto_coin}{h.crypto_network ? ` · ${h.crypto_network}` : ""}
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
                       <TableCell><StatusBadge value={h.status} /></TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(h.requested_at)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{formatRelative(h.completed_at)}</TableCell>

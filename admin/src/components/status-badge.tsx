@@ -20,6 +20,7 @@ const TONES: Record<string, Tone> = {
   completed: "muted",
   cancelled: "destructive",
   // finance
+  awaiting_confirmation: "secondary",
   processing: "warning",
   failed: "destructive",
   // support

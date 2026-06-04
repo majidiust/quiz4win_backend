@@ -28,7 +28,7 @@ export type TransactionType     =
   | 'referral_bonus' | 'refund' | 'admin_adjustment' | 'earnings_transfer';
 export type TransactionStatus   = 'pending' | 'completed' | 'failed';
 export type WithdrawalMethod    = 'bank_transfer' | 'crypto' | 'paypal';
-export type WithdrawalStatus    = 'pending' | 'processing' | 'completed' | 'rejected';
+export type WithdrawalStatus    = 'awaiting_confirmation' | 'pending' | 'processing' | 'completed' | 'rejected';
 export type KycDocType          = 'national_id' | 'passport' | 'drivers_license';
 export type AmlStatus           = 'open' | 'cleared' | 'escalated';
 export type ReferralCodeType    = 'user' | 'promo' | 'campaign';
@@ -293,6 +293,15 @@ export interface Withdrawal {
   internal_note: string | null;
   requested_at: string;
   completed_at: string | null;
+  // Email-OTP confirmation (R-01: only the SHA-256 hash is persisted, never plaintext)
+  confirmation_code_hash: string | null;
+  confirmation_expires_at: string | null;
+  confirmation_attempts: number;
+  confirmed_at: string | null;
+  // Crypto-specific structured columns (null for non-crypto methods)
+  crypto_coin: string | null;    // e.g. 'USDT', 'USDC'
+  crypto_network: string | null; // e.g. 'TRC20', 'ERC20', 'BEP20', 'SOL'
+  crypto_address: string | null; // destination wallet address
 }
 
 export interface KycRequest {

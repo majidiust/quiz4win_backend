@@ -193,6 +193,34 @@ ${codeBlock}
   return { subject, html, text };
 }
 
+/** Sent when a user submits a withdrawal request and must confirm it with an emailed code. */
+export function withdrawalOtpTemplate(opts: {
+  name: string;
+  code: string;
+  amountLabel: string;
+  methodLabel: string;
+  ttlMinutes?: number;
+}): { subject: string; html: string; text: string } {
+  const ttl = opts.ttlMinutes ?? 10;
+  const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const subject = `Confirm your Quiz4Win withdrawal — code ${opts.code}`;
+  const codeBlock = `<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:20px auto"><tr><td align="center" bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:18px 28px">
+<p style="margin:0;font-family:Menlo,Consolas,monospace;font-size:30px;letter-spacing:.35em;color:${BRAND.textDark};font-weight:700">${escapeHtml(opts.code)}</p>
+</td></tr></table>`;
+  const { html, text } = renderBrandEmail({
+    preheader: `Confirm your ${escapeHtml(opts.amountLabel)} withdrawal — code expires in ${ttl} minutes.`,
+    heroTitle: "Confirm your withdrawal",
+    heroSubtitle: `${escapeHtml(opts.amountLabel)} via ${escapeHtml(opts.methodLabel)}`,
+    bodyHtml: `<p style="margin:0 0 12px">${greeting} we received a request to withdraw <strong>${escapeHtml(opts.amountLabel)}</strong> via <strong>${escapeHtml(opts.methodLabel)}</strong> from your Quiz4Win account.</p>
+<p style="margin:0 0 12px">Enter the code below in the app to confirm. Your funds will only be debited and sent for review after you confirm.</p>
+${codeBlock}
+<p style="margin:8px 0 0;text-align:center;color:${BRAND.textFaint};font-size:12px">This code expires in ${ttl} minutes.</p>
+<p style="margin:24px 0 0;color:${BRAND.textMuted}">If you didn't request this withdrawal, do not share this code — ignore this email and your balance will remain unchanged.</p>`,
+    text: `${opts.name ? `Hi ${opts.name}, ` : ""}confirm your ${opts.amountLabel} withdrawal via ${opts.methodLabel} on Quiz4Win with this code: ${opts.code}. It expires in ${ttl} minutes. If you didn't request this, ignore this email.`,
+  });
+  return { subject, html, text };
+}
+
 /** Sent to mobile early-access sign-ups (iOS + Android). */
 export function earlyBirdWelcomeTemplate(opts: {
   name: string;

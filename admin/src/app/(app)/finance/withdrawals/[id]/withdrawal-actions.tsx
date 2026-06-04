@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { approveWithdrawal, rejectWithdrawal, completeWithdrawal } from "@/lib/actions/finance";
 
-const REJECT_REASONS = [
+const BANK_REJECT_REASONS = [
   "Bank details invalid or could not be verified",
   "KYC required before withdrawal",
   "Suspicious activity — flagged by AML",
@@ -27,12 +27,23 @@ const REJECT_REASONS = [
   "Duplicate request",
 ];
 
+const CRYPTO_REJECT_REASONS = [
+  "Wallet address invalid or unsupported network",
+  "KYC required before withdrawal",
+  "Suspicious activity — flagged by AML",
+  "Source of funds unclear",
+  "Duplicate request",
+  "Network temporarily unavailable",
+];
+
 interface Props {
   id: string;
   status: string;
+  method?: string;
 }
 
-export function WithdrawalActions({ id, status }: Props) {
+export function WithdrawalActions({ id, status, method }: Props) {
+  const isCrypto = method === "crypto";
   const router = useRouter();
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -111,13 +122,21 @@ export function WithdrawalActions({ id, status }: Props) {
             <DialogHeader>
               <DialogTitle>Mark withdrawal completed</DialogTitle>
               <DialogDescription>
-                Record the external payment reference. The player will be notified.
+                {isCrypto
+                  ? "Record the blockchain transaction hash. The player will be notified."
+                  : "Record the external payment reference. The player will be notified."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label htmlFor="tx-ref">Bank / payment reference</Label>
-                <Input id="tx-ref" value={txRef} onChange={(e) => setTxRef(e.target.value)} placeholder="e.g. TRX-2026-00451" maxLength={120} />
+                <Label htmlFor="tx-ref">{isCrypto ? "Transaction hash (TX ID)" : "Bank / payment reference"}</Label>
+                <Input
+                  id="tx-ref"
+                  value={txRef}
+                  onChange={(e) => setTxRef(e.target.value)}
+                  placeholder={isCrypto ? "e.g. 0xabc123... or T9vGH..." : "e.g. TRX-2026-00451"}
+                  maxLength={200}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="complete-note">Internal note (optional)</Label>
@@ -160,7 +179,7 @@ export function WithdrawalActions({ id, status }: Props) {
             </DialogHeader>
             <div className="space-y-3">
               <div className="flex flex-wrap gap-1.5">
-                {REJECT_REASONS.map((r) => (
+                {(isCrypto ? CRYPTO_REJECT_REASONS : BANK_REJECT_REASONS).map((r) => (
                   <button
                     key={r}
                     type="button"
