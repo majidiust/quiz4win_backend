@@ -764,6 +764,7 @@ async function rulesAuditTick(): Promise<void> {
   } catch (err) {
     console.error("[rules-audit] tick failed:", err instanceof Error ? err.message : err);
   }
+}
 
 // ─── Mid-game participant notification tick ─────────────────────────────────────
 // Sends notifications to all participants in live games at configurable intervals.
