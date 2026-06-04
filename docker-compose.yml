@@ -174,8 +174,13 @@ services:
       MQ_COMMAND_EXCHANGE: ${MQ_COMMAND_EXCHANGE:-}
       MQ_COMMAND_QUEUE: ${MQ_COMMAND_QUEUE:-quiz.show.start}
       MQ_ORCHESTRATOR_QUEUE: ${MQ_ORCHESTRATOR_QUEUE:-quiz.game.commands}
-      # Redis — real-time game state (game-session edge function reads/writes)
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
+      # Redis — real-time game state (game-session edge function reads/writes).
+      # NB: Docker Compose does NOT support nested ${...} inside ${VAR:-default}
+      # — the inner ${REDIS_PASSWORD} gets mangled into a literal string. We
+      # therefore build the URL with a single, flat expansion. To point at an
+      # external Redis, edit this line directly (service-level `environment:`
+      # wins over .env, so adding REDIS_URL to .env will NOT override this).
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       # S3-compatible object storage (DigitalOcean Spaces).
       S3_BUCKET: ${S3_BUCKET}
       S3_REGION: ${S3_REGION}
@@ -269,8 +274,11 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Redis (real-time game state)
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379}
+      # Redis (real-time game state). See note on the api service above: nested
+      # ${...} inside a default value is unsupported by Compose, so we use a
+      # single flat expansion. Edit this line directly to point at an external
+      # Redis instance.
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       # RabbitMQ (command/event bus)
       RABBITMQ_URL: ${RABBITMQ_URL:-}
       RABBITMQ_VHOST: ${RABBITMQ_VHOST:-}
