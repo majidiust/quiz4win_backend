@@ -127,7 +127,14 @@ const K = {
   qAnswered: (id: string, i: number)   => `${NS}:game:${id}:q:${i}:answered`,
   /** Staging area for presenter mode — one prepared (not-yet-active) question per game. */
   staged:    (id: string)              => `${NS}:game:${id}:q:staged`,
+  /** Per-game dedup sets (§ no-repeat). Survive orchestrator restart / multi-replica. */
+  askedIds:    (id: string)            => `${NS}:game:${id}:asked_ids`,
+  askedHashes: (id: string)            => `${NS}:game:${id}:asked_hashes`,
 };
+
+// TTL (seconds) for the per-game asked-question dedup sets. Matches the 24h
+// safety TTL on the game state hash so they are reclaimed with the game.
+const ASKED_SET_TTL_SECONDS = 86400;
 
 // ─── Lua scripts (mirrors supabase/functions/_shared/redis_scripts.ts) ───────
 
@@ -652,6 +659,81 @@ function shuffleQuestionOptions(q: GenQuestion): GenQuestion {
   return { ...q, options: newOptions, correctOptionId: newCorrectOptionId, localizedPayloads: newLocalizedPayloads };
 }
 
+// Built-in question-generation guidance. Used when no LLM template (game →
+// template → global default cascade) supplies a system_prompt. The mandatory
+// JSON-output schema is appended separately inside generateQuestion().
+const DEFAULT_GEN_GUIDANCE = `You are a multilingual quiz question generator acting as a live game-show host.
+You MUST strictly honour the generation parameters in the user message:
+- "category": the subject area the question MUST belong to. This is the PRIMARY driver of the subject.
+- "description": OPTIONAL extra guidance. When non-empty the question MUST respect it; when empty rely
+  SOLELY on "category". This is background guidance, NOT a title — never quote it back verbatim.
+- "difficulty": produce a question of EXACTLY this difficulty level.
+- "baseLanguage": the language of "canonicalText" and its "options".
+- "targetLanguages": the COMPLETE set of languages "localizedPayloads" must cover.
+FACTUAL ACCURACY IS MANDATORY. The question must have EXACTLY ONE unambiguously correct answer that is
+verifiably true; the other three options must be clearly and verifiably WRONG. If unsure, pick a different
+question you ARE certain about. Match the requested category and difficulty (and "description" when given).
+Do NOT use the game's name/title as the subject. Avoid political/hate/sexual/religious/illegal/ambiguous content.`;
+
+// Resolved OpenAI generation config for a single game. Any field may be
+// undefined, in which case generateQuestion falls back to its hardcoded default
+// (guidance) / OPENAI_MODEL / 0.8 / 1500.
+interface LlmConfig {
+  systemPrompt?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+function mapLlmRow(row: any): LlmConfig | null {
+  if (!row) return null;
+  return {
+    systemPrompt: row.system_prompt ?? undefined,
+    model: row.model ?? undefined,
+    temperature: row.temperature != null ? Number(row.temperature) : undefined,
+    maxTokens: row.max_tokens != null ? Number(row.max_tokens) : undefined,
+  };
+}
+
+/**
+ * Resolves the LLM generation config for a game via the 3-tier cascade:
+ *   game.llm_template_id → game_template.llm_template_id → global active default.
+ * Returns null when nothing matches (the caller then relies on the hardcoded
+ * guidance + OPENAI_MODEL safety net). DB errors are swallowed and treated as
+ * "no override" so a generator outage never stalls a game.
+ */
+async function resolveLlmConfig(
+  g: { llm_template_id?: string | null; template_id?: string | null },
+): Promise<LlmConfig | null> {
+  const LLM_COLS = "select=system_prompt,model,temperature,max_tokens";
+  const load = async (id: string): Promise<LlmConfig | null> => {
+    const rows = await dbSelect("llm_prompt_templates",
+      `id=eq.${id}&deleted_at=is.null&${LLM_COLS}`);
+    return mapLlmRow(rows[0]);
+  };
+  try {
+    if (g.llm_template_id) {
+      const c = await load(g.llm_template_id);
+      if (c) return c;
+    }
+    if (g.template_id) {
+      const tplRows = await dbSelect("game_templates",
+        `id=eq.${g.template_id}&select=llm_template_id`);
+      const tplLlmId = tplRows[0]?.llm_template_id as string | null | undefined;
+      if (tplLlmId) {
+        const c = await load(tplLlmId);
+        if (c) return c;
+      }
+    }
+    const activeRows = await dbSelect("llm_prompt_templates",
+      `is_active=eq.true&deleted_at=is.null&${LLM_COLS}&limit=1`);
+    return mapLlmRow(activeRows[0]);
+  } catch (e) {
+    console.error("[orchestrator] resolveLlmConfig failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 async function generateQuestion(params: {
   category?: string; difficulty?: string; description?: string;
   targetLanguages: string[]; timeLimitSeconds?: number;
@@ -661,6 +743,13 @@ async function generateQuestion(params: {
   // Override the sampling temperature — raised on dedup retries to escape the
   // model's single most-likely (and therefore repeated) question.
   temperature?: number;
+  // 3-tier LLM cascade overrides (game → template → global default). When
+  // omitted the hardcoded guidance + OPENAI_MODEL safety net is used. The
+  // mandatory JSON-output schema is ALWAYS appended regardless of systemPrompt
+  // so response parsing can never be broken by an edited prompt.
+  systemPrompt?: string;
+  model?: string;
+  maxTokens?: number;
 }): Promise<GenQuestion> {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not set");
 
@@ -676,33 +765,20 @@ async function generateQuestion(params: {
   // deliberately NOT a generation input — subject is driven by category + description.
   const description = cleanDescription(params.description);
 
-  const sys = `You are a multilingual quiz question generator acting as a live game-show host.
-You MUST strictly honour the generation parameters in the user message:
-- "category": the subject area the question MUST belong to. This is the PRIMARY
-  driver of the question's subject.
-- "description": OPTIONAL extra guidance describing what the quiz is about and
-  what to focus on. When non-empty, the question MUST respect it. When empty,
-  rely SOLELY on "category". This is background guidance, NOT a question title —
-  never quote it back verbatim in the question.
-- "difficulty": produce a question of EXACTLY this difficulty level.
-- "baseLanguage": the language of "canonicalText" and its "options".
-- "targetLanguages": the COMPLETE set of languages "localizedPayloads" must cover —
-  exactly one entry per language, no more and no fewer, each a faithful translation.
-Rules:
+  // The guidance portion is overridable via the LLM cascade (params.systemPrompt).
+  // When absent, the built-in default below is used.
+  const guidance = (params.systemPrompt ?? "").trim() || DEFAULT_GEN_GUIDANCE;
+
+  // The schema/output contract is NON-negotiable and ALWAYS appended so an
+  // edited prompt can never break JSON parsing or the multi-language contract.
+  const sys = `${guidance}
+
+Non-negotiable output contract (always applies):
 - Generate ONE question with FOUR options: A, B, C, D.
-- FACTUAL ACCURACY IS MANDATORY. The question must have EXACTLY ONE unambiguously
-  correct answer that is verifiably true, and the other three options must be
-  clearly and verifiably WRONG. NEVER produce a question whose marked answer is
-  incorrect, debatable, outdated, or where more than one option could reasonably
-  be considered correct. If you are not certain of the correct answer, generate a
-  different question you ARE certain about.
 - "canonicalText" and its options MUST be written in "baseLanguage".
 - "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages",
-  using that exact code verbatim in the "language" field.
-- Option IDs are IDENTICAL across all languages.
-- The question MUST match the requested category and difficulty (and the
-  "description" when one is provided). Do NOT use the game's name/title as the subject.
-- Avoid political/hate/sexual/religious/illegal/ambiguous content.
+  using that exact code verbatim in the "language" field. Option IDs are IDENTICAL
+  across all languages.
 - The question MUST be original and clearly DIFFERENT from every entry in the
   "avoid" list — a different fact/topic, not a reworded variant of the same one.
 - Output ONLY valid JSON, no markdown.
@@ -733,7 +809,9 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
     method:"POST",
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},
     body: JSON.stringify({
-      model: OPENAI_MODEL, temperature: temperature ?? 0.8, max_tokens:1500,
+      model: params.model ?? OPENAI_MODEL,
+      temperature: temperature ?? 0.8,
+      max_tokens: params.maxTokens ?? 1500,
       response_format:{type:"json_object"},
       messages:[
         {role:"system",content:sys},
@@ -783,6 +861,8 @@ interface PresenterGameConfig {
   difficulty: string;
   gracePeriodMs: number;
   maxWrongAnswers: number | null;
+  /** Resolved 3-tier LLM cascade config; undefined ⇒ hardcoded generator default. */
+  llm?: LlmConfig;
   /** LiveKit identity the presenter joined the room with (e.g. "ai-presenter-<gameId>"). */
   presenterIdentity: string;
   /** Index of the next question to be prepared (incremented after each StartQuestion). */
@@ -813,15 +893,52 @@ const stagedQuestions = new Map<string, StagedQuestion>();
 const closeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Pre-generated question queue keyed by gameId
 const questionQueue = new Map<string, GenQuestion[]>();
-// Canonical question IDs already asked in a given game (within-game dedup).
-const askedQuestionIds = new Map<string, Set<string>>();
-// Canonical (normalized) question TEXTS already asked in a given game. Fed to
-// the generator's avoid-list so it never re-asks the same question (§ no-repeat).
-const askedQuestionTexts = new Map<string, Set<string>>();
+
+// Per-game "already asked" dedup now lives in Redis (K.askedIds /
+// K.askedHashes) so it survives an orchestrator restart and is shared across
+// replicas (§ no-repeat invariant). The helpers below are best-effort: a Redis
+// outage degrades to "no within-game dedup" rather than stalling the game (the
+// platform-wide claim_question cooldown still applies).
 
 /** Normalizes question text to match claim_question's content_hash basis. */
 function normalizeText(t: string): string {
   return t.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Reads the set of normalized question texts already asked in this game. */
+async function getAskedTexts(gameId: string): Promise<Set<string>> {
+  try {
+    const r = await getRedis();
+    const members = await r.sMembers(K.askedHashes(gameId)) as string[];
+    return new Set(members);
+  } catch (e) {
+    console.error("[orchestrator] getAskedTexts failed:", e instanceof Error ? e.message : e);
+    return new Set<string>();
+  }
+}
+
+/** True when the canonical question id was already asked in this game. */
+async function isAskedId(gameId: string, id: string): Promise<boolean> {
+  try {
+    const r = await getRedis();
+    return Boolean(await r.sIsMember(K.askedIds(gameId), id));
+  } catch (e) {
+    console.error("[orchestrator] isAskedId failed:", e instanceof Error ? e.message : e);
+    return false;
+  }
+}
+
+/** Records a question as asked-in-this-game (id + normalized text) with TTL. */
+async function markAsked(gameId: string, id: string, canonicalText: string): Promise<void> {
+  try {
+    const r = await getRedis();
+    await r.sAdd(K.askedIds(gameId), id);
+    await r.sAdd(K.askedHashes(gameId), normalizeText(canonicalText));
+    await r.expire(K.askedIds(gameId), ASKED_SET_TTL_SECONDS);
+    await r.expire(K.askedHashes(gameId), ASKED_SET_TTL_SECONDS);
+  } catch (e) {
+    console.error("[orchestrator] markAsked failed:", e instanceof Error ? e.message : e);
+  }
 }
 
 /**
@@ -830,10 +947,10 @@ function normalizeText(t: string): string {
  */
 async function prefillQueue(gameId: string, config: {
   description: string; category: string; difficulty: string;
-  targetLanguages: string[]; timeLimitSeconds: number;
+  targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
 }): Promise<void> {
   const queue = questionQueue.get(gameId) ?? [];
-  const askedTexts = askedQuestionTexts.get(gameId) ?? new Set<string>();
+  const askedTexts = await getAskedTexts(gameId);
   while (queue.length < 3) {
     // Avoid both already-asked questions and the ones already queued, so the
     // 3 pre-generated questions are mutually distinct too.
@@ -846,6 +963,8 @@ async function prefillQueue(gameId: string, config: {
         description: config.description, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
         timeLimitSeconds: config.timeLimitSeconds, avoidTexts,
+        systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
+        temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
       });
       queue.push(q);
       console.log(`[orchestrator] game=${gameId} pre-generated question; queue=${queue.length}`);
@@ -895,16 +1014,13 @@ async function claimQuestion(q: GenQuestion, meta: {
  */
 async function resolveUniqueQuestion(gameId: string, config: {
   description: string; category: string; difficulty: string;
-  targetLanguages: string[]; timeLimitSeconds: number;
+  targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
 }, first: GenQuestion): Promise<{ q: GenQuestion; id: string }> {
-  const asked = askedQuestionIds.get(gameId) ?? new Set<string>();
-  askedQuestionIds.set(gameId, asked);
-  const askedTexts = askedQuestionTexts.get(gameId) ?? new Set<string>();
-  askedQuestionTexts.set(gameId, askedTexts);
   // The avoid-list grows with every collision so the generator is explicitly
   // told which questions NOT to produce — this is what actually breaks the
-  // "same popular trivia every time" loop (§ no-repeat invariant).
-  const avoidTexts = new Set<string>(askedTexts);
+  // "same popular trivia every time" loop (§ no-repeat invariant). Seed it with
+  // the Redis-backed set of texts already asked in this game.
+  const avoidTexts = await getAskedTexts(gameId);
   let q = first;
   let fallback: { q: GenQuestion; id: string } | null = null;
 
@@ -912,13 +1028,12 @@ async function resolveUniqueQuestion(gameId: string, config: {
     const claim = await claimQuestion(q, config);
     if (claim) {
       fallback = { q, id: claim.id };
-      if (!claim.wasRecent && !asked.has(claim.id)) {
-        asked.add(claim.id);
-        askedTexts.add(normalizeText(q.canonicalText));
+      if (!claim.wasRecent && !(await isAskedId(gameId, claim.id))) {
+        await markAsked(gameId, claim.id, q.canonicalText);
         return { q, id: claim.id };
       }
       console.warn(`[orchestrator] game=${gameId} question collision ` +
-        `(recent=${claim.wasRecent}, inGame=${asked.has(claim.id)}) — regenerating`);
+        `(recent=${claim.wasRecent}) — regenerating`);
     }
     // Feed the colliding text back so the next generation explicitly avoids it.
     avoidTexts.add(normalizeText(q.canonicalText));
@@ -928,8 +1043,11 @@ async function resolveUniqueQuestion(gameId: string, config: {
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
         timeLimitSeconds: config.timeLimitSeconds,
         avoidTexts: [...avoidTexts],
+        systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
         // Raise diversity on each retry to escape the model's default answer.
-        temperature: Math.min(1.2, 0.7 + attempt * 0.15),
+        // The cascade temperature (if any) is the floor; retries climb above it.
+        temperature: Math.min(1.2, (config.llm?.temperature ?? 0.7) + attempt * 0.15),
+        maxTokens: config.llm?.maxTokens,
       });
     } catch (e) {
       console.error("[orchestrator] dedup regenerate failed:", e instanceof Error ? e.message : e);
@@ -938,16 +1056,14 @@ async function resolveUniqueQuestion(gameId: string, config: {
   }
 
   if (fallback) {
-    asked.add(fallback.id);
-    askedTexts.add(normalizeText(fallback.q.canonicalText));
+    await markAsked(gameId, fallback.id, fallback.q.canonicalText);
     console.warn(`[orchestrator] game=${gameId} accepting question after ` +
       `${QUESTION_DEDUP_MAX_RETRIES} dedup attempts (fallback)`);
     return fallback;
   }
   // DB unreachable — preserve the game with a local id (no audit row).
   const id = crypto.randomUUID();
-  asked.add(id);
-  askedTexts.add(normalizeText(q.canonicalText));
+  await markAsked(gameId, id, q.canonicalText);
   return { q, id };
 }
 
@@ -955,7 +1071,7 @@ async function startQuestionLoop(game: {
   id: string; roomName: string; questionIndex: number;
   timeLimitSeconds: number; maxQuestions: number;
   targetLanguages: string[]; description: string; category: string; difficulty: string;
-  gracePeriodMs: number; maxWrongAnswers: number | null;
+  gracePeriodMs: number; maxWrongAnswers: number | null; llm?: LlmConfig;
 }): Promise<void> {
   const { id: gameId, roomName, timeLimitSeconds, gracePeriodMs } = game;
 
@@ -1334,8 +1450,10 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   questionQueue.delete(gameId);
   presenterGames.delete(gameId);
   stagedQuestions.delete(gameId);
-  askedQuestionIds.delete(gameId);
-  askedQuestionTexts.delete(gameId);
+  // Per-game dedup sets live in Redis; expire them alongside the game state
+  // hash rather than holding them for the full safety TTL.
+  await r.expire(K.askedIds(gameId), 3600);
+  await r.expire(K.askedHashes(gameId), 3600);
 }
 
 // ─── RabbitMQ message handlers ────────────────────────────────────────────────
@@ -1347,7 +1465,8 @@ async function handleStartGame(payload: any): Promise<void> {
   // Fetch game config from DB
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,description,status,run_mode,livekit_room_name,time_per_question,` +
-    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool,prize_pool_currency`);
+    `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool,prize_pool_currency,` +
+    `template_id,llm_template_id`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1456,6 +1575,10 @@ async function handleStartGame(payload: any): Promise<void> {
     category: g.category ?? "mixed",
   }, "GAME_STARTED");
 
+  // Resolve the 3-tier LLM cascade once at game start (game → template →
+  // global default). null ⇒ generateQuestion uses its hardcoded guidance.
+  const llm = await resolveLlmConfig(g) ?? undefined;
+
   const gameCommon = {
     id: gameId, roomName, timeLimitSeconds,
     maxQuestions: g.questions_count ?? 10,
@@ -1463,7 +1586,7 @@ async function handleStartGame(payload: any): Promise<void> {
     description: cleanDescription(g.description),
     category: g.category ?? "mixed",
     difficulty: g.difficulty ?? "medium",
-    gracePeriodMs, maxWrongAnswers,
+    gracePeriodMs, maxWrongAnswers, llm,
   };
 
   if (runMode === "auto") {
@@ -1949,7 +2072,7 @@ async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,description,livekit_room_name,time_per_question,allowed_wrong_answers,` +
     `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
-    `started_at,first_question_starts_at,prize_pool,prize_pool_currency`);
+    `started_at,first_question_starts_at,prize_pool,prize_pool_currency,template_id,llm_template_id`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -1987,6 +2110,8 @@ async function recoverRunningGames(): Promise<void> {
       });
     }
     gameRoomNames.set(g.id, roomName);
+    // Re-resolve the LLM cascade so recovered games keep their configured prompt.
+    const llm = await resolveLlmConfig(g) ?? undefined;
     const gameCommon = {
       id: g.id, roomName,
       timeLimitSeconds: g.time_per_question ?? 10,
@@ -1996,7 +2121,7 @@ async function recoverRunningGames(): Promise<void> {
       category: g.category ?? "mixed",
       difficulty: g.difficulty ?? "medium",
       gracePeriodMs: grace,
-      maxWrongAnswers: g.allowed_wrong_answers ?? null,
+      maxWrongAnswers: g.allowed_wrong_answers ?? null, llm,
     };
 
     // ── Presenter-mode recovery ─────────────────────────────────────────────

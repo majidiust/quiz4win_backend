@@ -24,6 +24,7 @@ import {
   Star,
   Smartphone,
   CalendarClock,
+  BrainCircuit,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -60,6 +61,7 @@ export const navSections: NavSection[] = [
     items: [
       { title: "Games", href: "/games", icon: Gamepad2, roles: ["super_admin", "admin", "moderator"] },
       { title: "Game Templates", href: "/templates", icon: CalendarClock, roles: ["super_admin", "admin", "moderator"] },
+      { title: "LLM Templates", href: "/llm-templates", icon: BrainCircuit, roles: ["super_admin", "admin"] },
       { title: "Live Shows", href: "/shows", icon: Radio, roles: ["super_admin", "admin", "moderator"] },
       { title: "Host Applications", href: "/host-applications", icon: Star, roles: ["super_admin", "admin", "moderator"] },
       { title: "Early Birds", href: "/early-birds", icon: Smartphone, roles: ["super_admin", "admin", "moderator"] },

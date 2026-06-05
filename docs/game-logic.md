@@ -337,6 +337,39 @@ permutation to all `localizedPayloads`, eliminating the LLM bias of always
 placing the correct answer in option A. Option labels stay `A/B/C/D` and remain
 identical across languages.
 
+**LLM config cascade (`resolveLlmConfig`):** the `system_prompt`, `model`,
+`temperature`, and `max_tokens` are resolved once at game start via a 3-tier
+cascade, then threaded into every `generateQuestion` call for that game:
+
+```
+games.llm_template_id            (per-game override, highest priority)
+  └─ game_templates.llm_template_id   (template override)
+       └─ llm_prompt_templates.is_active = TRUE   (global default)
+            └─ hardcoded DEFAULT_GEN_GUIDANCE + OPENAI_MODEL  (safety net)
+```
+
+Templates are edited in the admin panel (**LLM Templates**); no API key is ever
+stored (R-01). The editable prompt is only the **guidance** half — the mandatory
+JSON-output schema is always appended by the orchestrator, so an edited prompt
+can never break response parsing or the multi-language contract.
+
+**Per-game no-repeat dedup (Redis-backed):** within a single game a question is
+never repeated. Asked questions are tracked in two Redis sets, replacing the old
+in-memory maps so dedup survives an orchestrator restart and is shared across
+replicas:
+
+| Key | Contents |
+|-----|----------|
+| `q4w:game:{id}:asked_ids` | canonical `claim_question` ids already asked |
+| `q4w:game:{id}:asked_hashes` | normalized question texts (fed into the generator avoid-list) |
+
+Both sets carry a 24 h safety TTL (`ASKED_SET_TTL_SECONDS`) and are dropped to a
+1 h TTL when the game ends. On collision the colliding text is added to the
+avoid-list and the question is regenerated (temperature climbing per attempt) up
+to `QUESTION_DEDUP_MAX_RETRIES`. A Redis outage degrades to "no within-game
+dedup" rather than stalling the game — the platform-wide `claim_question`
+cooldown still applies.
+
 ---
 
-*Last updated: 2026-06-05. Owner: A-01 (Primary Builder). See also: `docs/livekit-events.md`, `docs/player-integration.md`.*
+*Last updated: 2026-06-07. Owner: A-01 (Primary Builder). See also: `docs/livekit-events.md`, `docs/player-integration.md`.*
