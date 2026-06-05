@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Email Confirmed — Quiz4Win</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root {
+      --primary: #5B6BF5; --primary-dark: #4452E8;
+      --dark: #0F172A; --darker: #0B1124;
+      --text-dark: #0F172A; --text-muted: #475569;
+      --bg: #F4F5FB; --surface: #FFFFFF; --border: #E2E8F0;
+      --win: #22C55E;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg); color: var(--text-dark);
+      min-height: 100vh; display: flex; flex-direction: column;
+    }
+    header { background: var(--darker); padding: 20px 24px; text-align: center; }
+    header img { height: 28px; vertical-align: middle; }
+    main { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
+    .card {
+      background: var(--surface); max-width: 440px; width: 100%;
+      padding: 40px 32px; border-radius: 16px; text-align: center;
+      box-shadow: 0 10px 40px rgba(15, 23, 42, 0.08); border: 1px solid var(--border);
+    }
+    .icon { display: block; margin: 0 auto 20px; }
+    h1 { margin: 0 0 10px; font-size: 26px; color: var(--text-dark); }
+    p.lead { color: var(--text-muted); margin: 0 0 28px; font-size: 15px; line-height: 1.6; }
+    .btn-row { display: flex; gap: 12px; flex-direction: column; }
+    .btn {
+      display: block; padding: 14px 24px; border-radius: 10px;
+      font-weight: 600; text-decoration: none; font-size: 15px; transition: background .15s;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-outline { border: 1.5px solid var(--border); color: var(--text-muted); font-size: 13px; padding: 10px 20px; }
+    .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+    footer { text-align: center; padding: 24px; font-size: 12px; color: var(--text-muted); }
+  </style>
+</head>
+<body>
+  <header><img src="/q4w_text_logo.png" alt="Quiz4Win" /></header>
+  <main>
+    <div class="card">
+      <svg class="icon" width="52" height="52" viewBox="0 0 24 24" fill="none"
+           stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+      <h1>Email Confirmed!</h1>
+      <p class="lead">Your Quiz4Win account is verified and ready to go.<br>Open the app to start playing live quizzes and win real prizes.</p>
+      <div class="btn-row">
+        <a id="open-app" class="btn btn-primary" href="#">Open Quiz4Win App</a>
+        <a class="btn btn-outline" href="https://apps.apple.com/app/quiz4win/id000000000">Download for iOS</a>
+        <a class="btn btn-outline" href="https://play.google.com/store/apps/details?id=com.quiz4win.app">Get it on Android</a>
+      </div>
+    </div>
+  </main>
+  <footer>© Quiz4Win · 18+ where applicable · Play responsibly.</footer>
+
+  <script>
+    (function () {
+      // Parse the URL fragment that Supabase appends after email confirmation.
+      // #access_token=…&refresh_token=…&type=signup
+      var hash = window.location.hash.replace(/^#/, "");
+      var params = {};
+      hash.split("&").forEach(function (kv) {
+        var i = kv.indexOf("=");
+        if (i > 0) params[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+      });
+
+      // Build deep link: quiz4win://auth/callback?access_token=…&refresh_token=…
+      // The app's Universal Link handler will also intercept this page directly on
+      // iOS/Android if the app is installed (the deep link is a belt-and-suspenders).
+      var deepLink = "quiz4win://auth/callback";
+      if (params.access_token) {
+        deepLink += "?access_token=" + encodeURIComponent(params.access_token);
+        if (params.refresh_token) deepLink += "&refresh_token=" + encodeURIComponent(params.refresh_token);
+        if (params.type) deepLink += "&type=" + encodeURIComponent(params.type);
+      }
+      document.getElementById("open-app").href = deepLink;
+
+      // Attempt to open the app automatically after a short delay so the user
+      // can read the confirmation message first.
+      setTimeout(function () {
+        window.location.href = deepLink;
+      }, 1200);
+    })();
+  </script>
+</body>
+</html>

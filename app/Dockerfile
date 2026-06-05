@@ -5,8 +5,10 @@
 # Serves:
 #   /.well-known/apple-app-site-association  (iOS Universal Link manifest)
 #   /.well-known/assetlinks.json             (Android App Link manifest)
-#   /auth/reset-password                     (branded web fallback when the
-#                                             Expo app is not installed)
+#   /auth/callback                           (email-confirmation web fallback)
+#   /auth/reset-password                     (password-reset web fallback)
+#                                            (both load only when the Expo app
+#                                             is not installed)
 #   /                                        (landing → app stores)
 #
 # Host nginx terminates TLS for app.quiz4win.com and proxies to this
