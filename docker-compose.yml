@@ -306,6 +306,46 @@ services:
     networks:
       - quiz4win
 
+  # ─── Service Monitor ────────────────────────────────────────────────────────
+  monitor:
+    # Deno container that runs health checks every MONITOR_INTERVAL_MS and
+    # sends Brevo email alerts on any up→down / down→up transition.
+    # See deploy/monitor/monitor.ts for the full list of checks.
+    build:
+      context: ./deploy/monitor
+      dockerfile: Dockerfile
+    image: quiz4win-monitor:latest
+    container_name: quiz4win-monitor
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # Supabase
+      SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL:-}
+      # Redis
+      REDIS_URL: ${REDIS_URL:-}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # RabbitMQ
+      RABBITMQ_URL: ${RABBITMQ_URL:-}
+      # LiveKit
+      LIVEKIT_SERVER_URL: ${LIVEKIT_SERVER_URL:-}
+      # API in-network health URL
+      API_HEALTH_URL: ${API_HEALTH_URL:-http://api:8000/health}
+      # Brevo / alert settings
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@quiz4win.com}
+      MONITOR_RECIPIENT: ${MONITOR_RECIPIENT:-majid.sadeghi.alavijeh@gmail.com}
+      MONITOR_ENV: ${MONITOR_ENV:-production}
+      MONITOR_INTERVAL_MS: ${MONITOR_INTERVAL_MS:-60000}
+      MONITOR_TIMEOUT_MS: ${MONITOR_TIMEOUT_MS:-12000}
+      MONITOR_REALERT_MS: ${MONITOR_REALERT_MS:-1800000}
+      TZ: UTC
+    networks:
+      - quiz4win
+
 networks:
   quiz4win:
     driver: bridge
