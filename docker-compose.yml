@@ -147,6 +147,11 @@ services:
       SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY}}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Direct Postgres connection string (postgres.js / Drizzle in _shared/db).
+      # Public read endpoints query the DB directly via this URL to bypass the
+      # Supabase REST gateway (PostgREST) — see R-13. Format:
+      # postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       # User-facing app base URL (Expo Universal Link target for password-reset email).
       APP_URL: ${APP_URL:-https://app.quiz4win.com}
       # Email (Brevo transactional API).

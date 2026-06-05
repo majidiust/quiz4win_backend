@@ -21,7 +21,7 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { getPublicClient } from "../_shared/supabase.ts";
+import { queryClient as sql } from "../_shared/db/client.ts";
 
 const ALLOWED_LANGUAGES = new Set(["en", "ar", "fa", "tr"]);
 const ALLOWED_PERIODS = new Set(["weekly", "all_time"]);
@@ -68,22 +68,19 @@ Deno.serve(async (req: Request) => {
   const to = now;
   const from = period === "weekly" ? new Date(now.getTime() - WEEK_MS) : null;
 
-  const supabase = getPublicClient();
-
   try {
-    const { data, error } = await supabase.rpc("get_public_leaderboard", {
-      p_from: from ? from.toISOString() : null,
-      p_to: to.toISOString(),
-      p_limit: limit,
-      p_language: language,
-    });
+    // Call the SECURITY DEFINER RPC directly over the postgres connection.
+    // postgres.js deserialises the returned JSONB into a plain JS object.
+    const rows = await sql`
+      SELECT get_public_leaderboard(
+        ${from ? from.toISOString() : null}::timestamptz,
+        ${to.toISOString()}::timestamptz,
+        ${limit}::int,
+        ${language ?? null}::text
+      ) AS result
+    `;
 
-    if (error) {
-      console.error("[public-leaderboard] rpc failed:", error.message);
-      return errorResponse("failed_to_fetch_leaderboard", 500);
-    }
-
-    const payload = (data ?? {
+    const payload = (rows[0]?.result ?? {
       players: [],
       totals: { players_listed: 0, credits_distributed_in_window: 0 },
     }) as LeaderboardPayload;
@@ -101,7 +98,7 @@ Deno.serve(async (req: Request) => {
       },
     });
   } catch (err) {
-    console.error("[public-leaderboard] unhandled error:", err);
-    return errorResponse("internal_server_error", 500);
+    console.error("[public-leaderboard] query failed:", err);
+    return errorResponse("failed_to_fetch_leaderboard", 500);
   }
 });

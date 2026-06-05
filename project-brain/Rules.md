@@ -190,3 +190,40 @@ The `db-maintainer` container is the **sole, authoritative mechanism** for apply
 6. **Never skip the `db-maintainer` healthcheck** by adding `--no-deps` or removing the `depends_on` condition. That guard exists so app containers never start against a stale schema.
 
 **Action:** Any instruction, script, or changelog entry that tells an agent or developer to apply a migration manually (via `supabase db push`, `psql`, Supabase Studio SQL editor, etc.) is a rule violation. Correct it immediately and log a `[RULE]` entry in `Change_Log_AI.md`.
+
+---
+
+## R-13 — Public Read APIs Must Query PostgreSQL Directly — Never Via Supabase REST Gateway
+
+**Context:** The three public Edge Functions (`public-games`, `public-winners`, `public-featured-host`) were originally implemented with `getPublicClient()` (Supabase JS client → PostgREST). Under production load the managed Supabase PostgREST → Postgres path returned repeated connection-timeout errors, causing 500 responses with 30–50 s latency for unauthenticated clients.
+
+**Rule:** Any Edge Function that serves a public (unauthenticated) read endpoint **must** query PostgreSQL directly using the `queryClient` (postgres.js) exported from `supabase/functions/_shared/db/client.ts`. The Supabase REST gateway (`getPublicClient()`) **must not** be used for these endpoints.
+
+### Mandatory pattern
+
+```typescript
+import { queryClient as sql } from "../_shared/db/client.ts";
+
+// parameterised — never string-interpolate user input
+const rows = await sql`SELECT ... FROM games WHERE id = ${gameId} LIMIT 1`;
+```
+
+### Why
+
+- `getPublicClient()` routes through the managed Supabase PostgREST gateway over HTTPS. When that gateway is congested or the data-tier is slow, every call hangs until the 30–40 s Envoy timeout fires.
+- `queryClient` connects to Postgres directly over `SUPABASE_DB_URL` (a direct TCP connection), bypassing the gateway entirely and honouring the configured `connect_timeout` (10 s) and `idle_timeout` (20 s).
+- The `api` service in `docker-compose.yml` **must** have `SUPABASE_DB_URL` injected as an environment variable.
+
+### Forbidden patterns (public read endpoints)
+
+```typescript
+// ❌ do NOT use — routes through PostgREST
+const supabase = getPublicClient();
+const { data, error } = await supabase.from("games").select(...);
+```
+
+### Scope
+
+This rule applies **only** to public (no-JWT) read endpoints. Authenticated Edge Functions that already validate a JWT via `validateJWT` may continue to use `getAnonClient(req)` for writes / RLS-gated queries where the caller's identity context is required. Do not change the auth surface (R-11).
+
+**Action:** Any future public read endpoint added to the API **must** follow this pattern. A code-review that introduces `getPublicClient()` in a public route is an automatic revert target.

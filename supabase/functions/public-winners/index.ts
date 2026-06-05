@@ -24,7 +24,7 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { getPublicClient } from "../_shared/supabase.ts";
+import { queryClient as sql } from "../_shared/db/client.ts";
 
 const ALLOWED_LANGUAGES = new Set(["en", "ar", "fa", "tr"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,11 +44,6 @@ interface CompletedRun {
   language: string | null;
 }
 
-interface AggregateRow {
-  prize_pool: number | string | null;
-  total_winners: number | null;
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return handleCors(req);
 
@@ -63,54 +58,41 @@ Deno.serve(async (req: Request) => {
     return errorResponse("invalid_language", 400);
   }
 
-  const supabase = getPublicClient();
-
   // The same filter set is applied to every query so `totals` always describes
-  // the same population that `runs` is paged from.
+  // the same population that `runs` is paged from. Filters are composed as
+  // parameterised SQL fragments — no string interpolation of user input.
   try {
-    let listQuery = supabase
-      .from("games")
-      .select(
-        "id, show_id, title, category, mode, tags, prize_pool, " +
-          "total_participants, total_winners, ended_at, scheduled_at, language",
-      )
-      .eq("status", "completed")
-      .order("ended_at", { ascending: false, nullsFirst: false })
-      .limit(limit);
-
-    let aggQuery = supabase
-      .from("games")
-      .select("prize_pool, total_winners")
-      .eq("status", "completed");
-
-    let activeQuery = supabase
-      .from("games")
-      .select("id", { count: "exact", head: true })
-      .in("status", ["upcoming", "open", "live"]);
-
+    let completedWhere = sql`WHERE status = 'completed'`;
+    let activeWhere = sql`WHERE status IN ('upcoming', 'open', 'live')`;
     if (language) {
-      listQuery = listQuery.eq("language", language);
-      aggQuery = aggQuery.eq("language", language);
-      activeQuery = activeQuery.eq("language", language);
+      completedWhere = sql`${completedWhere} AND language = ${language}`;
+      activeWhere = sql`${activeWhere} AND language = ${language}`;
     }
     if (gameId) {
-      const col = UUID_RE.test(gameId) ? "id" : "show_id";
-      listQuery = listQuery.eq(col, gameId);
-      aggQuery = aggQuery.eq(col, gameId);
+      // game_id filters BOTH runs and totals (not the active-show count).
+      completedWhere = UUID_RE.test(gameId)
+        ? sql`${completedWhere} AND id = ${gameId}`
+        : sql`${completedWhere} AND show_id = ${gameId}`;
     }
 
-    const [listRes, aggRes, activeRes] = await Promise.all([listQuery, aggQuery, activeQuery]);
+    const [listRows, aggRows, activeRows] = await Promise.all([
+      sql`
+        SELECT id, show_id, title, category, mode, tags, prize_pool,
+               total_participants, total_winners, ended_at, scheduled_at, language
+        FROM games ${completedWhere}
+        ORDER BY ended_at DESC NULLS LAST
+        LIMIT ${limit}
+      `,
+      sql`
+        SELECT COALESCE(SUM(ROUND(prize_pool)), 0)::bigint AS credits_distributed,
+               COALESCE(SUM(total_winners), 0)::bigint    AS survivors_paid_total,
+               COUNT(*)::int                              AS runs_listed
+        FROM games ${completedWhere}
+      `,
+      sql`SELECT COUNT(*)::int AS active FROM games ${activeWhere}`,
+    ]);
 
-    if (listRes.error || aggRes.error || activeRes.error) {
-      console.error(
-        "[public-winners] query failed:",
-        listRes.error?.message ?? aggRes.error?.message ?? activeRes.error?.message,
-      );
-      return errorResponse("failed_to_fetch_winners", 500);
-    }
-
-    const rows = (listRes.data ?? []) as CompletedRun[];
-    const aggRows = (aggRes.data ?? []) as AggregateRow[];
+    const rows = listRows as unknown as CompletedRun[];
 
     const runs = rows.map((g) => {
       const survivors = g.total_winners ?? 0;
@@ -129,9 +111,9 @@ Deno.serve(async (req: Request) => {
       };
     });
 
-    const creditsDistributed = aggRows.reduce((s, r) => s + Math.round(Number(r.prize_pool ?? 0)), 0);
-    const survivorsPaidTotal = aggRows.reduce((s, r) => s + (r.total_winners ?? 0), 0);
-    const runsListed = aggRows.length;
+    const creditsDistributed = Number(aggRows[0]?.credits_distributed ?? 0);
+    const survivorsPaidTotal = Number(aggRows[0]?.survivors_paid_total ?? 0);
+    const runsListed = Number(aggRows[0]?.runs_listed ?? 0);
     const avgWeekly = runsListed > 0 ? Math.round(creditsDistributed / runsListed) : 0;
 
     return successResponse({
@@ -140,12 +122,12 @@ Deno.serve(async (req: Request) => {
         credits_distributed: creditsDistributed,
         runs_listed: runsListed,
         survivors_paid_total: survivorsPaidTotal,
-        active_shows: activeRes.count ?? 0,
+        active_shows: Number(activeRows[0]?.active ?? 0),
         avg_weekly_pool_credits: avgWeekly,
       },
     });
   } catch (err) {
-    console.error("[public-winners] unhandled error:", err);
-    return errorResponse("internal_server_error", 500);
+    console.error("[public-winners] query failed:", err);
+    return errorResponse("failed_to_fetch_winners", 500);
   }
 });

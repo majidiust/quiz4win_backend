@@ -19,27 +19,21 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { getPublicClient } from "../_shared/supabase.ts";
+import { queryClient as sql } from "../_shared/db/client.ts";
 
-interface FeaturedGameRow {
-  id: string;
+interface FeaturedHostRow {
   title: string;
   prize_pool: number | string | null;
   scheduled_at: string | null;
-  status: string;
-  host_id: string | null;
-  host_name: string | null;
-  host_avatar_url: string | null;
   host_title: string | null;
-  show_hosts: {
-    id: string;
-    name: string;
-    bio: string | null;
-    avatar_url: string | null;
-    shows_hosted: number | null;
-    avg_rating: number | string | null;
-    years_on_air: number | null;
-  } | null;
+  host_avatar_url: string | null;
+  h_id: string | null;
+  h_name: string | null;
+  h_bio: string | null;
+  h_avatar_url: string | null;
+  h_shows_hosted: number | null;
+  h_avg_rating: number | string | null;
+  h_years_on_air: number | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -49,52 +43,49 @@ Deno.serve(async (req: Request) => {
   const tail = url.pathname.replace(/^\/public-featured-host\/?/, "");
   if (req.method !== "GET" || tail.length > 0) return errorResponse("not_found", 404);
 
-  const supabase = getPublicClient();
-
   try {
-    const { data, error } = await supabase
-      .from("games")
-      .select(
-        "id, title, prize_pool, scheduled_at, status, " +
-          "host_id, host_name, host_avatar_url, host_title, " +
-          "show_hosts!host_id ( id, name, bio, avatar_url, shows_hosted, avg_rating, years_on_air )",
-      )
-      .eq("is_featured", true)
-      .in("status", ["upcoming", "open", "live"])
-      .order("scheduled_at", { ascending: true, nullsFirst: false })
-      .limit(1)
-      .maybeSingle();
+    const rows = await sql`
+      SELECT g.title, g.prize_pool, g.scheduled_at,
+             g.host_title, g.host_avatar_url,
+             h.id            AS h_id,
+             h.name          AS h_name,
+             h.bio           AS h_bio,
+             h.avatar_url    AS h_avatar_url,
+             h.shows_hosted  AS h_shows_hosted,
+             h.avg_rating    AS h_avg_rating,
+             h.years_on_air  AS h_years_on_air
+      FROM games g
+      LEFT JOIN show_hosts h ON h.id = g.host_id
+      WHERE g.is_featured = true
+        AND g.status IN ('upcoming', 'open', 'live')
+      ORDER BY g.scheduled_at ASC NULLS LAST
+      LIMIT 1
+    `;
 
-    if (error) {
-      console.error("[public-featured-host] query failed:", error.message);
-      return errorResponse("failed_to_fetch_featured_host", 500);
-    }
+    if (rows.length === 0) return successResponse({ host: null });
 
-    if (!data) return successResponse({ host: null });
-
-    const row = data as unknown as FeaturedGameRow;
-    const linked = row.show_hosts;
+    const row = rows[0] as unknown as FeaturedHostRow;
 
     // The card only makes sense when we have a presenter to spotlight. Games
     // with no host_id (only inline host_name/avatar/title) get hidden.
-    if (!linked) return successResponse({ host: null });
+    if (!row.h_id) return successResponse({ host: null });
 
     return successResponse({
       host: {
-        name: linked.name,
+        name: row.h_name,
         title: row.host_title ?? "Show Host",
-        avatar_url: linked.avatar_url ?? row.host_avatar_url ?? null,
-        bio: linked.bio ?? null,
-        years_on_air: linked.years_on_air ?? null,
-        shows_hosted: linked.shows_hosted ?? 0,
-        rating: linked.avg_rating != null ? Number(linked.avg_rating) : null,
+        avatar_url: row.h_avatar_url ?? row.host_avatar_url ?? null,
+        bio: row.h_bio ?? null,
+        years_on_air: row.h_years_on_air ?? null,
+        shows_hosted: row.h_shows_hosted ?? 0,
+        rating: row.h_avg_rating != null ? Number(row.h_avg_rating) : null,
         next_show_title: row.title,
         next_show_pool_credits: Math.round(Number(row.prize_pool ?? 0)),
         next_show_start_time: row.scheduled_at,
       },
     });
   } catch (err) {
-    console.error("[public-featured-host] unhandled error:", err);
-    return errorResponse("internal_server_error", 500);
+    console.error("[public-featured-host] query failed:", err);
+    return errorResponse("failed_to_fetch_featured_host", 500);
   }
 });
