@@ -53,6 +53,7 @@ Deno.serve(async (req: Request) => {
           feature_vouchers: true,
           supported_currencies: ["USD", "EUR", "GBP"],
           supported_locales: ["en", "ar", "fr"],
+          livekit_server_url: Deno.env.get("LIVEKIT_SERVER_URL") ?? null,
         });
       }
 
@@ -66,6 +67,11 @@ Deno.serve(async (req: Request) => {
           config[row.key] = row.value;
         }
       }
+
+      // Inject the LiveKit server URL from the environment — it is a public
+      // WebSocket endpoint the mobile client needs; not a secret (R-01).
+      const livekitUrl = Deno.env.get("LIVEKIT_SERVER_URL");
+      if (livekitUrl) config["livekit_server_url"] = livekitUrl;
 
       return successResponse({ config });
     }
