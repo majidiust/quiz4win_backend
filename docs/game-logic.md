@@ -350,8 +350,10 @@ games.llm_template_id            (per-game override, highest priority)
 
 Templates are edited in the admin panel (**LLM Templates**); no API key is ever
 stored (R-01). The editable prompt is only the **guidance** half — the mandatory
-JSON-output schema is always appended by the orchestrator, so an edited prompt
-can never break response parsing or the multi-language contract.
+JSON-output schema and the **instruction to honour game parameters** (category,
+difficulty, languages) are always appended by the orchestrator, so an edited
+prompt can never break the subject-matching, the response parsing, or the
+multi-language contract.
 
 **Per-game no-repeat dedup (Redis-backed):** within a single game a question is
 never repeated. Asked questions are tracked in two Redis sets, replacing the old
