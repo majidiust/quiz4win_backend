@@ -29,23 +29,14 @@ if (!connectionString) {
 }
 
 /**
- * A postgres.js connection pool shared across the combined `_server.ts`
- * process (all functions run in a single long-lived Deno runtime, not the
- * isolated per-invocation model of hosted Edge Functions). Settings:
- *  - max 5: a small pool that serves concurrent public reads without
- *    exhausting the limited direct-connection slots on the Postgres tier.
- *  - prepare = false: required for Supavisor / pgBouncer transaction mode.
- *  - connect_timeout 10s: fail fast instead of hanging the full request
- *    budget when the database is unreachable.
- *  - idle_timeout 20s: release idle connections promptly.
- *  - ssl "require": Supabase rejects non-TLS connections.
+ * A postgres.js connection pool optimised for short-lived Edge Function
+ * invocations: max 1 connection, no keep-alive, prepare = false
+ * (required for Supavisor / pgBouncer in transaction mode).
  */
 const queryClient = postgres(connectionString, {
-  max: 5,
+  max: 1,
   prepare: false,
   ssl: "require",
-  connect_timeout: 10,
-  idle_timeout: 20,
 });
 
 /**

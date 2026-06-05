@@ -3,9 +3,8 @@
 FROM denoland/deno:alpine AS runner
 WORKDIR /app
 
-# Copy the functions and drizzle schema.
-COPY functions /app/functions
-COPY drizzle /app/drizzle
+# Copy the entire functions tree (handlers + _shared + deno.json).
+COPY . /app/functions
 
 ENV PORT=8000
 EXPOSE 8000

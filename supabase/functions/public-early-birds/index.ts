@@ -27,7 +27,7 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { queryClient as sql } from "../_shared/db/client.ts";
+import { getPublicClient } from "../_shared/supabase.ts";
 import { sendEmail, earlyBirdWelcomeTemplate } from "../_shared/email.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -93,34 +93,41 @@ Deno.serve(async (req: Request) => {
 
   // ── Rate limiting ──────────────────────────────────────────────────────────
   const clientIp = getClientIp(req) ?? "unknown";
+  const supabase = getPublicClient();
 
-  try {
-    const rlRows = await sql`SELECT check_early_bird_rate_limit(${clientIp}::text) AS allowed`;
-    if (rlRows[0]?.allowed === false) {
-      return errorResponse("rate_limited", 429, { "Retry-After": "600" });
-    }
-  } catch (rlErr) {
-    console.error("[public-early-birds] rate-limit RPC error:", (rlErr as Error).message);
+  const { data: allowed, error: rlErr } = await supabase.rpc(
+    "check_early_bird_rate_limit",
+    { p_ip: clientIp },
+  );
+  if (rlErr) {
+    console.error("[public-early-birds] rate-limit RPC error:", rlErr.message);
     // Fail open — don't block legitimate users on infra error.
+  }
+  if (allowed === false) {
+    return errorResponse("rate_limited", 429, { "Retry-After": "600" });
   }
 
   // ── Insert ─────────────────────────────────────────────────────────────────
-  // Row id generated client-side; no RETURNING needed.
-  // Unique violations (platform + lower(email)) are detected via Postgres
-  // error code 23505 — no RLS SELECT required.
+  // We generate the row id client-side so we don't need RETURNING — anon
+  // has INSERT but no SELECT policy on this table (PII), and PostgREST's
+  // `.select(...).single()` shape would otherwise force a RETURNING clause
+  // that gets denied by RLS.
   const earlyBirdId = crypto.randomUUID();
-  try {
-    await sql`
-      INSERT INTO early_birds (id, platform, name, email, ip_address, country, country_code)
-      VALUES (
-        ${earlyBirdId}, ${platform}, ${name}, ${email},
-        ${clientIp}, ${countryName}, ${countryCode}
-      )
-    `;
-  } catch (err) {
-    const pg = err as { code?: string; message?: string };
-    console.error("[public-early-birds] insert error:", pg.message);
-    if (pg.code === "23505") {
+  const { error } = await supabase
+    .from("early_birds")
+    .insert({
+      id: earlyBirdId,
+      platform,
+      name,
+      email,
+      ip_address: clientIp,
+      country: countryName,
+      country_code: countryCode,
+    });
+
+  if (error) {
+    console.error("[public-early-birds] insert error:", error.message);
+    if (error.message?.toLowerCase().includes("unique") || error.message?.toLowerCase().includes("duplicate")) {
       return errorResponse("already_signed_up", 409);
     }
     return errorResponse("failed_to_sign_up", 500);

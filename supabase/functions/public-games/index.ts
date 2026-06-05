@@ -28,26 +28,20 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { queryClient as sql } from "../_shared/db/client.ts";
+import { getPublicClient } from "../_shared/supabase.ts";
 
-// Same projection as customer `/games` minus `joined_by_me`. Keep this in
-// lock-step with `GAME_FIELDS` in supabase/functions/games/index.ts. NUMERIC
-// money columns are cast to float8 so the JSON shape matches the previous
-// PostgREST output (numbers, not strings); column aliases reproduce the
-// PostgREST renames (participant_count, max_participants, start_time, end_time).
-const GAME_COLS = sql`
-  id, title, subtitle, description, mode, status,
-  entry_fee::float8 AS entry_fee, prize_pool::float8 AS prize_pool, prize_pool_currency,
-  category, difficulty, language,
-  questions_count, time_per_question, allowed_wrong_answers,
-  total_participants AS participant_count, max_players AS max_participants,
-  scheduled_at AS start_time, ended_at AS end_time,
-  is_featured,
-  icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors,
-  sponsor, tags, host_name, host_avatar_url, host_title, rules
-`;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Same shape as customer `/games` minus `joined_by_me`. Keep this in lock-step
+// with `GAME_FIELDS` in supabase/functions/games/index.ts.
+const GAME_FIELDS =
+  "id, title, subtitle, description, mode, status, " +
+  "entry_fee, prize_pool, prize_pool_currency, " +
+  "category, difficulty, language, " +
+  "questions_count, time_per_question, allowed_wrong_answers, " +
+  "participant_count:total_participants, max_participants:max_players, " +
+  "start_time:scheduled_at, end_time:ended_at, " +
+  "is_featured, " +
+  "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
+  "sponsor, tags, host_name, host_avatar_url, host_title, rules";
 
 const ALLOWED_STATUSES = new Set(["upcoming", "open", "live", "closed", "completed", "cancelled"]);
 const ALLOWED_DIFFICULTY = new Set(["Easy", "Medium", "Hard"]);
@@ -71,19 +65,20 @@ Deno.serve(async (req: Request) => {
   // Only `/public-games/:id/result` is a valid sub-path. Anything else 404s.
   if (extra && extra !== "result") return errorResponse("not_found", 404);
 
+  const supabase = getPublicClient();
+
   try {
     // GET /public-games/:id/result — aggregate result + prize distribution.
     // Returns the JSONB persisted by distribute_prizes() so the response is
     // stable across calls (no recomputation) and matches the GAME_RESULT
     // LiveKit broadcast emitted by the orchestrator.
     if (gameId && extra === "result") {
-      if (!UUID_RE.test(gameId)) return errorResponse("game_not_found", 404);
-      const rows = await sql`
-        SELECT id, status, result_summary, prizes_distributed_at, ended_at
-        FROM games WHERE id = ${gameId} LIMIT 1
-      `;
-      if (rows.length === 0) return errorResponse("game_not_found", 404);
-      const data = rows[0];
+      const { data, error } = await supabase
+        .from("games")
+        .select("id, status, result_summary, prizes_distributed_at, ended_at")
+        .eq("id", gameId)
+        .single();
+      if (error || !data) return errorResponse("game_not_found", 404);
       if (!data.result_summary) {
         // Distribution still pending — surface a structured 409 so the client
         // can poll/await instead of treating it as a hard failure.
@@ -103,10 +98,13 @@ Deno.serve(async (req: Request) => {
 
     // GET /public-games/:id
     if (gameId) {
-      if (!UUID_RE.test(gameId)) return errorResponse("game_not_found", 404);
-      const rows = await sql`SELECT ${GAME_COLS} FROM games WHERE id = ${gameId} LIMIT 1`;
-      if (rows.length === 0) return errorResponse("game_not_found", 404);
-      return successResponse({ game: rows[0] });
+      const { data, error } = await supabase
+        .from("games")
+        .select(GAME_FIELDS)
+        .eq("id", gameId)
+        .single();
+      if (error || !data) return errorResponse("game_not_found", 404);
+      return successResponse({ game: data });
     }
 
     // GET /public-games — list with filters
@@ -138,55 +136,52 @@ Deno.serve(async (req: Request) => {
       if (!difficulty) return errorResponse("invalid_difficulty", 400);
     }
 
-    // Build the WHERE clause incrementally as a composed SQL fragment. Every
-    // user-supplied value is bound as a parameter ($n) — never string-interpolated.
-    let where = sql`WHERE true`;
-    if (mode) where = sql`${where} AND mode = ${mode}`;
-    if (featured === "true") where = sql`${where} AND is_featured = true`;
-    if (featured === "false") where = sql`${where} AND is_featured = false`;
-    if (category) where = sql`${where} AND category = ${category}`;
-    if (difficulty) where = sql`${where} AND difficulty = ${difficulty}`;
-    if (language) where = sql`${where} AND language = ${language}`;
+    let query = supabase
+      .from("games")
+      .select(GAME_FIELDS, { count: "exact" })
+      .range(offset, offset + limit - 1);
+
+    if (mode) query = query.eq("mode", mode);
+    if (featured === "true") query = query.eq("is_featured", true);
+    if (featured === "false") query = query.eq("is_featured", false);
+    if (category) query = query.eq("category", category);
+    if (difficulty) query = query.eq("difficulty", difficulty);
+    if (language) query = query.eq("language", language);
     if (search) {
-      // Strip ILIKE wildcards so callers can't run arbitrary patterns; we wrap
-      // the cleaned value in % ourselves and bind it as a parameter.
+      // ILIKE escaping — strip wildcards so callers can't run arbitrary
+      // patterns; we wrap the cleaned value in % ourselves.
       const safe = search.replace(/[%_]/g, "").trim();
-      if (safe) {
-        const pat = `%${safe}%`;
-        where = sql`${where} AND (title ILIKE ${pat} OR subtitle ILIKE ${pat})`;
-      }
+      if (safe) query = query.or(`title.ilike.%${safe}%,subtitle.ilike.%${safe}%`);
     }
-    if (statuses.length === 1) where = sql`${where} AND status = ${statuses[0]}`;
-    else where = sql`${where} AND status = ANY(${statuses})`;
+    if (statuses.length === 1) query = query.eq("status", statuses[0]);
+    else query = query.in("status", statuses);
 
-    let orderBy = sql`ORDER BY scheduled_at ASC`;
     switch (sort) {
-      case "start_desc":     orderBy = sql`ORDER BY scheduled_at DESC`; break;
-      case "prize_desc":     orderBy = sql`ORDER BY prize_pool DESC`; break;
-      case "prize_asc":      orderBy = sql`ORDER BY prize_pool ASC`; break;
-      case "featured_first": orderBy = sql`ORDER BY is_featured DESC, scheduled_at ASC`; break;
+      case "start_desc":     query = query.order("scheduled_at", { ascending: false }); break;
+      case "prize_desc":     query = query.order("prize_pool", { ascending: false }); break;
+      case "prize_asc":      query = query.order("prize_pool", { ascending: true }); break;
+      case "featured_first": query = query.order("is_featured", { ascending: false }).order("scheduled_at", { ascending: true }); break;
       case "start_asc":
-      default:               orderBy = sql`ORDER BY scheduled_at ASC`; break;
+      default:               query = query.order("scheduled_at", { ascending: true }); break;
     }
 
-    // Data page + exact total in parallel; both reuse the same WHERE fragment.
-    const [rows, countRows] = await Promise.all([
-      sql`SELECT ${GAME_COLS} FROM games ${where} ${orderBy} LIMIT ${limit} OFFSET ${offset}`,
-      sql`SELECT COUNT(*)::int AS total FROM games ${where}`,
-    ]);
-    const total = (countRows[0]?.total as number) ?? 0;
+    const { data, error, count } = await query;
+    if (error) {
+      console.error(`[public-games] list query failed: ${error.message}`, error);
+      return errorResponse("failed_to_fetch_games", 500);
+    }
 
     return successResponse({
-      games: rows,
+      games: data ?? [],
       pagination: {
         page,
         limit,
-        total,
-        total_pages: Math.ceil(total / limit),
+        total: count ?? 0,
+        total_pages: Math.ceil((count ?? 0) / limit),
       },
     });
   } catch (err) {
-    console.error("[public-games] query failed:", err);
-    return errorResponse("failed_to_fetch_games", 500);
+    console.error("[public-games] unhandled error:", err);
+    return errorResponse("internal_server_error", 500);
   }
 });

@@ -18,7 +18,7 @@
 
 import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse } from "../_shared/errors.ts";
-import { queryClient as sql } from "../_shared/db/client.ts";
+import { getPublicClient } from "../_shared/supabase.ts";
 import { sendEmail, hostApplicationReceivedTemplate } from "../_shared/email.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -81,36 +81,48 @@ Deno.serve(async (req: Request) => {
 
   // ── Rate limiting ──────────────────────────────────────────────────────────
   const clientIp = getClientIp(req) ?? "unknown";
+  const supabase = getPublicClient();
 
-  try {
-    const rlRows = await sql`SELECT check_host_application_rate_limit(${clientIp}::text) AS allowed`;
-    if (rlRows[0]?.allowed === false) {
-      return errorResponse("rate_limited", 429, { "Retry-After": "600" });
-    }
-  } catch (rlErr) {
-    console.error("[public-host-applications] rate-limit RPC error:", (rlErr as Error).message);
+  const { data: allowed, error: rlErr } = await supabase.rpc(
+    "check_host_application_rate_limit",
+    { p_ip: clientIp },
+  );
+  if (rlErr) {
+    console.error("[public-host-applications] rate-limit RPC error:", rlErr.message);
     // Fail open — don't block legitimate requests on infra error.
   }
+  if (allowed === false) {
+    return errorResponse("rate_limited", 429, { "Retry-After": "600" });
+  }
+
+  // ── Duplicate pending check ────────────────────────────────────────────────
+  // We use the rate-limit RPC for IP; here we guard against re-submitting the
+  // same email while a pending application already exists.
+  // NOTE: We can't SELECT from host_applications as anon (no RLS policy),
+  // so we rely on the DB unique partial index instead — duplicate insert will
+  // fail with a unique violation which we translate to a friendly message.
 
   // ── Insert ─────────────────────────────────────────────────────────────────
-  // Row id generated client-side; no RETURNING needed.
-  // Duplicate pending applications (unique partial index on lower(email) WHERE
-  // status = 'pending') are detected via Postgres error code 23505 — no RLS
-  // SELECT required.
+  // We generate the row id client-side so we don't need RETURNING — anon
+  // has INSERT but no SELECT policy on this table (PII), and PostgREST's
+  // `.select(...).single()` shape would otherwise force a RETURNING clause
+  // that gets denied by RLS.
   const applicationId = crypto.randomUUID();
-  try {
-    await sql`
-      INSERT INTO host_applications (id, name, email, country, instagram, followers, ip_address)
-      VALUES (
-        ${applicationId}, ${name}, ${email},
-        ${country || null}, ${instagram || null}, ${followers},
-        ${clientIp}
-      )
-    `;
-  } catch (err) {
-    const pg = err as { code?: string; message?: string };
-    console.error("[public-host-applications] insert error:", pg.message);
-    if (pg.code === "23505") {
+  const { error } = await supabase
+    .from("host_applications")
+    .insert({
+      id: applicationId,
+      name,
+      email,
+      country: country || null,
+      instagram: instagram || null,
+      followers,
+      ip_address: clientIp,
+    });
+
+  if (error) {
+    console.error("[public-host-applications] insert error:", error.message);
+    if (error.message?.toLowerCase().includes("unique")) {
       return errorResponse("application_already_pending", 409);
     }
     return errorResponse("failed_to_submit_application", 500);
