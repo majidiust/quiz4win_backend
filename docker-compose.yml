@@ -125,8 +125,8 @@ services:
 
   api:
     build:
-      context: ./supabase/functions
-      dockerfile: Dockerfile
+      context: ./supabase
+      dockerfile: functions/Dockerfile
     image: quiz4win-api:latest
     container_name: quiz4win-api
     # on-failure:5 — stops retrying after 5 consecutive crashes so a boot-loop
