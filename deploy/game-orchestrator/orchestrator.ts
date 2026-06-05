@@ -565,13 +565,12 @@ interface GenQuestion {
 }
 
 /**
- * Strips the auto-generated "_MMDD_HHMM" schedule slug that
- * generate_game_from_template appends to games.title (e.g.
- * "Science Quiz_0604_1400" → "Science Quiz"), so the LLM receives the real
- * subject instead of the timestamped game instance name.
+ * Returns the game title as-is (template name is used verbatim since
+ * migration 20260607110000_fix_game_title_no_suffix — no suffix is appended).
+ * Falls back to "general knowledge" when title is null/empty.
  */
 function cleanTopic(title: string | null | undefined): string {
-  return (title ?? "").replace(/_\d{4}_\d{4}$/, "").trim() || "general knowledge";
+  return (title ?? "").trim() || "general knowledge";
 }
 
 /**
