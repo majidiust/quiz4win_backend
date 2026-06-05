@@ -771,12 +771,14 @@ Non-negotiable output contract (always applies):
    - "difficulty": the hardness/level of the question (MUST match exactly).
    - "description": optional extra guidance/focus (MUST be respected).
    - "baseLanguage": the language for "canonicalText" and its "options".
-   - "targetLanguages": the set of languages for "localizedPayloads".
+   - "targetLanguages": the COMPLETE set of languages for "localizedPayloads".
 2. Generate ONE question with FOUR options (A, B, C, D).
-3. "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages", using that exact code verbatim. Option IDs MUST be identical across all languages.
-4. The question MUST be original and DIFFERENT from every entry in the "avoid" list.
-5. Do NOT use the game's name/title as the subject.
-6. Output ONLY valid JSON, no markdown.
+3. "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages".
+4. CRITICAL: Every entry in "localizedPayloads" MUST be fully and natively written in the specified language (both the "questionText" and all four "options"). Do NOT use English placeholders for other languages.
+5. Option IDs (A, B, C, D) MUST be identical across all languages and match the correct answer.
+6. The question MUST be original and DIFFERENT from every entry in the "avoid" list.
+7. Do NOT use the game's name/title as the subject.
+8. Output ONLY valid JSON, no markdown.
 
 Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionId":"A",
 "localizedPayloads":[{"language":"<one of targetLanguages>","questionText":"","options":[{"id":"A","text":""},...]},...]
