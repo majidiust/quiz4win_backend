@@ -18,7 +18,7 @@ import { corsHeaders, handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient, getPublicClient } from "../_shared/supabase.ts";
-import { sendEmail, welcomeTemplate, recoveryTemplate } from "../_shared/email.ts";
+import { sendEmail, confirmEmailTemplate, recoveryTemplate } from "../_shared/email.ts";
 
 // Common frontend naming aliases → canonical backend paths. Lets the iOS
 // and admin apps call either `/auth/login` or `/auth/signin` etc. without
@@ -44,11 +44,10 @@ Deno.serve(async (req: Request) => {
         return errorResponse("Missing required fields: name, email, password", 400);
       }
 
-      const supabase = getPublicClient();
+      const admin = getAdminClient();
 
       // Validate referral code if provided (no `is_active` column in schema).
       if (referral_code) {
-        const admin = getAdminClient();
         const { data: rc } = await admin
           .from("referral_codes")
           .select("code, expires_at, max_uses, use_count")
@@ -63,26 +62,35 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      const { data, error } = await supabase.auth.signUp({
+      // Create the user and generate the email-confirmation link in one admin
+      // call. Unlike supabase.auth.signUp(), generateLink() does NOT trigger
+      // Supabase's default (unbranded) confirmation email, so we send our own
+      // branded one via Brevo with a redirect we control (R-01: no secrets).
+      const redirectTo = (Deno.env.get("EMAIL_CONFIRM_REDIRECT_URL") ??
+        ((Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "") + "/auth/callback"));
+
+      const { data, error } = await admin.auth.admin.generateLink({
+        type: "signup",
         email,
         password,
-        options: { data: { full_name: name, referral_code: referral_code ?? null } },
+        options: { data: { full_name: name, referral_code: referral_code ?? null }, redirectTo },
       });
       if (error) {
         console.warn(`[auth] signup failed for ${email}: ${error.message}`);
-        if (error.message.toLowerCase().includes("already registered")) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("already registered") || msg.includes("already been registered")) {
           return errorResponse("email_taken", 409);
         }
-        if (error.message.toLowerCase().includes("password")) {
+        if (msg.includes("password")) {
           return errorResponse("weak_password", 400);
         }
         return errorResponse(error.message, 400);
       }
-      // Create the profiles row (auth.signUp() only writes to auth.users). Use the
-      // admin client so we bypass RLS on first insert, then continue regardless of
+
+      // Create the profiles row (auth only writes to auth.users). Use the admin
+      // client so we bypass RLS on first insert, then continue regardless of
       // duplicate-key races (e.g. retry after a transient error).
       if (data.user) {
-        const admin = getAdminClient();
         const { error: profileErr } = await admin.from("profiles").insert({
           id: data.user.id,
           email: data.user.email,
@@ -92,15 +100,22 @@ Deno.serve(async (req: Request) => {
           console.warn(`[auth] profile insert failed for ${email}: ${profileErr.message}`);
         }
       }
-      // Fire welcome email — non-blocking so a Brevo hiccup never fails the signup.
-      if (data.user?.email) {
-        const tpl = welcomeTemplate({ name });
+
+      // Send the branded confirmation email — non-blocking so a Brevo hiccup
+      // never fails the signup. Includes the magic link plus the 6-digit OTP so
+      // the user can still confirm if a mail scanner pre-consumes the link.
+      const actionUrl = (data.properties as { action_link?: string } | null)?.action_link;
+      const otp = (data.properties as { email_otp?: string } | null)?.email_otp;
+      if (data.user?.email && actionUrl) {
+        const tpl = confirmEmailTemplate({ name, actionUrl, otp });
         sendEmail({ to: { email: data.user.email, name }, ...tpl }).catch((err) =>
-          console.warn("[auth] welcome email failed:", err)
+          console.warn("[auth] confirmation email failed:", err)
         );
+      } else {
+        console.warn(`[auth] signup: no action_link generated for ${email}`);
       }
 
-      return successResponse({ user: data.user, session: data.session }, 201);
+      return successResponse({ user: data.user, requires_confirmation: true }, 201);
     }
 
     // ── POST /auth/signin ──────────────────────────────────────────────────

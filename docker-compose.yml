@@ -149,6 +149,11 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       # User-facing app base URL (Expo Universal Link target for password-reset email).
       APP_URL: ${APP_URL:-https://app.quiz4win.com}
+      # Where Supabase redirects after the signup email-confirmation link is
+      # opened. Must be allow-listed in Supabase → Auth → URL Configuration.
+      # Defaults to ${APP_URL}/auth/callback when unset (same /auth/* Universal
+      # Link path the admin uses for all non-recovery generateLink flows).
+      EMAIL_CONFIRM_REDIRECT_URL: ${EMAIL_CONFIRM_REDIRECT_URL:-}
       # Email (Brevo transactional API).
       BREVO_API_KEY: ${BREVO_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-noreply@quiz4win.com}
