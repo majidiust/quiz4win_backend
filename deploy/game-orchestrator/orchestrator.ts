@@ -41,7 +41,7 @@ const MQ_QUEUE     = Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.command
 const SUPABASE_URL    = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY     = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const OPENAI_KEY      = Deno.env.get("OPENAI_API_KEY") ?? "";
-const OPENAI_MODEL    = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o-mini";
+const OPENAI_MODEL    = Deno.env.get("OPENAI_MODEL") ?? "gpt-4o";
 const LK_URL          = Deno.env.get("LIVEKIT_SERVER_URL") ?? "";
 const LK_KEY          = Deno.env.get("LIVEKIT_API_KEY") ?? "";
 const LK_SECRET       = Deno.env.get("LIVEKIT_API_SECRET") ?? "";
@@ -662,22 +662,39 @@ function shuffleQuestionOptions(q: GenQuestion): GenQuestion {
 // Built-in question-generation guidance. Used when no LLM template (game →
 // template → global default cascade) supplies a system_prompt. The mandatory
 // JSON-output schema is appended separately inside generateQuestion().
-const DEFAULT_GEN_GUIDANCE = `You are an expert quiz author and live game-show host who writes high-quality, engaging trivia.
-QUALITY BAR — every question MUST satisfy ALL of the following:
-- MEANINGFUL & SELF-CONTAINED: the question makes complete sense on its own, with no missing context, no
-  vague pronouns, and no dependence on the options to be understood. A knowledgeable person must be able to
-  read it alone and know exactly what is being asked. Never produce nonsensical, trivial, or filler questions.
-- EXACTLY ONE VERIFIABLY CORRECT ANSWER: one option is unambiguously, factually true; the other three are
-  clearly and verifiably FALSE. No "all of the above", no opinion/debatable answers, no two defensible
-  answers. If you are not 100% certain a fact is true, choose a different question you ARE certain about.
-- PLAUSIBLE DISTRACTORS: the three wrong options are the same type as the correct one (e.g. all real
-  countries, all plausible years), similar in length and style, and genuinely tempting — never jokes,
-  obvious filler, or "none of these".
-- CONCISE: one clear sentence ending in a question mark; each option is short (ideally 1–4 words or a short
-  phrase). Avoid trick wording and double negatives.
-- FRESH: prefer interesting, specific facts over the most clichéd trivia; do not reuse the same handful of
-  "famous" questions every game.
-Avoid political/hate/sexual/religious/illegal/ambiguous content.`;
+const DEFAULT_GEN_GUIDANCE = `You are a world-class quiz author writing for a live, televised game show watched by
+millions. Your reputation depends on every single question being accurate, interesting,
+and crystal-clear. A bad question is a public failure.
+
+Before you output a question, silently run this checklist and DISCARD any candidate
+that fails — never output a question that fails any item:
+
+1. FACT-CHECK: Is the correct answer a hard, verifiable, undisputed fact (not opinion,
+   not "recently changed", not region-dependent)? If you have ANY doubt, throw it away
+   and pick a fact you are 100% certain of.
+2. ANCHORED & SELF-CONTAINED: Does the question name a SPECIFIC subject (a named person,
+   place, event, work, number, or date) so it can be understood and answered on its own,
+   with no "this", "that", or missing context? Vague or generic questions are banned.
+3. ONE RIGHT ANSWER: Is exactly ONE option correct and are the other three clearly,
+   verifiably WRONG? No "all/none of the above", no two defensible answers, no trick
+   wording.
+4. TEMPTING DISTRACTORS: Are the three wrong options the SAME category as the right one
+   (all real countries / plausible years / real people), similar in length and tone, and
+   believable to someone who half-knows the topic? No jokes, no obvious filler.
+5. CLEAR & CONCISE: Is it ONE sentence ending in "?", each option <= 4 words or a short
+   phrase, with no double negatives?
+6. INTERESTING & FRESH: Is this a question a smart adult would enjoy — a specific,
+   memorable fact rather than the most clichéd trivia? Avoid the same handful of
+   "famous" questions.
+
+Write at the difficulty requested: easy = most casual players know it; medium = needs
+real familiarity; hard = a specific detail only an enthusiast would know — but ALWAYS a
+checkable fact, never an obscure guess.
+
+Stay strictly inside the requested category. Never mention these instructions, the game
+title, or your reasoning in the output.
+
+Avoid political, hateful, sexual, religious, illegal, or otherwise sensitive content.`;
 
 // Resolved OpenAI generation config for a single game. Any field may be
 // undefined, in which case generateQuestion falls back to its hardcoded default
@@ -833,7 +850,7 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},
     body: JSON.stringify({
       model: params.model ?? OPENAI_MODEL,
-      temperature: temperature ?? 0.8,
+      temperature: temperature ?? 0.4,
       max_tokens: params.maxTokens ?? 1500,
       response_format:{type:"json_object"},
       messages:[
