@@ -349,11 +349,18 @@ games.llm_template_id            (per-game override, highest priority)
 ```
 
 Templates are edited in the admin panel (**LLM Templates**); no API key is ever
-stored (R-01). The editable prompt is only the **guidance** half — the mandatory
-JSON-output schema and the **instruction to honour game parameters** (category,
-difficulty, languages) are always appended by the orchestrator, so an edited
+stored (R-01). The editable prompt is only the **guidance** half — a
+non-negotiable contract is always appended by the orchestrator, so an edited
 prompt can never break the subject-matching, the response parsing, or the
-multi-language contract.
+multi-language contract. That contract enforces: a **quality bar** (meaningful,
+self-contained questions with exactly one verifiable answer and plausible
+distractors), strict **category** compliance, precise **difficulty** calibration
+(easy = common knowledge, medium = real familiarity, hard = expert detail), a
+strong **no-repeat** rule (a genuinely different fact from every entry in the
+avoid-list, not a reworded variant), and **native-quality translations** of both
+the question and all options for every code in `targetLanguages` (no machine
+word-for-word output, no English placeholders, option IDs identical across
+languages).
 
 **Per-game no-repeat dedup (Redis-backed):** within a single game a question is
 never repeated. Asked questions are tracked in two Redis sets, replacing the old

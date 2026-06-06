@@ -662,10 +662,22 @@ function shuffleQuestionOptions(q: GenQuestion): GenQuestion {
 // Built-in question-generation guidance. Used when no LLM template (game →
 // template → global default cascade) supplies a system_prompt. The mandatory
 // JSON-output schema is appended separately inside generateQuestion().
-const DEFAULT_GEN_GUIDANCE = `You are a multilingual quiz question generator acting as a live game-show host.
-FACTUAL ACCURACY IS MANDATORY. The question must have EXACTLY ONE unambiguously correct answer that is
-verifiably true; the other three options must be clearly and verifiably WRONG. If unsure, pick a different
-question you ARE certain about. Avoid political/hate/sexual/religious/illegal/ambiguous content.`;
+const DEFAULT_GEN_GUIDANCE = `You are an expert quiz author and live game-show host who writes high-quality, engaging trivia.
+QUALITY BAR — every question MUST satisfy ALL of the following:
+- MEANINGFUL & SELF-CONTAINED: the question makes complete sense on its own, with no missing context, no
+  vague pronouns, and no dependence on the options to be understood. A knowledgeable person must be able to
+  read it alone and know exactly what is being asked. Never produce nonsensical, trivial, or filler questions.
+- EXACTLY ONE VERIFIABLY CORRECT ANSWER: one option is unambiguously, factually true; the other three are
+  clearly and verifiably FALSE. No "all of the above", no opinion/debatable answers, no two defensible
+  answers. If you are not 100% certain a fact is true, choose a different question you ARE certain about.
+- PLAUSIBLE DISTRACTORS: the three wrong options are the same type as the correct one (e.g. all real
+  countries, all plausible years), similar in length and style, and genuinely tempting — never jokes,
+  obvious filler, or "none of these".
+- CONCISE: one clear sentence ending in a question mark; each option is short (ideally 1–4 words or a short
+  phrase). Avoid trick wording and double negatives.
+- FRESH: prefer interesting, specific facts over the most clichéd trivia; do not reuse the same handful of
+  "famous" questions every game.
+Avoid political/hate/sexual/religious/illegal/ambiguous content.`;
 
 // Resolved OpenAI generation config for a single game. Any field may be
 // undefined, in which case generateQuestion falls back to its hardcoded default
@@ -766,19 +778,33 @@ async function generateQuestion(params: {
   const sys = `${guidance}
 
 Non-negotiable output contract (always applies):
-1. You MUST strictly honour the generation parameters provided in the JSON user message:
-   - "category": the subject area (sector) the question MUST belong to.
-   - "difficulty": the hardness/level of the question (MUST match exactly).
-   - "description": optional extra guidance/focus (MUST be respected).
+1. HONOUR EVERY PARAMETER in the JSON user message — these are requirements, not suggestions:
+   - "category": the EXACT subject area (sector) the question MUST belong to. Stay strictly inside it; do
+     NOT drift into adjacent topics.
+   - "difficulty": calibrate the hardness PRECISELY to the requested level —
+       * "easy"   = common knowledge most casual players already know.
+       * "medium" = requires real familiarity with the topic; not guessable by everyone.
+       * "hard"   = specific, expert-level detail only enthusiasts would know.
+     Do NOT make an "easy" question hard, or a "hard" question trivial.
+   - "description": optional extra focus/angle within the category — when present it MUST be respected;
+     when empty rely SOLELY on "category". It is background guidance, never a title to quote back.
    - "baseLanguage": the language for "canonicalText" and its "options".
    - "targetLanguages": the COMPLETE set of languages for "localizedPayloads".
-2. Generate ONE question with FOUR options (A, B, C, D).
-3. "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages".
-4. CRITICAL: Every entry in "localizedPayloads" MUST be fully and natively written in the specified language (both the "questionText" and all four "options"). Do NOT use English placeholders for other languages.
-5. Option IDs (A, B, C, D) MUST be identical across all languages and match the correct answer.
-6. The question MUST be original and DIFFERENT from every entry in the "avoid" list.
-7. Do NOT use the game's name/title as the subject.
-8. Output ONLY valid JSON, no markdown.
+2. NO REPEATS: the question MUST be about a DIFFERENT fact/topic from EVERY entry in the "avoid" list — a
+   genuinely new question, NOT a reworded, re-scoped, or same-answer variant of one already asked.
+3. Generate ONE question with EXACTLY FOUR options (ids "A","B","C","D"); set "correctOptionId" to the
+   single true option.
+4. TRANSLATION QUALITY — "localizedPayloads" MUST contain one entry for EACH code in "targetLanguages"
+   (using that exact code), and each entry MUST read as written by a NATIVE speaker, NOT a literal/machine
+   word-for-word rendering:
+   - Translate BOTH "questionText" AND all four "options" fully into that language.
+   - Preserve the exact meaning so the SAME option stays the correct answer in every language.
+   - Use natural phrasing, correct grammar, and the language's own script/direction (e.g. Arabic, Persian).
+   - Keep proper nouns/brands in their conventional local form; transliterate names where that is the norm.
+   - NEVER leave "baseLanguage"/English text inside another language's payload as a placeholder.
+   - Option IDs ("A","B","C","D") are IDENTICAL across all languages and map to the same answer.
+5. Do NOT use the game's name/title as the subject.
+6. Output ONLY valid JSON, no markdown, no commentary.
 
 Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionId":"A",
 "localizedPayloads":[{"language":"<one of targetLanguages>","questionText":"","options":[{"id":"A","text":""},...]},...]
