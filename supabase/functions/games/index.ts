@@ -48,7 +48,7 @@ Deno.serve(async (req: Request) => {
       "questions_count, time_per_question, allowed_wrong_answers, " +
       "participant_count:total_participants, max_participants:max_players, " +
       "start_time:scheduled_at, end_time:ended_at, start_buffer_seconds, " +
-      "is_featured, " +
+      "is_featured, ai_cost_microdollars, " +
       "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
       "sponsor, tags, host_name, host_avatar_url, host_title, rules";
 

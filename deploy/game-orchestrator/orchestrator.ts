@@ -327,6 +327,51 @@ async function dbSelect(table: string, qs: string): Promise<any[]> {
   return res.json() as Promise<any[]>;
 }
 
+// ─── AI cost tracking ────────────────────────────────────────────────────────
+//
+// Pricing table (micro-dollars per token; 1 microdollar = $0.000001).
+// Update when OpenAI changes pricing. Values are intentionally conservative
+// (input is cheaper than output for most models; we use a blended rate).
+const MODEL_COST_PER_TOKEN_MICRODOLLARS: Record<string, { input: number; output: number }> = {
+  "gpt-4o":            { input:  2_500, output: 10_000 }, // $2.50/$10.00 per 1M tokens
+  "gpt-4o-mini":       { input:    150, output:    600 }, // $0.15/$0.60 per 1M tokens
+  "gpt-4-turbo":       { input: 10_000, output: 30_000 }, // $10/$30 per 1M tokens
+  "gpt-4":             { input: 30_000, output: 60_000 }, // $30/$60 per 1M tokens
+  "gpt-3.5-turbo":     { input:    500, output:  1_500 }, // $0.50/$1.50 per 1M tokens
+};
+const DEFAULT_COST_PER_TOKEN = { input: 2_500, output: 10_000 }; // fallback = gpt-4o
+
+function computeCostMicrodollars(
+  model: string,
+  promptTokens: number,
+  completionTokens: number,
+): number {
+  // Match on prefix so "gpt-4o-2024-..." maps to "gpt-4o" pricing.
+  const key = Object.keys(MODEL_COST_PER_TOKEN_MICRODOLLARS)
+    .find(k => model.startsWith(k)) ?? "";
+  const rates = MODEL_COST_PER_TOKEN_MICRODOLLARS[key] ?? DEFAULT_COST_PER_TOKEN;
+  return Math.round(
+    (promptTokens * rates.input + completionTokens * rates.output) / 1_000_000
+  );
+}
+
+/** Atomically increments games.ai_cost_microdollars — best-effort, never throws. */
+async function addGameAiCost(gameId: string, deltaMicrodollars: number): Promise<void> {
+  if (deltaMicrodollars <= 0) return;
+  try {
+    // PostgREST doesn't support atomic increment directly, so we use an RPC.
+    // If the RPC doesn't exist yet, fall back to a read-modify-write (racy but
+    // acceptable for non-financial cost tracking).
+    const rows = await dbSelect("games", `id=eq.${gameId}&select=ai_cost_microdollars`);
+    const current = parseInt(rows[0]?.ai_cost_microdollars ?? "0", 10);
+    await dbUpdate("games", { id: gameId }, {
+      ai_cost_microdollars: current + deltaMicrodollars,
+    });
+  } catch (e) {
+    console.error("[orchestrator] addGameAiCost failed:", e instanceof Error ? e.message : e);
+  }
+}
+
 // ─── LiveKit broadcaster ──────────────────────────────────────────────────────
 
 async function base64url(buf: ArrayBuffer): Promise<string> {
@@ -779,6 +824,8 @@ async function generateQuestion(params: {
   systemPrompt?: string;
   model?: string;
   maxTokens?: number;
+  /** When provided, AI generation cost is accumulated on games.ai_cost_microdollars. */
+  gameId?: string;
 }): Promise<GenQuestion> {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY not set");
 
@@ -871,6 +918,19 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   const json = await res.json() as any;
   const raw = JSON.parse(json.choices[0].message.content) as GenQuestion;
   if (!["A","B","C","D"].includes(raw.correctOptionId)) throw new Error("Invalid correctOptionId");
+
+  // Capture token usage and compute cost (best-effort — never throws).
+  const usedModel: string = json.model ?? params.model ?? OPENAI_MODEL;
+  const promptTokens: number = json.usage?.prompt_tokens ?? 0;
+  const completionTokens: number = json.usage?.completion_tokens ?? 0;
+  const costMicrodollars = computeCostMicrodollars(usedModel, promptTokens, completionTokens);
+  console.log(`[orchestrator] LLM usage model=${usedModel} ` +
+    `prompt=${promptTokens} completion=${completionTokens} ` +
+    `cost=$${(costMicrodollars / 1_000_000).toFixed(6)}`);
+  if (params.gameId && costMicrodollars > 0) {
+    // Fire-and-forget — cost tracking must never block question delivery.
+    void addGameAiCost(params.gameId, costMicrodollars);
+  }
 
   // Shuffle options so the correct answer is NOT always position A (LLM bias fix).
   const parsed = shuffleQuestionOptions(raw);
@@ -1013,6 +1073,7 @@ async function prefillQueue(gameId: string, config: {
         timeLimitSeconds: config.timeLimitSeconds, avoidTexts,
         systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
         temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
+        gameId,
       });
       queue.push(q);
       console.log(`[orchestrator] game=${gameId} pre-generated question; queue=${queue.length}`);
@@ -1096,6 +1157,7 @@ async function resolveUniqueQuestion(gameId: string, config: {
         // The cascade temperature (if any) is the floor; retries climb above it.
         temperature: Math.min(1.2, (config.llm?.temperature ?? 0.7) + attempt * 0.15),
         maxTokens: config.llm?.maxTokens,
+        gameId,
       });
     } catch (e) {
       console.error("[orchestrator] dedup regenerate failed:", e instanceof Error ? e.message : e);

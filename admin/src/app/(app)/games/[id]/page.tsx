@@ -72,6 +72,11 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
               <span className="font-mono text-success">{formatMoneyDecimal(game.prize_pool)}</span>
               <span className="ml-1 text-xs text-muted-foreground">{game.prize_pool_currency ?? "USD"}</span>
             </Row>
+            <Row label="AI cost">
+              {game.ai_cost_microdollars
+                ? <span className="font-mono text-xs">${(Number(game.ai_cost_microdollars) / 1_000_000).toFixed(4)}</span>
+                : <span className="text-muted-foreground">—</span>}
+            </Row>
             <Row label="Featured">
               {game.is_featured
                 ? <Badge variant="default" className="text-xs">Featured</Badge>
