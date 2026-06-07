@@ -1217,6 +1217,33 @@ async function closeQuestion(game: {
   // Guard with Array.isArray so an empty result is a no-op instead of throwing
   // "object is not iterable" (which crashed the loop on every close — see logs).
   const notAnswered = Array.isArray(closeResult.notAnswered) ? closeResult.notAnswered : [];
+
+  // Partial-Redis-expiry fallback (INV-14): pre-fetch the authoritative DB
+  // wrong_count/lives_remaining for the no-answer set in a single query. If a
+  // participant is still in the Redis participants set but their per-user hash
+  // has expired, the loop below would otherwise mis-count from zero and delay an
+  // elimination; falling back to these DB values keeps the charge correct — the
+  // same source of truth the ghost sweep trusts.
+  const noAnswerDb = new Map<string, {
+    wrong_count: number | null; lives_remaining: number | null;
+    eliminated: boolean | null; participant_role: string | null;
+  }>();
+  if (notAnswered.length > 0) {
+    try {
+      const rows = await dbSelect(
+        "game_participants",
+        `select=user_id,wrong_count,lives_remaining,eliminated,participant_role` +
+        `&game_id=eq.${gameId}&user_id=in.(${notAnswered.join(",")})`,
+      ) as Array<{
+        user_id: string; wrong_count: number | null; lives_remaining: number | null;
+        eliminated: boolean | null; participant_role: string | null;
+      }>;
+      for (const row of rows) noAnswerDb.set(row.user_id, row);
+    } catch (e) {
+      console.error(`[orchestrator] game=${gameId} q=${idx} no-answer DB prefetch error:`,
+        e instanceof Error ? e.message : e);
+    }
+  }
   let noAnswerEliminated = 0;
   for (const userId of notAnswered) {
     const userKey = K.user(gameId, userId);
@@ -1230,8 +1257,23 @@ async function closeQuestion(game: {
     }
     const wrongRaw = await r.hGet(userKey, "wrongCount") as string | null;
     const rlRaw    = await r.hGet(userKey, "remainingLives") as string | null;
-    const newWrong = (parseInt(wrongRaw ?? "0", 10)) + 1;
-    const rl       = rlRaw !== null ? Math.max(parseInt(rlRaw, 10) - 1, 0) : null;
+    // Partial-Redis-expiry fallback (INV-14): user is still in the participants
+    // set but their per-user hash has expired (status + counters all absent).
+    // Use the authoritative DB counters instead of mis-counting from zero.
+    const hashMissing = status === null && wrongRaw === null && rlRaw === null;
+    const dbRow = hashMissing ? noAnswerDb.get(userId) : undefined;
+    // If the DB already shows them eliminated/demoted (hash expired after the
+    // fact), prune them from the set and skip — never double-charge.
+    if (dbRow && (dbRow.eliminated || (dbRow.participant_role != null && dbRow.participant_role !== "player"))) {
+      await r.sRem(K.parts(gameId), userId).catch(() => {});
+      continue;
+    }
+    const baseWrong = wrongRaw !== null ? parseInt(wrongRaw, 10) : (dbRow?.wrong_count ?? 0);
+    const baseLives = rlRaw !== null
+      ? parseInt(rlRaw, 10)
+      : (dbRow && dbRow.lives_remaining !== null ? dbRow.lives_remaining : null);
+    const newWrong = baseWrong + 1;
+    const rl       = baseLives !== null ? Math.max(baseLives - 1, 0) : null;
     const elim     = (rl !== null && rl === 0) || (maxWrong !== null && newWrong > maxWrong);
     await r.hSet(userKey, "wrongCount", String(newWrong));
     if (rl !== null) await r.hSet(userKey, "remainingLives", String(rl));
