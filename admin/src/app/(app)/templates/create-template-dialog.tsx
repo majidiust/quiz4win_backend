@@ -75,6 +75,8 @@ export function CreateTemplateDialog() {
   const [gradientColors, setGradientColors] = useState<string[]>([]);
   const [gradientInput, setGradientInput] = useState("#6366f1");
   const [sponsor, setSponsor] = useState("");
+  // Visibility
+  const [isFeatured, setIsFeatured] = useState(false);
   // AI
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiAvatarId, setAiAvatarId] = useState("");
@@ -90,6 +92,7 @@ export function CreateTemplateDialog() {
     setQuestionsCount("10"); setTimePerQuestion("15"); setAllowedWrong("");
     setQCategory(""); setQDifficulty(""); setQLanguage("");
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1"); setSponsor("");
+    setIsFeatured(false);
     setAiEnabled(false); setAiAvatarId(""); setAiSoundId(""); setAiDuration("300"); setAiLanguage("");
   }
 
@@ -127,7 +130,7 @@ export function CreateTemplateDialog() {
         questions_count: parseInt(questionsCount, 10) || 10,
         time_per_question: parseInt(timePerQuestion, 10) || 15,
         allowed_wrong_answers: allowedWrong !== "" ? parseInt(allowedWrong, 10) : undefined,
-        is_featured: false,
+        is_featured: isFeatured,
         question_category: qCategory.trim() || undefined,
         question_difficulty: (qDifficulty || undefined) as "Easy" | "Medium" | "Hard" | undefined,
         question_language: (qLanguage || undefined) as "en" | "ar" | "fa" | "tr" | undefined,
@@ -231,6 +234,13 @@ export function CreateTemplateDialog() {
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="ct-desc">Description</Label>
                 <Textarea id="ct-desc" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} maxLength={2000} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="ct-featured" className="cursor-pointer">Featured game</Label>
+                  <p className="text-xs text-muted-foreground">Show this game in the hero / featured carousel on the home screen.</p>
+                </div>
+                <Switch id="ct-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
               </div>
             </div>
           </TabsContent>

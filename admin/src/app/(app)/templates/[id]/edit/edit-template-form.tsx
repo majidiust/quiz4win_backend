@@ -103,6 +103,7 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
   const [qCategory, setQCategory] = useState(template.question_category ?? "");
   const [qDifficulty, setQDifficulty] = useState(template.question_difficulty ?? "");
   const [qLanguage, setQLanguage] = useState(template.question_language ?? "");
+  const [isFeatured, setIsFeatured] = useState<boolean>(template.is_featured ?? false);
   const [aiEnabled, setAiEnabled] = useState<boolean>(template.ai_enabled ?? false);
   const [aiAvatarId, setAiAvatarId] = useState(template.ai_avatar_id ?? "");
   const [aiSoundId, setAiSoundId] = useState(template.ai_sound_id ?? "");
@@ -147,6 +148,7 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
         questions_count: parseInt(questionsCount, 10) || 10,
         time_per_question: parseInt(timePerQuestion, 10) || 15,
         allowed_wrong_answers: allowedWrong !== "" ? parseInt(allowedWrong, 10) : undefined,
+        is_featured: isFeatured,
         question_category: qCategory.trim() || undefined,
         question_difficulty: (qDifficulty || undefined) as "Easy" | "Medium" | "Hard" | undefined,
         question_language: (qLanguage || undefined) as "en" | "ar" | "fa" | "tr" | undefined,
@@ -264,6 +266,13 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
               <div className="space-y-1.5 md:col-span-2 lg:col-span-4">
                 <Label htmlFor="et-desc">Description</Label>
                 <Textarea id="et-desc" value={description} onChange={(e) => setDescription(e.target.value)} rows={2} maxLength={2000} />
+              </div>
+              <div className="md:col-span-2 lg:col-span-4 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="et-featured" className="cursor-pointer">Featured game</Label>
+                  <p className="text-xs text-muted-foreground">Show games generated from this template in the hero / featured carousel on the home screen.</p>
+                </div>
+                <Switch id="et-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
               </div>
             </CardContent>
           </Card>
