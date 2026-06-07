@@ -156,6 +156,7 @@ return cjson.encode({status="ok", reconnect=false, userStatus=role,
 // KEYS[3] = userAnswers set  (set of questionIds this user has answered)
 // KEYS[4] = userAttempt key  (idempotency cache string, TTL 300s)
 // KEYS[5] = questionAnswered set (userIds who answered current question)
+// KEYS[6] = questionOptionCounts hash (field=optionId → count, for close stats)
 // ARGV[1] = questionId
 // ARGV[2] = selectedOptionId
 // ARGV[3] = attemptId
@@ -234,6 +235,10 @@ if eliminate then
 end
 redis.call("SADD", KEYS[3], ARGV[1])
 redis.call("SADD", KEYS[5], redis.call("HGET", KEYS[2], "userId") or "unknown")
+-- Per-option tally for the close-time distribution stats. Only accepted (first,
+-- non-duplicate, in-window) answers reach here, so each player counts once.
+redis.call("HINCRBY", KEYS[6], ARGV[2], 1)
+redis.call("EXPIRE", KEYS[6], 86400)
 local startsAt = redis.call("HGET", KEYS[1], "currentQuestionStartsAt")
 local result = cjson.encode({
   status="accepted", isCorrect=isCorrect,

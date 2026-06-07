@@ -35,8 +35,8 @@ upcoming ──► open (join window) ──► live (running) ──► complet
 
 ## 3. Auto Mode — Full Event Timeline
 
-> Default values: `games.start_buffer_seconds = 120 s` (per-game, set on the template), `time_per_question = 10 s`, `grace_period_ms = 400 ms`, inter-question delay = 3 000 ms.
-> Substitute `W = start_buffer_seconds × 1000` (ms) for the warmup duration in the timeline below.
+> Default values: `games.start_buffer_seconds = 120 s` (per-game, set on the template), `time_per_question = 10 s`, `grace_period_ms = 400 ms`, inter-question delay = a fresh random value in `[INTER_QUESTION_MIN_MS, INTER_QUESTION_MAX_MS]` (default 5 000–10 000 ms, drawn per gap).
+> Substitute `W = start_buffer_seconds × 1000` (ms) for the warmup duration, and `G` for the per-gap random inter-question delay, in the timeline below.
 
 ```
 T+0 ms       GAME_STARTED broadcast
@@ -68,14 +68,16 @@ T+130 400 ms   grace period ends (400 ms)
 
 T+130 450 ms QUESTION_CLOSED broadcast
              → correctOptionId revealed
+             → answerStats: per-option { optionId, count, percentage } + totalAnswers
+             → nextQuestionInMs = G, nextQuestionStartsAt = closedAt + G (null after last Q)
              → No-answer sweep: SDIFF(participants, questionAnswered) → charges wrong/eliminated
              → Ghost-participant sweep (§7): DB-only players charged
              → PLAYER_WRONG_ANSWER / PLAYER_ELIMINATED emitted per no-answer player
              → Stats: eliminatedCount, activeSurvivorCount, projectedPrizePerSurvivor
 
-T+133 450 ms   3 000 ms inter-question pause ends
+T+130 450+G ms   random inter-question pause (G ∈ [5 000, 10 000] ms) ends
 
-T+133 450 ms QUESTION_STARTED (Q1)    [loop continues…]
+T+130 450+G ms QUESTION_STARTED (Q1)    [loop continues…]
 
 ────── After last question (index N-1) ──────
 
@@ -98,7 +100,7 @@ Redis game hash TTL reduced to 1 hour (was 24 h).
 | `endsAt` (per question) | `startsAt + timeLimitSeconds × 1000` |
 | Answer deadline | `endsAt + gracePeriodMs` |
 | Close timer fires | `timeLimitSeconds × 1000 + gracePeriodMs + 50 ms` after `startsAt` |
-| Next `QUESTION_STARTED` | `closedAt + 3 000 ms` |
+| Next `QUESTION_STARTED` | `closedAt + G` where `G` ∈ `[INTER_QUESTION_MIN_MS, INTER_QUESTION_MAX_MS]` (random per gap) |
 
 ---
 
@@ -295,7 +297,8 @@ REST fallback (for clients that missed GAME_RESULT):
 | `games.questions_count` | `10` | Total questions per game |
 | `QUESTION_REASK_COOLDOWN_SECONDS` | `604 800` (7 days) | Platform-wide question dedup window |
 | `QUESTION_DEDUP_MAX_RETRIES` | `5` | Re-generation attempts before accepting a collision |
-| Inter-question pause (auto) | `3 000` ms | Hardcoded delay between `QUESTION_CLOSED` and next `QUESTION_STARTED` |
+| `INTER_QUESTION_MIN_MS` | `5 000` ms | Lower bound of the random inter-question pause (auto mode) |
+| `INTER_QUESTION_MAX_MS` | `10 000` ms | Upper bound of the random inter-question pause (auto mode); a fresh value in `[min, max]` is drawn per gap. After the final question a fixed 3 000 ms pause precedes `GAME_ENDED`. |
 
 ---
 

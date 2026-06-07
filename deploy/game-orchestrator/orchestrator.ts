@@ -56,6 +56,19 @@ const QUESTION_REASK_COOLDOWN_SECONDS =
 // Max re-generation attempts before accepting a question to avoid stalling.
 const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
+// Inter-question pause (auto mode): a fresh random delay is drawn per gap so the
+// cadence between QUESTION_CLOSED and the next QUESTION_STARTED feels less
+// mechanical. Bounds are inclusive and configurable; defaults 5 000–10 000 ms.
+const INTER_QUESTION_MIN_MS =
+  Number(Deno.env.get("INTER_QUESTION_MIN_MS") ?? "5000") || 5000;
+const INTER_QUESTION_MAX_MS =
+  Number(Deno.env.get("INTER_QUESTION_MAX_MS") ?? "10000") || 10000;
+/** Uniform random inter-question gap in ms, clamped to a sane [lo, hi] range. */
+function interQuestionGapMs(): number {
+  const lo = Math.max(0, Math.min(INTER_QUESTION_MIN_MS, INTER_QUESTION_MAX_MS));
+  const hi = Math.max(INTER_QUESTION_MIN_MS, INTER_QUESTION_MAX_MS);
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
 
 // The complete set of languages the platform supports. Every game's
 // target_languages is a subset of this; the primary language is always one of
@@ -119,6 +132,7 @@ const K = {
   parts:     (id: string)              => `${NS}:game:${id}:participants`,
   specs:     (id: string)              => `${NS}:game:${id}:spectators`,
   qAnswered: (id: string, i: number)   => `${NS}:game:${id}:q:${i}:answered`,
+  qOptions:  (id: string, i: number)   => `${NS}:game:${id}:q:${i}:optionCounts`,
   /** Staging area for presenter mode — one prepared (not-yet-active) question per game. */
   staged:    (id: string)              => `${NS}:game:${id}:q:staged`,
   /** Per-game dedup sets (§ no-repeat). Survive orchestrator restart / multi-replica. */
@@ -1436,6 +1450,43 @@ async function closeQuestion(game: {
       ? (qcSurvivorCount > 0 ? Math.round((qcPrizePool / qcSurvivorCount) * 100) / 100 : 0)
       : null;
   } catch (_e) { /* best-effort */ }
+  // Option-distribution stats (§ answer reveal): tally how many players picked
+  // each option so the client can render result bars on close. Counts come from
+  // the per-option hash that SUBMIT_ANSWER_SCRIPT increments — only accepted
+  // (first, in-window, non-duplicate) answers are counted, so totalAnswers
+  // equals the number of players who answered. Best-effort: stats are non-critical.
+  let answerStats: {
+    totalAnswers: number;
+    options: Array<{ optionId: string; count: number; percentage: number }>;
+  } = { totalAnswers: 0, options: [] };
+  try {
+    const optionCountsRaw = await r.hGetAll(K.qOptions(gameId, idx)) as Record<string, string>;
+    let total = 0;
+    const counted = Object.entries(optionCountsRaw ?? {}).map(([optionId, c]) => {
+      const count = parseInt(c, 10) || 0;
+      total += count;
+      return { optionId, count };
+    });
+    answerStats = {
+      totalAnswers: total,
+      // Percentage rounded to one decimal; 0 for every option when nobody answered.
+      options: counted.map(({ optionId, count }) => ({
+        optionId, count,
+        percentage: total > 0 ? Math.round((count / total) * 1000) / 10 : 0,
+      })),
+    };
+  } catch (_e) { /* best-effort — option stats are non-critical */ }
+
+  // Inter-question pacing: in auto mode, draw a fresh random gap (5–10 s default)
+  // before the next question. There is no gap after the final question — the loop
+  // finalizes the game instead — so nextQuestion* are null in that case. The gap
+  // is an estimate for the client countdown; the authoritative start is still
+  // QUESTION_STARTED.startsAt.
+  const autoMode = !presenterGames.has(gameId);
+  const hasNextQuestion = (idx + 1) < game.maxQuestions;
+  const interGapMs = (autoMode && hasNextQuestion) ? interQuestionGapMs() : null;
+  const nextQuestionStartsAt = interGapMs !== null ? Date.now() + interGapMs : null;
+
   await broadcast(roomName, {
     type: "QUESTION_CLOSED", gameId,
     questionId: closeResult.questionId, questionIndex: idx,
@@ -1448,21 +1499,31 @@ async function closeQuestion(game: {
     activeSurvivorCount: qcSurvivorCount,
     prizePool: qcPrizePool,
     projectedPrizePerSurvivor: qcProjected,
+    // Per-option answer distribution revealed alongside the correct answer.
+    answerStats,
+    // Random inter-question gap (null after the last question / in presenter mode).
+    nextQuestionInMs: interGapMs,
+    nextQuestionStartsAt,
     closedAt: now, serverTime: now,
   }, "QUESTION_CLOSED");
 
   console.log(`[orchestrator] game=${gameId} question ${idx} closed; ` +
-    `notAnswered=${notAnswered.length} ghost=${ghostNoAnswer} eliminated=${noAnswerEliminated + ghostEliminated}`);
+    `notAnswered=${notAnswered.length} ghost=${ghostNoAnswer} eliminated=${noAnswerEliminated + ghostEliminated} ` +
+    `answers=${answerStats.totalAnswers} nextGapMs=${interGapMs ?? "n/a"}`);
 
-  // In auto mode: pause 3 s then advance to the next question automatically.
-  // In presenter mode: wait for the next PrepareQuestion / AdvanceQuestion command.
-  if (!presenterGames.has(gameId)) {
+  // In auto mode: pause a random gap then advance to the next question (or
+  // finalize after the last one). In presenter mode: wait for the next
+  // PrepareQuestion / AdvanceQuestion command.
+  if (autoMode) {
+    // After the final question there is no random gap; keep a short fixed pause
+    // so clients can read the result before GAME_ENDED.
+    const delayMs = interGapMs ?? 3000;
     setTimeout(() => {
       startQuestionLoop({...game, questionIndex: idx + 1}).catch(e =>
         console.error(`[orchestrator] game=${gameId} startQuestionLoop q=${idx + 1} CRASH:`,
           e instanceof Error ? (e.stack ?? e.message) : String(e))
       );
-    }, 3000);
+    }, delayMs);
   } else {
     console.log(`[orchestrator] game=${gameId} presenter mode — q=${idx} closed; ` +
       `waiting for PrepareQuestion or AdvanceQuestion`);

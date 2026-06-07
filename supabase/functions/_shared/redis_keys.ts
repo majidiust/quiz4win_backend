@@ -44,6 +44,11 @@ export const redisKeys = {
   questionAnswered: (gameId: string, qIdx: number) =>
     `${NS}:game:${gameId}:q:${qIdx}:answered`,
 
+  // Hash: per-option answer tally for question at index qIdx (field=optionId,
+  // value=count). Drives the option-distribution stats revealed on QUESTION_CLOSED.
+  questionOptionCounts: (gameId: string, qIdx: number) =>
+    `${NS}:game:${gameId}:q:${qIdx}:optionCounts`,
+
   // String: cached idempotency result for a specific attemptId (TTL 300 s)
   userAttempt: (gameId: string, userId: string, attemptId: string) =>
     `${NS}:game:${gameId}:u:${userId}:attempt:${attemptId}`,
@@ -82,6 +87,7 @@ export function submitAnswerKeys(
     redisKeys.userAnswers(gameId, userId),                // KEYS[3]
     redisKeys.userAttempt(gameId, userId, attemptId),     // KEYS[4]
     redisKeys.questionAnswered(gameId, qIdx),             // KEYS[5]
+    redisKeys.questionOptionCounts(gameId, qIdx),         // KEYS[6]
   ];
 }
 
