@@ -38,7 +38,7 @@ const GAME_FIELDS =
   "category, difficulty, language, " +
   "questions_count, time_per_question, allowed_wrong_answers, " +
   "participant_count:total_participants, max_participants:max_players, " +
-  "start_time:scheduled_at, end_time:ended_at, " +
+  "start_time:scheduled_at, end_time:ended_at, start_buffer_seconds, " +
   "is_featured, " +
   "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
   "sponsor, tags, host_name, host_avatar_url, host_title, rules";
@@ -104,7 +104,17 @@ Deno.serve(async (req: Request) => {
         .eq("id", gameId)
         .single();
       if (error || !data) return errorResponse("game_not_found", 404);
-      return successResponse({ game: data });
+      // Pregame warmup timing for the client countdown (see games/index.ts).
+      const d = data as Record<string, unknown>;
+      const startBufferSeconds = typeof d.start_buffer_seconds === "number" ? d.start_buffer_seconds : 120;
+      const startTimeMs = d.start_time ? new Date(d.start_time as string).getTime() : null;
+      return successResponse({
+        game: {
+          ...data,
+          pregame_duration_ms: startBufferSeconds * 1000,
+          first_question_starts_at: startTimeMs !== null ? startTimeMs + startBufferSeconds * 1000 : null,
+        },
+      });
     }
 
     // GET /public-games — list with filters

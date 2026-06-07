@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
       "category, difficulty, language, " +
       "questions_count, time_per_question, allowed_wrong_answers, " +
       "participant_count:total_participants, max_participants:max_players, " +
-      "start_time:scheduled_at, end_time:ended_at, " +
+      "start_time:scheduled_at, end_time:ended_at, start_buffer_seconds, " +
       "is_featured, " +
       "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
       "sponsor, tags, host_name, host_avatar_url, host_title, rules";
@@ -229,11 +229,22 @@ Deno.serve(async (req: Request) => {
           .eq("game_id", gameId),
       ]);
 
+      // Pregame warmup timing for the client countdown. start_buffer_seconds is
+      // the per-game warmup; first_question_starts_at projects it onto the
+      // scheduled start (start_time = scheduled_at). The orchestrator publishes
+      // the authoritative epoch in Redis once the game goes live; this mirrors
+      // the same contract for clients reading the detail before join.
+      const d = data as Record<string, unknown>;
+      const startBufferSeconds = typeof d.start_buffer_seconds === "number" ? d.start_buffer_seconds : 120;
+      const startTimeMs = d.start_time ? new Date(d.start_time as string).getTime() : null;
+
       return successResponse({
         game: {
           ...data,
           participant_count: liveCount ?? 0,
           joined_by_me: !!participant,
+          pregame_duration_ms: startBufferSeconds * 1000,
+          first_question_starts_at: startTimeMs !== null ? startTimeMs + startBufferSeconds * 1000 : null,
         },
       });
     }
