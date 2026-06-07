@@ -35,7 +35,8 @@ upcoming ──► open (join window) ──► live (running) ──► complet
 
 ## 3. Auto Mode — Full Event Timeline
 
-> Default values: `PREGAME_WARMUP_MS = 120 000 ms`, `time_per_question = 10 s`, `grace_period_ms = 400 ms`, inter-question delay = 3 000 ms.
+> Default values: `games.start_buffer_seconds = 120 s` (per-game, set on the template), `time_per_question = 10 s`, `grace_period_ms = 400 ms`, inter-question delay = 3 000 ms.
+> Substitute `W = start_buffer_seconds × 1000` (ms) for the warmup duration in the timeline below.
 
 ```
 T+0 ms       GAME_STARTED broadcast
@@ -43,18 +44,18 @@ T+0 ms       GAME_STARTED broadcast
              → games.status → live, games.first_question_starts_at set
              → Question pre-generation (prefillQueue, 3 questions) runs in background
 
-T+0 .. T+120 000 ms   PREGAME WARMUP
+T+0 .. T+W ms   PREGAME WARMUP  (W = start_buffer_seconds × 1000)
              → Clients render "Get ready" countdown to firstQuestionStartsAt
              → OpenAI generates question queue behind the countdown
 
 ────── Question loop (repeats for each question index 0 … N-1) ──────
 
-T+120 000 ms QUESTION_STARTED (Q0)
+T+W ms       QUESTION_STARTED (Q0)
              → Redis: currentQuestionStatus = active
-             → startsAt = T+120 000, endsAt = T+120 000 + timeLimitSeconds*1000
+             → startsAt = T+W, endsAt = T+W + timeLimitSeconds*1000
              → Answer buttons enabled on client
 
-T+120 000 .. T+130 000 ms   ANSWER WINDOW (10 s default)
+T+W .. T+W+10 000 ms   ANSWER WINDOW (10 s default)
              → SUBMIT_ANSWER accepted while now ≤ endsAt + gracePeriodMs
              → Late submissions (now > endsAt + gracePeriodMs) → rejected "late"
              → PLAYER_WRONG_ANSWER emitted immediately on wrong submission
@@ -93,7 +94,7 @@ Redis game hash TTL reduced to 1 hour (was 24 h).
 
 | Moment | Formula |
 |--------|---------|
-| `firstQuestionStartsAt` | `T_start + PREGAME_WARMUP_MS` |
+| `firstQuestionStartsAt` | `T_start + start_buffer_seconds × 1000` |
 | `endsAt` (per question) | `startsAt + timeLimitSeconds × 1000` |
 | Answer deadline | `endsAt + gracePeriodMs` |
 | Close timer fires | `timeLimitSeconds × 1000 + gracePeriodMs + 50 ms` after `startsAt` |
@@ -286,7 +287,7 @@ REST fallback (for clients that missed GAME_RESULT):
 
 | Env / DB column | Default | Description |
 |----------------|---------|-------------|
-| `PREGAME_WARMUP_MS` | `120 000` | Ms between `GAME_STARTED` and first `QUESTION_STARTED` (auto mode) |
+| `games.start_buffer_seconds` | `120` s | Pregame warmup duration per game (copied from template); ms between `GAME_STARTED` and first `QUESTION_STARTED` in auto mode. Set on the template, propagated to the game row automatically. |
 | `games.time_per_question` | `10` s | Answer window duration per question |
 | `games.grace_period_ms` | `400` ms | Extra submission window after `endsAt`; also close-timer buffer |
 | `games.allowed_wrong_answers` | `null` | Max wrong answers before elimination (`null` = unlimited) |
