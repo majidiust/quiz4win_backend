@@ -56,13 +56,7 @@ const QUESTION_REASK_COOLDOWN_SECONDS =
 // Max re-generation attempts before accepting a question to avoid stalling.
 const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
-// Pregame warmup window: time between GAME_STARTED and the first
-// QUESTION_STARTED broadcast for auto-mode games. Used by clients to render
-// the "Get ready! The first question is being generated…" countdown screen.
-// The orchestrator also pre-generates the first batch of questions during this
-// window so OpenAI latency is hidden behind the visible countdown.
-const PREGAME_WARMUP_MS =
-  Number(Deno.env.get("PREGAME_WARMUP_MS") ?? "120000") || 120000;
+
 // The complete set of languages the platform supports. Every game's
 // target_languages is a subset of this; the primary language is always one of
 // them. Kept in sync with the DB CHECK constraints and the Language type.
@@ -1506,7 +1500,7 @@ async function handleStartGame(payload: any): Promise<void> {
   const rows = await dbSelect("games",
     `id=eq.${gameId}&select=id,title,description,status,run_mode,livekit_room_name,time_per_question,` +
     `allowed_wrong_answers,grace_period_ms,join_policy,questions_count,language,target_languages,category,difficulty,prize_pool,prize_pool_currency,` +
-    `template_id,llm_template_id`);
+    `start_buffer_seconds,template_id,llm_template_id`);
   if (!rows.length) { console.error(`[orchestrator] StartGame: game ${gameId} not found`); return; }
   const g = rows[0] as any;
 
@@ -1555,13 +1549,19 @@ async function handleStartGame(payload: any): Promise<void> {
 
   const runMode: string = g.run_mode ?? "auto";
   const nowMs = Date.now();
+  // Per-game warmup derived from start_buffer_seconds (set on the game row,
+  // copied from the template by generate_game_from_template). Falls back to
+  // the env-var constant only when the column is absent (legacy games).
+  const pregameWarmupMs = runMode === "auto"
+    ? (Number(g.start_buffer_seconds ?? 120)) * 1000
+    : 0;
   // Auto-mode games observe a pregame warmup so clients can render a
   // synchronized countdown. Presenter-mode games are command-driven so the
   // "first question" timestamp is undefined here.
   const firstQuestionStartsAtMs = runMode === "auto"
-    ? nowMs + PREGAME_WARMUP_MS
+    ? nowMs + pregameWarmupMs
     : null;
-  const pregameDurationMs = runMode === "auto" ? PREGAME_WARMUP_MS : 0;
+  const pregameDurationMs = pregameWarmupMs;
 
   // prize_pool in DB is NUMERIC(12,2) dollars; store as the raw decimal string
   // so reads via hGet return the original value without float conversion error.
@@ -1609,7 +1609,7 @@ async function handleStartGame(payload: any): Promise<void> {
     gameId,
     serverTime: nowMs,
     runMode,
-    pregameDurationMs: runMode === "auto" ? PREGAME_WARMUP_MS : 0,
+    pregameDurationMs,
     firstQuestionStartsAt: firstQuestionStartsAtMs, // epoch ms; null for presenter mode
     languages: resolveTargetLanguages(g.language, g.target_languages),
     category: g.category ?? "mixed",
@@ -2112,7 +2112,7 @@ async function recoverRunningGames(): Promise<void> {
   const games = await dbSelect("games",
     `status=eq.live&select=id,title,description,livekit_room_name,time_per_question,allowed_wrong_answers,` +
     `grace_period_ms,questions_count,language,target_languages,category,difficulty,run_mode,` +
-    `started_at,first_question_starts_at,prize_pool,prize_pool_currency,template_id,llm_template_id`);
+    `started_at,first_question_starts_at,prize_pool,prize_pool_currency,start_buffer_seconds,template_id,llm_template_id`);
   if (!games.length) { console.log("[orchestrator] no running games to recover"); return; }
   console.log(`[orchestrator] recovering ${games.length} running game(s)`);
 
@@ -2123,6 +2123,8 @@ async function recoverRunningGames(): Promise<void> {
     const runMode: string = g.run_mode ?? "auto";
     const grace     = g.grace_period_ms ?? 400;
     const roomName: string = g.livekit_room_name ?? `quiz-${g.id}`;
+    // Per-game warmup — mirrors the computation in handleStartGame.
+    const pregameWarmupMs = (Number(g.start_buffer_seconds ?? 120)) * 1000;
     // Back-fill prizePool in Redis if it was missing (e.g. set before this fix,
     // or Redis key expired and was re-initialized without it).
     if (g.prize_pool != null) {
@@ -2144,7 +2146,7 @@ async function recoverRunningGames(): Promise<void> {
         category: g.category ?? "mixed",
         questionsCount: String(g.questions_count ?? 10),
         title: cleanTopic(g.title),
-        pregameDurationMs: String(runMode === "auto" ? PREGAME_WARMUP_MS : 0),
+        pregameDurationMs: String(runMode === "auto" ? pregameWarmupMs : 0),
         ...(Number.isFinite(firstQAtMs)
           ? { firstQuestionStartsAt: String(firstQAtMs) } : {}),
       });
@@ -2270,7 +2272,7 @@ async function recoverRunningGames(): Promise<void> {
         gameId: g.id,
         serverTime: Date.now(),
         runMode: "auto",
-        pregameDurationMs: PREGAME_WARMUP_MS,
+        pregameDurationMs: pregameWarmupMs,
         firstQuestionStartsAt: Number.isFinite(firstQAt) ? firstQAt : null,
         recovered: true,
         languages: resolveTargetLanguages(g.language, g.target_languages),
