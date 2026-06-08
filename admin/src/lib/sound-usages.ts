@@ -17,6 +17,7 @@ export type SoundUsage =
   | "countdown"
   | "pregame_music"
   | "winner"
+  | "loser"
   | "announcement"
   | "livestream";
 
@@ -31,6 +32,7 @@ export const SOUND_USAGES: { value: SoundUsage; label: string }[] = [
   { value: "countdown",         label: "Countdown" },
   { value: "pregame_music",     label: "Pre-game Music" },
   { value: "winner",            label: "Winner" },
+  { value: "loser",             label: "Loser" },
   { value: "announcement",      label: "Announcement" },
   { value: "livestream",        label: "Livestream" },
 ];

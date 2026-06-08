@@ -19,7 +19,7 @@ import { uploadObject, deleteObject } from "../_shared/s3.ts";
 const SOUND_USAGES = [
   "splash", "home", "home_before_start", "register", "game_details",
   "correct_answer", "incorrect_answer", "countdown", "pregame_music",
-  "winner", "announcement", "livestream",
+  "winner", "loser", "announcement", "livestream",
 ] as const;
 type SoundUsage = typeof SOUND_USAGES[number];
 
