@@ -190,3 +190,35 @@ The `db-maintainer` container is the **sole, authoritative mechanism** for apply
 6. **Never skip the `db-maintainer` healthcheck** by adding `--no-deps` or removing the `depends_on` condition. That guard exists so app containers never start against a stale schema.
 
 **Action:** Any instruction, script, or changelog entry that tells an agent or developer to apply a migration manually (via `supabase db push`, `psql`, Supabase Studio SQL editor, etc.) is a rule violation. Correct it immediately and log a `[RULE]` entry in `Change_Log_AI.md`.
+
+---
+
+## R-13 — No Supabase CLI in Any Instruction or Script
+
+The `supabase` CLI is **banned** from all deploy instructions, agent responses, scripts, and documentation. Every operation that the Supabase CLI might perform must be replaced with the Docker Compose equivalent:
+
+| Banned command | Replacement |
+|---|---|
+| `supabase db push` | `docker compose up -d --force-recreate db-maintainer` |
+| `supabase functions deploy <fn>` | Edge functions are deployed via the project's existing deploy script / CI pipeline — never via the CLI |
+| `supabase start` / `supabase stop` | `docker compose up -d` / `docker compose down` |
+| Any other `supabase …` sub-command | Ask the human developer for the Docker-native equivalent before proceeding |
+
+**Action:** Any agent response or documentation that includes a `supabase …` command is a rule violation. Remove it, replace with the Docker equivalent, and log a `[RULE]` entry in `Change_Log_AI.md`.
+
+---
+
+## R-14 — No Supabase SDK/Client in Backend Code (Orchestrator & Workers)
+
+All backend services that run outside the Supabase Edge Function runtime (i.e. the `game-orchestrator`, `template-generator`, and any future Docker-deployed worker) **must not** import or use the Supabase JS/TS client (`@supabase/supabase-js` or `createClient`). All database access from these services must go through the **direct PostgREST REST helpers** already established in the codebase:
+
+- `dbSelect(table, querystring)` — SELECT
+- `dbInsert(table, row)` — INSERT
+- `dbUpdate(table, match, patch)` — PATCH
+- `dbRpc(fn, args)` — RPC
+
+New helpers following the same pattern may be added; importing the Supabase SDK is forbidden.
+
+Supabase Edge Functions (inside `supabase/functions/`) are exempt because they run inside Supabase's managed runtime and receive the client via the platform injection — but even there, no new `createClient` call should be added unless strictly necessary.
+
+**Action:** Any PR or commit that adds `@supabase/supabase-js` as a dependency to a Docker-deployed service, or calls `createClient` outside an Edge Function, is a rule violation and must be reverted.
