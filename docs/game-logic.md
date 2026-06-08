@@ -175,7 +175,7 @@ A player is eliminated when **either** condition is met:
 - `remainingLives` reaches **0** (life-based mode)
 - `wrongCount > maxWrongAnswers` (count-based mode)
 
-Both conditions are evaluated atomically in Lua. `maxWrongAnswers = null` means no elimination by wrong answers.
+Both conditions are evaluated atomically in Lua. `maxWrongAnswers = null` means **no elimination by wrong answers** (score-only / unlimited-lives game). In this mode, a pure no-show is never eliminated by the sweep — but they are still excluded from ranking by the Option A survivor rule (§10.1).
 
 **Elimination triggers:**
 
@@ -197,7 +197,7 @@ On elimination:
 
 Runs at every `QUESTION_CLOSED` after the Redis no-answer loop.
 
-**Ghost** = has a `game_participants` DB row (`role=player`, `eliminated=false`, `participant_role NOT IN (spectator,eliminated)`) but is absent from the Redis `participants ∪ spectators` sets.
+**Ghost** = has a `game_participants` DB row (`role=player`, `eliminated=false`, `participant_role NOT IN (spectator,eliminated)`) but is absent from the Redis `participants ∪ spectators` sets. A ghost is a player who paid the entry fee but **never called `/game-session/join`**.
 
 Algorithm:
 1. `SMEMBERS(participants) ∪ SMEMBERS(spectators)` → Redis-known set
@@ -205,6 +205,8 @@ Algorithm:
 3. Difference → ghost users
 4. For each ghost: `wrongCount+1`, `remainingLives−1`; eliminate if limit reached
 5. DB-updates + `PLAYER_WRONG_ANSWER` / `PLAYER_ELIMINATED` broadcasts
+
+**Important:** the sweep only increments `wrong_count` (the elimination counter) for ghosts — it intentionally never touches `wrong_answers` (the real-submission counter). This means a pure no-show always keeps `wrong_answers = 0`, which causes `compute_game_ranks` to exclude them from ranking via the Option A survivor rule (§10.1), even in games where `allowed_wrong_answers = NULL` and no elimination fires.
 
 ---
 
@@ -260,6 +262,7 @@ Both `POST /game-session/:id/join` and `GET /game-session/:id/state` return a `s
 
 ```
 GAME_ENDED → distribute_prizes RPC (Postgres, idempotent)
+           → compute_game_ranks (internal, called by distribute_prizes)
            → GAME_RESULT LiveKit event (if distributed=true)
            → games.result_summary JSON persisted
 
@@ -273,6 +276,29 @@ REST fallback (for clients that missed GAME_RESULT):
 - `null` — no prize pool configured
 - `0` — prize pool exists but `activeSurvivorCount = 0`
 - `prizePool / activeSurvivorCount` — rounded to 2 dp
+
+---
+
+### 10.1 Survivor Eligibility Rule (Option A)
+
+`compute_game_ranks` assigns a prize rank **only** to participants who satisfy all three conditions:
+
+| Condition | Column / Value | Purpose |
+|-----------|---------------|---------|
+| Not eliminated | `participant_role = 'participant' AND eliminated = FALSE` | Standard elimination filter |
+| Played at least once | `correct_answers > 0 OR wrong_answers > 0` | Option A — excludes pure no-shows |
+
+A **pure no-show** — a player who registered, paid the entry fee, but never submitted a single answer (correct or wrong) — has both counters at zero and receives `rank = NULL` and `status = 'disqualified'`. They cannot appear in any prize tier regardless of game type or elimination settings.
+
+**Counter semantics:**
+
+| Counter | Incremented by | NOT incremented by |
+|---------|---------------|-------------------|
+| `wrong_answers` | Real wrong submission (`handlePersistAnswer`) | Ghost-sweep no-answer, late-join penalty |
+| `correct_answers` | Real correct submission (`handlePersistAnswer`) | — |
+| `wrong_count` | Wrong submission + ghost sweep + late-join | — |
+
+This means a player who joined and got every answer wrong has `wrong_answers > 0` and IS ranked (they participated). A player who never joined keeps `wrong_answers = 0` and is NOT ranked, even if the ghost sweep incremented their `wrong_count` across all questions.
 
 ---
 

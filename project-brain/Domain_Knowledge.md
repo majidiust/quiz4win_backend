@@ -147,6 +147,17 @@ All voucher redemption attempts (success and failure) must be logged in `voucher
 
 Games with no `allowed_wrong_answers` limit never eliminate on missed questions. State is authoritative in `game_participants` (DB) and mirrored to Redis user hashes; the orchestrator is the sole LiveKit broadcaster.
 
+### INV-15 — Survivor Eligibility for Prize Ranking (Option A)
+
+A participant MUST have submitted **at least one real answer** (correct or wrong) to be eligible for a prize rank. A player who registered and paid but never connected to the game session ("pure no-show") MUST receive `rank = NULL` and be excluded from all prize tiers.
+
+**Enforcement mechanism:**
+- `game_participants.wrong_answers` is incremented **only** on real wrong submissions (`handlePersistAnswer`). The ghost-sweep no-answer path only increments `wrong_count`.
+- A pure no-show therefore always has `correct_answers = 0 AND wrong_answers = 0`.
+- `compute_game_ranks` filters survivors with `AND (correct_answers > 0 OR wrong_answers > 0)`. Players failing this check receive `rank = NULL` / `status = 'disqualified'`.
+
+This invariant applies **across all game types** including unlimited-lives games (`allowed_wrong_answers = NULL`) where the ghost sweep never fires an elimination. The entry fee is NOT refunded for a no-show — they paid to play and chose not to participate.
+
 ---
 
 ## 4. Regulatory & Compliance Notes
