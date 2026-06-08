@@ -103,6 +103,8 @@ Owner: A-01 (Augment Code Agent)
 ---
 
 ## Completed Tasks
+- [P2] [DONE] [A-01] **Decrease template generator interval to 10s** — Updated `deploy/template-generator/generator.ts` `INTERVAL_MS` to 10s default. — 2026-06-08
+
 - [P1] [DONE] [A-01] **Restore Game Orchestrator AMQP Consumer** — Fixed the crash due to missing `BufReader` and the TLS handshake issues with `amqplib` by switching to native `deno.land/x/amqp@v0.24.0` with a pinned `jsr:@std/io@0.224.9` import map. Replaced HTTP polling with robust real-time AMQP consumption. — 2026-05-31
 
 - [P1] [DONE] [A-01] **LiveAvatar Admin UI Integration** — Enhanced template editor with Avatar/Voice pickers and audio previews. — 2026-05-30

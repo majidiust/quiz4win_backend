@@ -15,7 +15,7 @@
  * Env vars (R-01: secrets from env only, never logged):
  *   SUPABASE_URL                — Supabase REST endpoint.
  *   SUPABASE_SERVICE_ROLE_KEY   — Service-role JWT.
- *   TEMPLATE_GEN_INTERVAL_MS    — Loop interval (default 60 000 ms).
+ *   TEMPLATE_GEN_INTERVAL_MS    — Loop interval (default 10 000 ms).
  *   RABBITMQ_URL                — AMQP URI; leave empty to skip publishing.
  *   RABBITMQ_VHOST              — Optional vhost override.
  *   MQ_COMMAND_EXCHANGE         — Exchange name (default = "").
@@ -28,7 +28,7 @@ import { isFcmConfigured, sendFcmToTokens } from "./fcm.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-const INTERVAL_MS = Number(Deno.env.get("TEMPLATE_GEN_INTERVAL_MS") ?? 60_000);
+const INTERVAL_MS = Number(Deno.env.get("TEMPLATE_GEN_INTERVAL_MS") ?? 10_000);
 const RABBITMQ_URL = Deno.env.get("RABBITMQ_URL") ?? "";
 const RABBITMQ_VHOST_OVERRIDE = Deno.env.get("RABBITMQ_VHOST");
 const MQ_EXCHANGE = Deno.env.get("MQ_COMMAND_EXCHANGE") ?? "";
