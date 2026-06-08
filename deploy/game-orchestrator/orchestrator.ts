@@ -58,11 +58,12 @@ const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
 // Inter-question pause (auto mode): a fresh random delay is drawn per gap so the
 // cadence between QUESTION_CLOSED and the next QUESTION_STARTED feels less
-// mechanical. Bounds are inclusive and configurable; defaults 5 000–10 000 ms.
+// mechanical. Bounds are inclusive and configurable; defaults 3 000–5 000 ms
+// (hard cap: the gap must never exceed 5 seconds).
 const INTER_QUESTION_MIN_MS =
-  Number(Deno.env.get("INTER_QUESTION_MIN_MS") ?? "5000") || 5000;
+  Number(Deno.env.get("INTER_QUESTION_MIN_MS") ?? "3000") || 3000;
 const INTER_QUESTION_MAX_MS =
-  Number(Deno.env.get("INTER_QUESTION_MAX_MS") ?? "10000") || 10000;
+  Number(Deno.env.get("INTER_QUESTION_MAX_MS") ?? "5000") || 5000;
 /** Uniform random inter-question gap in ms, clamped to a sane [lo, hi] range. */
 function interQuestionGapMs(): number {
   const lo = Math.max(0, Math.min(INTER_QUESTION_MIN_MS, INTER_QUESTION_MAX_MS));
