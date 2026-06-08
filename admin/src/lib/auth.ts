@@ -63,6 +63,7 @@ export const ROUTE_ROLES: Record<string, AdminRole[]> = {
   "/vouchers": ["super_admin", "admin"],
   "/notifications": ["super_admin", "admin"],
   "/referrals": ["super_admin", "admin"],
+  "/sounds": ["super_admin", "admin"],
   "/config": ["super_admin", "admin"],
   "/admins": ["super_admin"],
   "/api-keys": ["super_admin"],

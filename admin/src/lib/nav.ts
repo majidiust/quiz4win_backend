@@ -25,6 +25,7 @@ import {
   Smartphone,
   CalendarClock,
   BrainCircuit,
+  Music2,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -67,6 +68,7 @@ export const navSections: NavSection[] = [
       { title: "Early Birds", href: "/early-birds", icon: Smartphone, roles: ["super_admin", "admin", "moderator"] },
       { title: "LiveKit Rooms", href: "/livekit", icon: Video, roles: ["super_admin", "admin"] },
       { title: "Questions", href: "/questions", icon: BookOpen, roles: ["super_admin", "admin", "moderator"] },
+      { title: "Sounds", href: "/sounds", icon: Music2, roles: ["super_admin", "admin"] },
     ],
   },
   {
