@@ -56,12 +56,25 @@ const QUESTION_REASK_COOLDOWN_SECONDS =
 // Max re-generation attempts before accepting a question to avoid stalling.
 const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
-// Pre-resolved question buffer depth (§5.7). Questions are generated, claimed
-// and dedup-checked ahead of need so the inter-question hot path is just
-// pop+broadcast — all OpenAI/DB latency happens during the previous answer
-// window, never between questions.
+// Pre-resolved question buffer depth (§5.7). A single per-game producer keeps
+// the buffer filled with generated + claimed + dedup-checked questions; the
+// consumer (question loop) only pops, so all OpenAI/DB latency happens in the
+// background during the previous answer window, never between questions.
 const QUESTION_BUFFER_TARGET =
-  Number(Deno.env.get("QUESTION_BUFFER_TARGET") ?? "5") || 5;
+  Number(Deno.env.get("QUESTION_BUFFER_TARGET") ?? "2") || 2;
+// Producer poll interval (ms) while the buffer is already full (idle wait).
+const PRODUCER_IDLE_MS =
+  Number(Deno.env.get("PRODUCER_IDLE_MS") ?? "250") || 250;
+// Producer backoff (ms) after a failed generation before retrying.
+const PRODUCER_BACKOFF_MS =
+  Number(Deno.env.get("PRODUCER_BACKOFF_MS") ?? "750") || 750;
+// Consumer poll interval (ms) while waiting for the producer to push a question.
+const QUESTION_POLL_MS =
+  Number(Deno.env.get("QUESTION_POLL_MS") ?? "150") || 150;
+// Max time (ms) the consumer waits for a question before declaring starvation
+// and finalizing the game (guards against a wedged/failed producer).
+const QUESTION_WAIT_TIMEOUT_MS =
+  Number(Deno.env.get("QUESTION_WAIT_TIMEOUT_MS") ?? "60000") || 60000;
 // Inter-question pause (auto mode): a fresh random delay is drawn per gap so the
 // cadence between QUESTION_CLOSED and the next QUESTION_STARTED feels less
 // mechanical. Bounds are inclusive and configurable; defaults 3 000–5 000 ms
@@ -1059,43 +1072,94 @@ async function markAsked(gameId: string, id: string, canonicalText: string): Pro
   }
 }
 
+// Per-game question producers (§5.7). Exactly one producer runs per game: a
+// background loop that generates → claims → dedups → pushes ResolvedQuestions
+// into questionQueue until it holds QUESTION_BUFFER_TARGET, then idles. The
+// consumer (question loop / presenter PrepareQuestion) pops via takeQuestion().
+// The `stop` flag is flipped on finalize so the loop exits and deregisters.
+const producers = new Map<string, { stop: boolean }>();
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 /**
- * Keeps the per-game buffer filled to QUESTION_BUFFER_TARGET (§5.7) with
- * FULLY-RESOLVED questions: each entry is already generated, claimed and
- * dedup-checked, so the inter-question hot path only pops + broadcasts.
- * Module-level so it can be called from both auto-mode loop and presenter mode.
+ * Produces ONE fully-resolved question (generated + claimed + dedup-checked) for
+ * the game, or null if generation failed. resolveUniqueQuestion marks it asked
+ * in Redis, so the producer's next iteration automatically avoids it.
  */
-async function prefillQueue(gameId: string, config: {
+async function produceOneQuestion(gameId: string, config: {
   description: string; category: string; difficulty: string;
   targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
-}): Promise<void> {
-  const queue = questionQueue.get(gameId) ?? [];
-  while (queue.length < QUESTION_BUFFER_TARGET) {
-    // resolveUniqueQuestion marks each accepted question as asked in Redis, so
-    // the asked set seeded below already excludes questions buffered in earlier
-    // iterations — the pre-resolved entries are mutually distinct too.
-    const askedTexts = await getAskedTexts(gameId);
-    let candidate: GenQuestion;
-    try {
-      candidate = await generateQuestion({
-        description: config.description, category: config.category,
-        difficulty: config.difficulty, targetLanguages: config.targetLanguages,
-        timeLimitSeconds: config.timeLimitSeconds, avoidTexts: [...askedTexts],
-        systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
-        temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
-        gameId,
-      });
-    } catch(e) {
-      console.error("[orchestrator] question pre-gen failed:", e instanceof Error ? e.message : e);
-      break;
-    }
-    // Claim + dedup (+ possible regenerate) OFF the hot path, during the
-    // previous question's answer window. Enqueue a ready-to-broadcast item.
-    const resolved = await resolveUniqueQuestion(gameId, config, candidate);
-    queue.push(resolved);
-    console.log(`[orchestrator] game=${gameId} pre-resolved question; queue=${queue.length}`);
+}): Promise<ResolvedQuestion | null> {
+  const askedTexts = await getAskedTexts(gameId);
+  let candidate: GenQuestion;
+  try {
+    candidate = await generateQuestion({
+      description: config.description, category: config.category,
+      difficulty: config.difficulty, targetLanguages: config.targetLanguages,
+      timeLimitSeconds: config.timeLimitSeconds, avoidTexts: [...askedTexts],
+      systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
+      temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
+      gameId,
+    });
+  } catch (e) {
+    console.error("[orchestrator] question gen failed:", e instanceof Error ? e.message : e);
+    return null;
   }
-  questionQueue.set(gameId, queue);
+  return await resolveUniqueQuestion(gameId, config, candidate);
+}
+
+/**
+ * Starts (idempotently) the per-game producer (§5.7). The loop keeps
+ * questionQueue filled to QUESTION_BUFFER_TARGET, idling while full and backing
+ * off on generation errors. Safe to call from start, recovery and the question
+ * loop — a second call while one is already running is a no-op.
+ */
+function startProducer(gameId: string, config: {
+  description: string; category: string; difficulty: string;
+  targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
+}): void {
+  if (producers.has(gameId)) return; // one producer per game
+  const ctrl = { stop: false };
+  producers.set(gameId, ctrl);
+  (async () => {
+    while (!ctrl.stop) {
+      const queued = (questionQueue.get(gameId) ?? []).length;
+      if (queued >= QUESTION_BUFFER_TARGET) { await sleep(PRODUCER_IDLE_MS); continue; }
+      const resolved = await produceOneQuestion(gameId, config);
+      if (ctrl.stop) break;
+      if (!resolved) { await sleep(PRODUCER_BACKOFF_MS); continue; }
+      const q = questionQueue.get(gameId) ?? [];
+      q.push(resolved);
+      questionQueue.set(gameId, q);
+      console.log(`[orchestrator] game=${gameId} produced question; queue=${q.length}`);
+    }
+    producers.delete(gameId);
+  })().catch((e) =>
+    console.error(`[orchestrator] producer game=${gameId} crashed:`,
+      e instanceof Error ? (e.stack ?? e.message) : String(e)));
+}
+
+/** Signals a game's producer to stop (called on finalize). */
+function stopProducer(gameId: string): void {
+  const ctrl = producers.get(gameId);
+  if (ctrl) ctrl.stop = true;
+}
+
+/**
+ * Consumer side of the producer/consumer buffer: returns the next ready question
+ * (FIFO). Returns immediately when the buffer is non-empty; otherwise waits for
+ * the producer to push one, up to QUESTION_WAIT_TIMEOUT_MS. Returns null only on
+ * timeout (caller finalizes) — the starvation guard.
+ */
+async function takeQuestion(gameId: string): Promise<ResolvedQuestion | null> {
+  const deadline = Date.now() + QUESTION_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const queue = questionQueue.get(gameId) ?? [];
+    const resolved = queue.pop(); // LIFO — newest (most recently produced) question first
+    if (resolved) { questionQueue.set(gameId, queue); return resolved; }
+    if (Date.now() >= deadline) return null;
+    await sleep(QUESTION_POLL_MS);
+  }
 }
 
 /**
@@ -1198,8 +1262,9 @@ async function startQuestionLoop(game: {
 }): Promise<void> {
   const { id: gameId, roomName, timeLimitSeconds, gracePeriodMs } = game;
 
-  // Re-use module-level prefill (§5.7)
-  const prefill = () => prefillQueue(gameId, game);
+  // Ensure the per-game producer is running (idempotent) — it fills the buffer
+  // that advanceQuestion consumes via takeQuestion().
+  startProducer(gameId, game);
 
   const advanceQuestion = async (idx: number): Promise<void> => {
     if (idx >= game.maxQuestions) {
@@ -1207,19 +1272,16 @@ async function startQuestionLoop(game: {
       return;
     }
 
-    // Ensure the buffer has at least one resolved question. prefill() does the
-    // heavy lifting (generate + claim + dedup) in the background, so the pop
-    // below is O(1) — no OpenAI/DB work on the inter-question hot path.
-    await prefill();
-    const queue = questionQueue.get(gameId) ?? [];
-    const resolved = queue.shift();
-    questionQueue.set(gameId, queue);
+    // Consumer: pop the next ready question (LIFO — newest first). The producer
+    // keeps the buffer filled in the background, so this is O(1) unless the
+    // buffer is momentarily empty, in which case we briefly wait for the producer.
+    const resolved = await takeQuestion(gameId);
     if (!resolved) {
       console.warn(`[orchestrator] game=${gameId} no question available at idx=${idx} — finalizing`);
       await finalizeGame(gameId, roomName);
       return;
     }
-    // Already canonical + non-duplicate (resolved during prefill). The id is
+    // Already canonical + non-duplicate (resolved by the producer). The id is
     // used for Redis + broadcast + answer matching.
     const q = resolved.q;
     const dbQuestionId = resolved.id;
@@ -1263,9 +1325,7 @@ async function startQuestionLoop(game: {
       );
     }, closeDelay);
     closeTimers.set(gameId, timer);
-
-    // Kick off next pre-generation in the background
-    void prefill();
+    // Producer keeps the buffer topped up; nothing to schedule here.
   };
 
   await advanceQuestion(game.questionIndex);
@@ -1658,6 +1718,7 @@ async function finalizeGame(gameId: string, roomName: string): Promise<void> {
   // Expire Redis keys after 1 hour (§15.1 — TTLs to avoid stale state)
   const r = await getRedis();
   await r.expire(K.game(gameId), 3600);
+  stopProducer(gameId);
   questionQueue.delete(gameId);
   presenterGames.delete(gameId);
   stagedQuestions.delete(gameId);
@@ -1807,9 +1868,9 @@ async function handleStartGame(payload: any): Promise<void> {
   };
 
   if (runMode === "auto") {
-    // Fully automated — pre-generate questions during the warmup so the
-    // visible countdown absorbs OpenAI latency, then start the question loop.
-    void prefillQueue(gameId, gameCommon);
+    // Fully automated — start the question producer so it fills the buffer
+    // during the warmup countdown, then run the question loop.
+    startProducer(gameId, gameCommon);
     const remaining = Math.max(0, (firstQuestionStartsAtMs ?? nowMs) - Date.now());
     if (remaining > 0) {
       console.log(`[orchestrator] game=${gameId} pregame warmup ${remaining}ms ` +
@@ -1832,8 +1893,8 @@ async function handleStartGame(payload: any): Promise<void> {
     const r2 = await getRedis();
     await r2.hSet(K.game(gameId), "presenterIdentity", presenterIdentity);
 
-    // Kick off background question pre-generation (§5.7)
-    void prefillQueue(gameId, cfg);
+    // Start the question producer (§5.7) — fills the buffer in the background.
+    startProducer(gameId, cfg);
 
     console.log(`[orchestrator] game=${gameId} presenter mode ready; ` +
       `presenterIdentity=${presenterIdentity}`);
@@ -2027,17 +2088,16 @@ async function handlePrepareQuestion(payload: any): Promise<void> {
     return;
   }
 
-  // Ensure at least one resolved question in the buffer. prefillQueue does the
-  // generate + claim + dedup work in the background, so the pop below is O(1).
-  if ((questionQueue.get(gameId) ?? []).length === 0) await prefillQueue(gameId, config);
-  const queue = questionQueue.get(gameId) ?? [];
-  const resolved = queue.shift();
-  questionQueue.set(gameId, queue);
+  // Consumer: pop the next ready question. The presenter-mode producer keeps the
+  // buffer filled in the background (started on StartGame / recovery; ensured
+  // here in case this is the first prepare after a cold start).
+  startProducer(gameId, config);
+  const resolved = await takeQuestion(gameId);
   if (!resolved) {
     console.error(`[orchestrator] PrepareQuestion: game=${gameId} question queue empty`);
     return;
   }
-  // Already canonical + non-duplicate (resolved during prefill). The id is
+  // Already canonical + non-duplicate (resolved by the producer). The id is
   // used for Redis staging + reveal + answer matching.
   const q = resolved.q;
   const questionId = resolved.id;
@@ -2081,9 +2141,6 @@ async function handlePrepareQuestion(payload: any): Promise<void> {
 
   console.log(`[orchestrator] PrepareQuestion game=${gameId} q=${idx} staged; ` +
     `private QUESTION_PREPARED → ${identity}`);
-
-  // Background: keep queue topped up for the question after next
-  void prefillQueue(gameId, config);
 }
 
 /**
@@ -2395,8 +2452,8 @@ async function recoverRunningGames(): Promise<void> {
         }
       }
 
-      // Resume background question pre-generation
-      void prefillQueue(g.id, cfg);
+      // Resume the question producer (§5.7)
+      startProducer(g.id, cfg);
       continue;
     }
 
@@ -2454,8 +2511,8 @@ async function recoverRunningGames(): Promise<void> {
         category: g.category ?? "mixed",
       }, "GAME_STARTED");
 
-      // Pre-generate questions while waiting out the remaining warmup.
-      void prefillQueue(g.id, gameCommon);
+      // Start the producer to fill the buffer while waiting out the warmup.
+      startProducer(g.id, gameCommon);
 
       const startLoop = () => startQuestionLoop({ ...gameCommon, questionIndex: 0 }).catch(e =>
         console.error(`[orchestrator] game=${g.id} recovery startQuestionLoop q=0 CRASH:`,

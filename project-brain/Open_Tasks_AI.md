@@ -109,6 +109,7 @@ Owner: A-01 (Augment Code Agent)
 - [P1] [DONE] [A-01] **Pre-resolved question buffer (depth 5)** — Reworked `orchestrator.ts` so `prefillQueue` buffers fully-resolved (generated + claimed + dedup-checked) questions and the inter-question hot path only pops + broadcasts, eliminating the lag between questions. Added `QUESTION_BUFFER_TARGET` env (default 5). Removed the 3 000 ms trailing pause after the final question (finalizes immediately). Docs + changelog synced. — 2026-06-08
 
 - [P2] [DONE] [A-01] **Added 'loser' sound usage** — Updated `SoundUsage` type and constants in admin panel, added slot to Edge Function validation, and applied migration to update the DB check constraint. — 2026-06-08
+- [P1] [DONE] [A-01] **Producer/consumer question buffer (depth 2)** — Refactored `orchestrator.ts` from fire-and-forget `prefillQueue` into an explicit per-game producer loop (`startProducer`/`produceOneQuestion`, fills `questionQueue` to `QUESTION_BUFFER_TARGET`=2, idles when full) + FIFO consumer (`takeQuestion`, waits only for one question so the game starts on first-ready). Lifecycle wired into start/recovery/finalize. Deploy: rebuild `game-orchestrator`. — 2026-06-08
 
 
 - [P1] [DONE] [A-01] **Restore Game Orchestrator AMQP Consumer** — Fixed the crash due to missing `BufReader` and the TLS handshake issues with `amqplib` by switching to native `deno.land/x/amqp@v0.24.0` with a pinned `jsr:@std/io@0.224.9` import map. Replaced HTTP polling with robust real-time AMQP consumption. — 2026-05-31

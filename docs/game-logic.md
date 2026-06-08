@@ -42,7 +42,7 @@ upcoming ──► open (join window) ──► live (running) ──► complet
 T+0 ms       GAME_STARTED broadcast
              → Redis game hash initialised (gameStatus=running)
              → games.status → live, games.first_question_starts_at set
-             → Question pre-generation (prefillQueue, QUESTION_BUFFER_TARGET=5 fully-resolved questions) runs in background
+             → Per-game question producer starts (fills the buffer to QUESTION_BUFFER_TARGET=2 fully-resolved questions in the background)
 
 T+0 .. T+W ms   PREGAME WARMUP  (W = start_buffer_seconds × 1000)
              → Clients render "Get ready" countdown to firstQuestionStartsAt
@@ -111,7 +111,7 @@ Redis game hash TTL reduced to 1 hour (was 24 h).
 ```
 RabbitMQ: StartGame
   → GAME_STARTED broadcast (firstQuestionStartsAt = null)
-  → prefillQueue runs in background (5 fully-resolved questions)
+  → question producer starts in background (fills buffer to QUESTION_BUFFER_TARGET=2)
 
 RabbitMQ: PrepareQuestion
   → Question dequeued / generated
@@ -299,7 +299,11 @@ REST fallback (for clients that missed GAME_RESULT):
 | `games.questions_count` | `10` | Total questions per game |
 | `QUESTION_REASK_COOLDOWN_SECONDS` | `604 800` (7 days) | Platform-wide question dedup window |
 | `QUESTION_DEDUP_MAX_RETRIES` | `5` | Re-generation attempts before accepting a collision |
-| `QUESTION_BUFFER_TARGET` | `5` | Depth of the pre-resolved question buffer (generated + claimed + dedup-checked ahead of need) |
+| `QUESTION_BUFFER_TARGET` | `2` | Depth the per-game producer keeps the pre-resolved buffer filled to (generated + claimed + dedup-checked ahead of need) |
+| `PRODUCER_IDLE_MS` | `250` ms | Producer poll interval while the buffer is already full |
+| `PRODUCER_BACKOFF_MS` | `750` ms | Producer backoff after a failed generation before retrying |
+| `QUESTION_POLL_MS` | `150` ms | Consumer poll interval while waiting for the producer to push a question |
+| `QUESTION_WAIT_TIMEOUT_MS` | `60 000` ms | Max time the consumer waits for a question before declaring starvation and finalizing |
 | `INTER_QUESTION_MIN_MS` | `3 000` ms | Lower bound of the random inter-question pause (auto mode) |
 | `INTER_QUESTION_MAX_MS` | `5 000` ms | Upper bound of the random inter-question pause (auto mode), hard-capped at 5 s; a fresh value in `[min, max]` is drawn per gap. After the final question there is **no** pause — the game finalizes immediately after the last `QUESTION_CLOSED`. |
 
@@ -386,18 +390,22 @@ to `QUESTION_DEDUP_MAX_RETRIES`. A Redis outage degrades to "no within-game
 dedup" rather than stalling the game — the platform-wide `claim_question`
 cooldown still applies.
 
-**Pre-resolved question buffer (§5.7):** `prefillQueue` keeps
-`QUESTION_BUFFER_TARGET` (default 5) **fully-resolved** questions ready per game.
-A buffered entry has already been generated, `claim_question`-claimed and
+**Producer/consumer question buffer (§5.7):** each game runs a single
+background **producer** (`startProducer`) that keeps the per-game buffer filled
+to `QUESTION_BUFFER_TARGET` (default 2) with **fully-resolved** questions. A
+buffered entry has already been generated, `claim_question`-claimed and
 dedup-checked (including any regeneration), and is marked asked in Redis the
 moment it is enqueued — so the buffered questions are mutually distinct without
-extra bookkeeping. All OpenAI/DB latency therefore happens in the background
-during the previous question's answer window; the inter-question hot path is
-just *pop → write Redis → broadcast*, which keeps the visible gap inside the
-3–5 s bound. On the rare starvation case (buffer empty at advance time, e.g.
-very slow generation at game start) the orchestrator awaits a prefill and, if it
-still cannot produce a question, finalizes the game rather than overrunning the
-client clock.
+extra bookkeeping. The producer starts on `StartGame`/recovery, generates during
+the warmup and every answer window, idles (`PRODUCER_IDLE_MS`) while the buffer
+is full, backs off (`PRODUCER_BACKOFF_MS`) on a generation error, and stops on
+finalize. The **consumer** (`takeQuestion`, FIFO) pops the next ready question;
+the inter-question hot path is just *pop → write Redis → broadcast*, which keeps
+the visible gap inside the 3–5 s bound. Because the consumer only needs **one**
+ready question (not a full buffer), the game starts the moment the first
+question is produced. If the buffer is momentarily empty the consumer waits for
+the producer up to `QUESTION_WAIT_TIMEOUT_MS`; only on timeout (a wedged/failed
+producer) does it finalize rather than overrun the client clock.
 
 ---
 
