@@ -1,3 +1,5 @@
+[2026-06-08] [A-01] [AUDIT] Session ended. Tasks completed: [Cap inter-question gap at 5s]. Remaining: 0 in current session focus.
+
 [2026-06-08] [A-01] [AUDIT] Session started. Reviewing Open_Tasks_AI.md.
 
 [2026-06-08] [A-01] [FIX] **Inter-question gap capped at 5s.** Updated `deploy/game-orchestrator/orchestrator.ts` to lower the default inter-question pause bounds to 3 000 – 5 000 ms (previously 5 000 – 10 000 ms), guaranteeing the gap between questions never exceeds the 5 s user-requested cap. Updated documentation comment to match. No env overrides found in existing config. Deploy: `docker compose up -d --build --force-recreate game-orchestrator`.
