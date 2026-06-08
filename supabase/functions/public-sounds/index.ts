@@ -20,7 +20,7 @@ import { getPublicClient } from "../_shared/supabase.ts";
 const VALID_USAGES = new Set([
   "splash", "home", "home_before_start", "register", "game_details",
   "correct_answer", "incorrect_answer", "countdown", "pregame_music",
-  "winner", "announcement", "livestream",
+  "winner", "loser", "announcement", "livestream",
 ]);
 
 Deno.serve(async (req: Request) => {
