@@ -56,6 +56,12 @@ const QUESTION_REASK_COOLDOWN_SECONDS =
 // Max re-generation attempts before accepting a question to avoid stalling.
 const QUESTION_DEDUP_MAX_RETRIES =
   Number(Deno.env.get("QUESTION_DEDUP_MAX_RETRIES") ?? "5") || 5;
+// Pre-resolved question buffer depth (§5.7). Questions are generated, claimed
+// and dedup-checked ahead of need so the inter-question hot path is just
+// pop+broadcast — all OpenAI/DB latency happens during the previous answer
+// window, never between questions.
+const QUESTION_BUFFER_TARGET =
+  Number(Deno.env.get("QUESTION_BUFFER_TARGET") ?? "5") || 5;
 // Inter-question pause (auto mode): a fresh random delay is drawn per gap so the
 // cadence between QUESTION_CLOSED and the next QUESTION_STARTED feels less
 // mechanical. Bounds are inclusive and configurable; defaults 3 000–5 000 ms
@@ -1000,8 +1006,11 @@ const stagedQuestions = new Map<string, StagedQuestion>();
 
 // Active close-question timers keyed by gameId
 const closeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-// Pre-generated question queue keyed by gameId
-const questionQueue = new Map<string, GenQuestion[]>();
+// A question that has been generated, claimed and dedup-checked — ready to
+// broadcast with no further OpenAI/DB work on the hot path.
+type ResolvedQuestion = { q: GenQuestion; id: string };
+// Pre-resolved question buffer keyed by gameId (§5.7 pre-generation)
+const questionQueue = new Map<string, ResolvedQuestion[]>();
 
 // Per-game "already asked" dedup now lives in Redis (K.askedIds /
 // K.askedHashes) so it survives an orchestrator restart and is shared across
@@ -1051,7 +1060,9 @@ async function markAsked(gameId: string, id: string, canonicalText: string): Pro
 }
 
 /**
- * Keeps the per-game question queue filled to 3 entries (§5.7 pre-generation).
+ * Keeps the per-game buffer filled to QUESTION_BUFFER_TARGET (§5.7) with
+ * FULLY-RESOLVED questions: each entry is already generated, claimed and
+ * dedup-checked, so the inter-question hot path only pops + broadcasts.
  * Module-level so it can be called from both auto-mode loop and presenter mode.
  */
 async function prefillQueue(gameId: string, config: {
@@ -1059,29 +1070,30 @@ async function prefillQueue(gameId: string, config: {
   targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
 }): Promise<void> {
   const queue = questionQueue.get(gameId) ?? [];
-  const askedTexts = await getAskedTexts(gameId);
-  while (queue.length < 3) {
-    // Avoid both already-asked questions and the ones already queued, so the
-    // 3 pre-generated questions are mutually distinct too.
-    const avoidTexts = [
-      ...askedTexts,
-      ...queue.map((qq) => normalizeText(qq.canonicalText)),
-    ];
+  while (queue.length < QUESTION_BUFFER_TARGET) {
+    // resolveUniqueQuestion marks each accepted question as asked in Redis, so
+    // the asked set seeded below already excludes questions buffered in earlier
+    // iterations — the pre-resolved entries are mutually distinct too.
+    const askedTexts = await getAskedTexts(gameId);
+    let candidate: GenQuestion;
     try {
-      const q = await generateQuestion({
+      candidate = await generateQuestion({
         description: config.description, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
-        timeLimitSeconds: config.timeLimitSeconds, avoidTexts,
+        timeLimitSeconds: config.timeLimitSeconds, avoidTexts: [...askedTexts],
         systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
         temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
         gameId,
       });
-      queue.push(q);
-      console.log(`[orchestrator] game=${gameId} pre-generated question; queue=${queue.length}`);
     } catch(e) {
       console.error("[orchestrator] question pre-gen failed:", e instanceof Error ? e.message : e);
       break;
     }
+    // Claim + dedup (+ possible regenerate) OFF the hot path, during the
+    // previous question's answer window. Enqueue a ready-to-broadcast item.
+    const resolved = await resolveUniqueQuestion(gameId, config, candidate);
+    queue.push(resolved);
+    console.log(`[orchestrator] game=${gameId} pre-resolved question; queue=${queue.length}`);
   }
   questionQueue.set(gameId, queue);
 }
@@ -1195,22 +1207,21 @@ async function startQuestionLoop(game: {
       return;
     }
 
-    // Ensure queue has questions
+    // Ensure the buffer has at least one resolved question. prefill() does the
+    // heavy lifting (generate + claim + dedup) in the background, so the pop
+    // below is O(1) — no OpenAI/DB work on the inter-question hot path.
     await prefill();
     const queue = questionQueue.get(gameId) ?? [];
-    let q = queue.shift();
+    const resolved = queue.shift();
     questionQueue.set(gameId, queue);
-    if (!q) {
+    if (!resolved) {
       console.warn(`[orchestrator] game=${gameId} no question available at idx=${idx} — finalizing`);
       await finalizeGame(gameId, roomName);
       return;
     }
-
-    // Resolve to a canonical, non-duplicate question (§ no-duplicate invariant)
-    // — re-rolls if asked recently across the platform or already used in this
-    // game; the returned id is used for Redis + broadcast + answer matching.
-    const resolved = await resolveUniqueQuestion(gameId, game, q);
-    q = resolved.q;
+    // Already canonical + non-duplicate (resolved during prefill). The id is
+    // used for Redis + broadcast + answer matching.
+    const q = resolved.q;
     const dbQuestionId = resolved.id;
 
     // §8.2: Write to Redis FIRST, then broadcast
@@ -1578,9 +1589,9 @@ async function closeQuestion(game: {
   // finalize after the last one). In presenter mode: wait for the next
   // PrepareQuestion / AdvanceQuestion command.
   if (autoMode) {
-    // After the final question there is no random gap; keep a short fixed pause
-    // so clients can read the result before GAME_ENDED.
-    const delayMs = interGapMs ?? 3000;
+    // After the final question there is no gap — finalize immediately (the
+    // QUESTION_CLOSED reveal already carries the result for clients to read).
+    const delayMs = interGapMs ?? 0;
     setTimeout(() => {
       startQuestionLoop({...game, questionIndex: idx + 1}).catch(e =>
         console.error(`[orchestrator] game=${gameId} startQuestionLoop q=${idx + 1} CRASH:`,
@@ -2016,21 +2027,19 @@ async function handlePrepareQuestion(payload: any): Promise<void> {
     return;
   }
 
-  // Ensure at least one question in the queue
+  // Ensure at least one resolved question in the buffer. prefillQueue does the
+  // generate + claim + dedup work in the background, so the pop below is O(1).
   if ((questionQueue.get(gameId) ?? []).length === 0) await prefillQueue(gameId, config);
   const queue = questionQueue.get(gameId) ?? [];
-  let q = queue.shift();
+  const resolved = queue.shift();
   questionQueue.set(gameId, queue);
-  if (!q) {
+  if (!resolved) {
     console.error(`[orchestrator] PrepareQuestion: game=${gameId} question queue empty`);
     return;
   }
-
-  // Resolve to a canonical, non-duplicate question (§ no-duplicate invariant)
-  // — re-rolls if asked recently across the platform or already used in this
-  // game; the returned id is used for Redis staging + reveal + answer matching.
-  const resolved = await resolveUniqueQuestion(gameId, config, q);
-  q = resolved.q;
+  // Already canonical + non-duplicate (resolved during prefill). The id is
+  // used for Redis staging + reveal + answer matching.
+  const q = resolved.q;
   const questionId = resolved.id;
 
   // Atomically stage in Redis (idempotency guard prevents double-staging)
