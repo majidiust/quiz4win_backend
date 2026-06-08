@@ -2075,15 +2075,34 @@ async function handlePersistAnswer(payload: any): Promise<void> {
       });
     }
   } else {
-    // Wrong answer — keep wrong_count and lives_remaining mirrored on the
-    // game_participants row so survivor checks and analytics stay accurate.
-    void dbUpdate("game_participants",
-      { game_id: payload.gameId, user_id: payload.userId },
-      {
-        wrong_count: payload.wrongCount,
+    // Wrong answer — mirror wrong_count / lives_remaining AND increment
+    // wrong_answers. wrong_answers is the "Option-A survivor" signal:
+    // a player who submitted at least one real answer (even wrong) keeps
+    // wrong_answers > 0, whereas a pure no-show (ghost sweep) never
+    // increments it. compute_game_ranks uses this to exclude no-shows from
+    // prize ranking regardless of the elimination setting.
+    const wParts = await dbSelect("game_participants",
+      `game_id=eq.${payload.gameId}&user_id=eq.${payload.userId}&select=id,wrong_answers`);
+    if (wParts.length) {
+      const wp = wParts[0] as any;
+      await dbUpdate("game_participants", { id: wp.id }, {
+        wrong_count:   payload.wrongCount,
+        wrong_answers: (wp.wrong_answers ?? 0) + 1,
         ...(payload.remainingLives !== null && payload.remainingLives !== undefined
           ? { lives_remaining: payload.remainingLives } : {}),
       });
+    } else {
+      // Fallback: participant row not found yet (race at game start); update
+      // by composite key without wrong_answers increment — will self-heal on
+      // the next submission.
+      void dbUpdate("game_participants",
+        { game_id: payload.gameId, user_id: payload.userId },
+        {
+          wrong_count: payload.wrongCount,
+          ...(payload.remainingLives !== null && payload.remainingLives !== undefined
+            ? { lives_remaining: payload.remainingLives } : {}),
+        });
+    }
   }
 
   // Resolve `maxWrongAnswers` once from Redis for the events below (cheap HGET;
