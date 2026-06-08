@@ -75,6 +75,22 @@ const QUESTION_POLL_MS =
 // and finalizing the game (guards against a wedged/failed producer).
 const QUESTION_WAIT_TIMEOUT_MS =
   Number(Deno.env.get("QUESTION_WAIT_TIMEOUT_MS") ?? "60000") || 60000;
+// ── Creative facet rotation (Phase 1) ──────────────────────────────────────
+// A low temperature makes the model collapse onto the same handful of ultra-
+// famous facts, so the base sampling spread is raised well above the old 0.4 and
+// paired with nucleus sampling. The 3-tier LLM cascade temperature (when set)
+// still overrides this base.
+const QUESTION_GEN_TEMPERATURE =
+  Number(Deno.env.get("QUESTION_GEN_TEMPERATURE") ?? "0.9") || 0.9;
+const QUESTION_GEN_TOP_P =
+  Number(Deno.env.get("QUESTION_GEN_TOP_P") ?? "0.95") || 0.95;
+// Self-expanding per-category facet (sub-topic) list: enumerated once via a cheap
+// LLM call and cached in Redis for this many seconds (default 7 days).
+const FACET_CACHE_TTL_SECONDS =
+  Number(Deno.env.get("FACET_CACHE_TTL_SECONDS") ?? "604800") || 604800;
+// How many sub-topics to enumerate per category.
+const FACET_COUNT =
+  Number(Deno.env.get("FACET_COUNT") ?? "60") || 60;
 // Inter-question pause (auto mode): a fresh random delay is drawn per gap so the
 // cadence between QUESTION_CLOSED and the next QUESTION_STARTED feels less
 // mechanical. Bounds are inclusive and configurable; defaults 3 000–5 000 ms
@@ -158,6 +174,8 @@ const K = {
   /** Per-game dedup sets (§ no-repeat). Survive orchestrator restart / multi-replica. */
   askedIds:    (id: string)            => `${NS}:game:${id}:asked_ids`,
   askedHashes: (id: string)            => `${NS}:game:${id}:asked_hashes`,
+  /** Cached self-expanding sub-topic (facet) list per category (Phase 1). */
+  facets:      (cat: string)           => `${NS}:facets:${cat}`,
 };
 
 // TTL (seconds) for the per-game asked-question dedup sets. Matches the 24h
@@ -844,6 +862,9 @@ async function generateQuestion(params: {
   systemPrompt?: string;
   model?: string;
   maxTokens?: number;
+  /** Sub-topic + angle steering (Phase 1 facet rotation) — pushes the model off
+   *  its default famous fact into a specific corner of the category. */
+  facet?: string; angle?: string;
   /** When provided, AI generation cost is accumulated on games.ai_cost_microdollars. */
   gameId?: string;
 }): Promise<GenQuestion> {
@@ -880,6 +901,10 @@ Non-negotiable output contract (always applies):
      Do NOT make an "easy" question hard, or a "hard" question trivial.
    - "description": optional extra focus/angle within the category — when present it MUST be respected;
      when empty rely SOLELY on "category". It is background guidance, never a title to quote back.
+   - "facet": a SPECIFIC sub-topic within the category — when present the question MUST be about it.
+   - "angle": the requested question style — when present, frame the question that way.
+     When a "facet"/"angle" is given, AVOID the single most famous/obvious fact about it and pick a
+     specific, lesser-known but 100% verifiable detail instead.
    - "baseLanguage": the language for "canonicalText" and its "options".
    - "targetLanguages": the COMPLETE set of languages for "localizedPayloads".
 2. NO REPEATS: the question MUST be about a DIFFERENT fact/topic from EVERY entry in the "avoid" list — a
@@ -907,6 +932,8 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   const userPayload = {
     category, difficulty, description, baseLanguage, targetLanguages,
     timeLimitSeconds: params.timeLimitSeconds,
+    // Steer this single generation into a specific sub-topic/angle (Phase 1).
+    facet: params.facet, angle: params.angle,
     avoid: (avoidTexts ?? []).slice(-40),
     // A fresh seed every call pushes the model off its default answer so two
     // back-to-back generations with identical params still differ.
@@ -917,6 +944,7 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
   // and the generated game can be traced (no secrets — config values only).
   console.log(`[orchestrator] LLM gen request: ` +
     `category="${category}" difficulty="${difficulty}" ` +
+    `facet="${params.facet ?? ""}" angle="${params.angle ?? ""}" ` +
     `description="${description.slice(0, 60)}" ` +
     `baseLanguage="${baseLanguage}" targetLanguages=[${targetLanguages.join(",")}]`);
 
@@ -925,7 +953,8 @@ Schema: {"canonicalText":"","options":[{"id":"A","text":""},...],"correctOptionI
     headers:{"Content-Type":"application/json","Authorization":`Bearer ${OPENAI_KEY}`},
     body: JSON.stringify({
       model: params.model ?? OPENAI_MODEL,
-      temperature: temperature ?? 0.4,
+      temperature: temperature ?? QUESTION_GEN_TEMPERATURE,
+      top_p: QUESTION_GEN_TOP_P,
       max_tokens: params.maxTokens ?? 1500,
       response_format:{type:"json_object"},
       messages:[
@@ -1072,6 +1101,99 @@ async function markAsked(gameId: string, id: string, canonicalText: string): Pro
   }
 }
 
+// ─── Creative facet rotation (Phase 1) ───────────────────────────────────────
+// The model collapses onto the same famous facts when asked only for a broad
+// "category + difficulty". To force it across the full breadth of a category,
+// every generation is steered into a randomly chosen SUB-TOPIC (facet) and ANGLE.
+// The facet list is self-expanding: enumerated once per category via a cheap LLM
+// call and cached in Redis (FACET_CACHE_TTL_SECONDS), with a static fallback so a
+// generator outage never blocks a game.
+
+const GENERIC_FACET_FALLBACK = [
+  "history", "records", "rules and regulations", "terminology", "famous figures",
+  "geography", "notable events", "equipment", "milestones", "lesser-known facts",
+];
+
+const QUESTION_ANGLES = [
+  "who holds the record", "in what year it happened", "which rule applies",
+  "where it is located", "which term means", "who won", "what is the number",
+  "who invented or founded it", "which was the first", "which is the largest or smallest",
+];
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// In-process cache so a hot game never re-hits Redis for its facet list.
+const facetMemoryCache = new Map<string, string[]>();
+
+/** Enumerates diverse sub-topics for a category via one cheap LLM call. */
+async function enumerateFacets(category: string): Promise<string[]> {
+  if (!OPENAI_KEY) return GENERIC_FACET_FALLBACK;
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        temperature: 1.0,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content:
+            `You are a quiz curator. List DIVERSE, SPECIFIC sub-topics within a category ` +
+            `that a quiz could draw fresh questions from. Spread WIDELY across the whole ` +
+            `category — include lesser-known areas, not just the famous ones. ` +
+            `Output ONLY JSON: {"facets":["...","..."]}.` },
+          { role: "user", content: JSON.stringify({ category, count: FACET_COUNT }) },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+    const json = await res.json() as any;
+    const parsed = JSON.parse(json.choices[0].message.content);
+    const facets = (parsed.facets ?? parsed.subtopics ?? []) as unknown[];
+    const clean = facets.map((f) => String(f).trim()).filter((f) => f.length > 0);
+    console.log(`[orchestrator] enumerated ${clean.length} facets for category="${category}"`);
+    return clean.length ? clean : GENERIC_FACET_FALLBACK;
+  } catch (e) {
+    console.error("[orchestrator] enumerateFacets failed:", e instanceof Error ? e.message : e);
+    return GENERIC_FACET_FALLBACK;
+  }
+}
+
+/** Returns the (cached) facet list for a category — memory → Redis → LLM enumerate. */
+async function getFacets(category: string): Promise<string[]> {
+  const key = normalizeText(category);
+  const mem = facetMemoryCache.get(key);
+  if (mem) return mem;
+  try {
+    const r = await getRedis();
+    const cached = await r.get(K.facets(key));
+    if (cached) {
+      const arr = JSON.parse(cached) as string[];
+      if (Array.isArray(arr) && arr.length) { facetMemoryCache.set(key, arr); return arr; }
+    }
+  } catch (e) {
+    console.error("[orchestrator] getFacets cache read failed:", e instanceof Error ? e.message : e);
+  }
+  const facets = await enumerateFacets(category);
+  facetMemoryCache.set(key, facets);
+  try {
+    const r = await getRedis();
+    await r.set(K.facets(key), JSON.stringify(facets), { EX: FACET_CACHE_TTL_SECONDS });
+  } catch (e) {
+    console.error("[orchestrator] getFacets cache write failed:", e instanceof Error ? e.message : e);
+  }
+  return facets;
+}
+
+/** Picks a random facet + angle to steer one generation away from the obvious. */
+async function pickFacetAngle(category: string): Promise<{ facet: string; angle: string }> {
+  const facets = await getFacets(category);
+  return { facet: pickRandom(facets), angle: pickRandom(QUESTION_ANGLES) };
+}
+
 // Per-game question producers (§5.7). Exactly one producer runs per game: a
 // background loop that generates → claims → dedups → pushes ResolvedQuestions
 // into questionQueue until it holds QUESTION_BUFFER_TARGET, then idles. The
@@ -1091,12 +1213,16 @@ async function produceOneQuestion(gameId: string, config: {
   targetLanguages: string[]; timeLimitSeconds: number; llm?: LlmConfig;
 }): Promise<ResolvedQuestion | null> {
   const askedTexts = await getAskedTexts(gameId);
+  // Steer this generation into a random sub-topic + angle so the model explores
+  // the whole category instead of returning its handful of famous facts.
+  const { facet, angle } = await pickFacetAngle(config.category);
   let candidate: GenQuestion;
   try {
     candidate = await generateQuestion({
       description: config.description, category: config.category,
       difficulty: config.difficulty, targetLanguages: config.targetLanguages,
       timeLimitSeconds: config.timeLimitSeconds, avoidTexts: [...askedTexts],
+      facet, angle,
       systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
       temperature: config.llm?.temperature, maxTokens: config.llm?.maxTokens,
       gameId,
@@ -1224,11 +1350,15 @@ async function resolveUniqueQuestion(gameId: string, config: {
     // Feed the colliding text back so the next generation explicitly avoids it.
     avoidTexts.add(normalizeText(q.canonicalText));
     try {
+      // Re-roll into a FRESH facet/angle each retry — a new corner of the
+      // category is far more likely to dodge the collision than the same one.
+      const { facet, angle } = await pickFacetAngle(config.category);
       q = await generateQuestion({
         description: config.description, category: config.category,
         difficulty: config.difficulty, targetLanguages: config.targetLanguages,
         timeLimitSeconds: config.timeLimitSeconds,
         avoidTexts: [...avoidTexts],
+        facet, angle,
         systemPrompt: config.llm?.systemPrompt, model: config.llm?.model,
         // Raise diversity on each retry to escape the model's default answer.
         // The cascade temperature (if any) is the floor; retries climb above it.

@@ -304,6 +304,10 @@ REST fallback (for clients that missed GAME_RESULT):
 | `PRODUCER_BACKOFF_MS` | `750` ms | Producer backoff after a failed generation before retrying |
 | `QUESTION_POLL_MS` | `150` ms | Consumer poll interval while waiting for the producer to push a question |
 | `QUESTION_WAIT_TIMEOUT_MS` | `60 000` ms | Max time the consumer waits for a question before declaring starvation and finalizing |
+| `QUESTION_GEN_TEMPERATURE` | `0.9` | Base sampling temperature for generation (overridden by the LLM cascade temperature when set) |
+| `QUESTION_GEN_TOP_P` | `0.95` | Nucleus-sampling `top_p` applied to every generation |
+| `FACET_CACHE_TTL_SECONDS` | `604 800` (7 days) | TTL of the per-category self-expanding facet (sub-topic) list cached in Redis |
+| `FACET_COUNT` | `60` | Number of sub-topics enumerated per category |
 | `INTER_QUESTION_MIN_MS` | `3 000` ms | Lower bound of the random inter-question pause (auto mode) |
 | `INTER_QUESTION_MAX_MS` | `5 000` ms | Upper bound of the random inter-question pause (auto mode), hard-capped at 5 s; a fresh value in `[min, max]` is drawn per gap. After the final question there is **no** pause — the game finalizes immediately after the last `QUESTION_CLOSED`. |
 
@@ -390,6 +394,21 @@ to `QUESTION_DEDUP_MAX_RETRIES`. A Redis outage degrades to "no within-game
 dedup" rather than stalling the game — the platform-wide `claim_question`
 cooldown still applies.
 
+**Creative facet rotation (Phase 1):** a low temperature on a bare "category +
+difficulty" prompt makes the model collapse onto the same handful of famous
+facts, which is the real source of cross-game repeats. To force it across the
+whole breadth of a category, every `generateQuestion` call is steered into a
+randomly chosen **facet** (sub-topic) and **angle** (question style), and the
+contract explicitly forbids the single most-famous fact about that facet. Facets
+are **self-expanding**: the first generation for a category enumerates ~`FACET_COUNT`
+sub-topics via one cheap LLM call (`enumerateFacets`), cached in Redis
+(`q4w:facets:{category}`, `FACET_CACHE_TTL_SECONDS`) and in-process; a static
+fallback list is used if enumeration fails so a generator outage never blocks a
+game. Each dedup retry re-rolls into a **fresh** facet/angle (a new corner of the
+category dodges a collision far better than re-asking the same one). Sampling
+spread is raised to `QUESTION_GEN_TEMPERATURE` (`0.9`) with `QUESTION_GEN_TOP_P`
+(`0.95`); the LLM-cascade temperature, when set, still overrides the base.
+
 **Producer/consumer question buffer (§5.7):** each game runs a single
 background **producer** (`startProducer`) that keeps the per-game buffer filled
 to `QUESTION_BUFFER_TARGET` (default 2) with **fully-resolved** questions. A
@@ -399,7 +418,8 @@ moment it is enqueued — so the buffered questions are mutually distinct withou
 extra bookkeeping. The producer starts on `StartGame`/recovery, generates during
 the warmup and every answer window, idles (`PRODUCER_IDLE_MS`) while the buffer
 is full, backs off (`PRODUCER_BACKOFF_MS`) on a generation error, and stops on
-finalize. The **consumer** (`takeQuestion`, FIFO) pops the next ready question;
+finalize. The **consumer** (`takeQuestion`, LIFO — `queue.pop()`, newest produced
+question first) pops the next ready question;
 the inter-question hot path is just *pop → write Redis → broadcast*, which keeps
 the visible gap inside the 3–5 s bound. Because the consumer only needs **one**
 ready question (not a full buffer), the game starts the moment the first
