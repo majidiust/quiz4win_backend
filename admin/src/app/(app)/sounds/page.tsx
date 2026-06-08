@@ -50,7 +50,7 @@ export default async function SoundsPage() {
     .order("created_at", { ascending: false });
 
   if (error) throw error;
-  const sounds = (data ?? []) as SoundRow[];
+  const sounds = (data ?? []) as unknown as SoundRow[];
 
   const activeCnt = sounds.filter((s) => s.is_active).length;
 
