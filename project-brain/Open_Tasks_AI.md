@@ -103,6 +103,7 @@ Owner: A-01 (Augment Code Agent)
 ---
 
 ## Completed Tasks
+- [P0] [DONE] [A-01] **Fix GAME_RESULT zeroed prize payload** — `distribute_prizes` (three-bucket migration `20260607000000`) had dropped the rich return shape + `games.result_summary` persistence, so GAME_RESULT and the `/…/result` endpoints showed `totalPrize/prizePool/sharePerWinner=0` and empty winner arrays despite winners being paid. New migration `20260608100000_fix_distribute_prizes_result_payload.sql` restores the full payload + `result_summary` (keeping three-bucket earnings/score crediting) and back-fills the summary on idempotent replay. Deploy via `db-maintainer`. — 2026-06-08
 - [P2] [DONE] [A-01] **Decrease template generator interval to 10s** — Updated `deploy/template-generator/generator.ts` `INTERVAL_MS` to 10s default. — 2026-06-08
 - [P2] [DONE] [A-01] **Cap inter-question gap at 5s** — Updated `deploy/game-orchestrator/orchestrator.ts` to cap the random inter-question delay at 5000 ms (range 3000–5000 ms) instead of the previous 5000–10000 ms default. — 2026-06-08
 - [P1] [DONE] [A-01] **Pre-resolved question buffer (depth 5)** — Reworked `orchestrator.ts` so `prefillQueue` buffers fully-resolved (generated + claimed + dedup-checked) questions and the inter-question hot path only pops + broadcasts, eliminating the lag between questions. Added `QUESTION_BUFFER_TARGET` env (default 5). Removed the 3 000 ms trailing pause after the final question (finalizes immediately). Docs + changelog synced. — 2026-06-08
