@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatRelative, formatDateTime } from "@/lib/utils";
-import { SOUND_USAGES, type SoundUsage } from "@/lib/actions/sounds";
+import { SOUND_USAGES, type SoundUsage } from "@/lib/sound-usages";
 import {
   UploadSoundDialog, EditSoundDialog,
   ToggleSoundButton, DeleteSoundButton,

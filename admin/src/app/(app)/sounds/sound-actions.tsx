@@ -12,7 +12,8 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { uploadSound, updateSound, deleteSound, SOUND_USAGES, type SoundUsage } from "@/lib/actions/sounds";
+import { uploadSound, updateSound, deleteSound } from "@/lib/actions/sounds";
+import { SOUND_USAGES, type SoundUsage } from "@/lib/sound-usages";
 
 /* ── Upload Dialog ─────────────────────────────────────────────────── */
 
