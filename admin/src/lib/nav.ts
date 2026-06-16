@@ -65,6 +65,7 @@ export const navSections: NavSection[] = [
       { title: "LLM Templates", href: "/llm-templates", icon: BrainCircuit, roles: ["super_admin", "admin"] },
       { title: "Live Shows", href: "/shows", icon: Radio, roles: ["super_admin", "admin", "moderator"] },
       { title: "Host Applications", href: "/host-applications", icon: Star, roles: ["super_admin", "admin", "moderator"] },
+      { title: "Hosts",              href: "/hosts",             icon: UserCog, roles: ["super_admin", "admin", "moderator", "finance"] },
       { title: "Early Birds", href: "/early-birds", icon: Smartphone, roles: ["super_admin", "admin", "moderator"] },
       { title: "LiveKit Rooms", href: "/livekit", icon: Video, roles: ["super_admin", "admin"] },
       { title: "Questions", href: "/questions", icon: BookOpen, roles: ["super_admin", "admin", "moderator"] },

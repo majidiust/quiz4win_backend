@@ -1,0 +1,360 @@
+/**
+ * Admin Hosts Edge Function — Quiz4Win
+ *
+ * All routes require an authenticated admin (validateAdminAccess: super_admin /
+ * admin / moderator; finance role granted to earnings + payment-method actions).
+ *
+ * Routes (under /admin/hosts/*):
+ *   GET    /admin/hosts                              — list hosts (filterable)
+ *   GET    /admin/hosts/:id                          — host detail + counts
+ *   POST   /admin/hosts/:id/approve                  — application_status → approved
+ *   POST   /admin/hosts/:id/reject                   — application_status → rejected
+ *   POST   /admin/hosts/:id/suspend                  — application_status → suspended
+ *   POST   /admin/hosts/:id/reactivate               — suspended → approved
+ *   GET    /admin/hosts/:id/files                    — list files
+ *   POST   /admin/hosts/files/:fileId/approve        — approve file
+ *   POST   /admin/hosts/files/:fileId/reject         — reject file
+ *   GET    /admin/hosts/requests                     — list game requests
+ *   POST   /admin/hosts/requests/:id/approve         — approve (INV-17, assigns host)
+ *   POST   /admin/hosts/requests/:id/reject          — reject
+ *   GET    /admin/hosts/invitations                  — list invitations
+ *   POST   /admin/hosts/invitations                  — send invitation
+ *   POST   /admin/hosts/invitations/:id/cancel       — cancel
+ *   GET    /admin/hosts/earnings                     — list earnings
+ *   POST   /admin/hosts/earnings                     — create pending earning
+ *   POST   /admin/hosts/earnings/:id/approve         — INV-16 atomic approve
+ *   POST   /admin/hosts/earnings/:id/cancel          — cancel pending
+ *   GET    /admin/hosts/payment-methods              — list payment methods
+ *   POST   /admin/hosts/payment-methods/:id/verify   — mark active
+ *   POST   /admin/hosts/payment-methods/:id/reject   — mark rejected
+ */
+
+import { handleCors } from "../_shared/cors.ts";
+import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
+import { validateAdminAccess } from "../_shared/auth.ts";
+import { getAdminClient } from "../_shared/supabase.ts";
+
+const SUB_RESOURCES = new Set(["files", "requests", "invitations", "earnings", "payment-methods"]);
+const APP_STATUSES = new Set(["pending", "approved", "rejected", "suspended"]);
+const nowIso = () => new Date().toISOString();
+
+// deno-lint-ignore no-explicit-any
+type DB = any;
+
+async function audit(db: DB, actorId: string, action: string, targetType: string, targetId: string, details?: unknown) {
+  try {
+    await db.from("admin_audit_log").insert({
+      admin_id: actorId, action, target_type: targetType, target_id: targetId,
+      details: details ?? null, metadata: details ?? null, created_at: nowIso(),
+    });
+  } catch (_) { /* audit best-effort */ }
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return handleCors(req);
+
+  const auth = await validateAdminAccess(req, ["super_admin", "admin", "moderator", "finance"]);
+  if (!auth.access) return errorResponse(auth.error ?? "Forbidden", auth.status);
+  const actorId = auth.access.actorId;
+
+  const url = new URL(req.url);
+  const parts = url.pathname.replace(/^\/admin\/hosts\/?/, "").split("/").filter(Boolean);
+  const db = getAdminClient();
+
+  try {
+    // ── List/detail of host accounts ─────────────────────────────────────────
+    if (parts.length === 0 && req.method === "GET") {
+      const status = url.searchParams.get("application_status");
+      const search = url.searchParams.get("q");
+      const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1"));
+      const limit = Math.min(100, parseInt(url.searchParams.get("limit") ?? "25"));
+      let q = db.from("show_hosts").select("*", { count: "exact" })
+        .order("created_at", { ascending: false }).range((page - 1) * limit, page * limit - 1);
+      if (status && APP_STATUSES.has(status)) q = q.eq("application_status", status);
+      if (search) q = q.ilike("name", `%${search}%`);
+      const { data, count, error } = await q;
+      if (error) return errorResponse("failed_to_list_hosts", 500);
+      return successResponse({ hosts: data ?? [], pagination: { page, limit, total: count ?? 0 } });
+    }
+
+    // ── Sub-resources (files/requests/invitations/earnings/payment-methods) ──
+    if (parts.length > 0 && SUB_RESOURCES.has(parts[0])) {
+      return await handleSubResource(req, parts, actorId, db);
+    }
+
+    // ── Host-by-id routes ────────────────────────────────────────────────────
+    const hostId = parts[0];
+    const action = parts[1];
+
+    if (parts.length === 1 && req.method === "GET") {
+      const { data: host } = await db.from("show_hosts").select("*").eq("id", hostId).maybeSingle();
+      if (!host) return errorResponse("host_not_found", 404);
+      const [reqCount, invCount, earnSum, fileCount] = await Promise.all([
+        db.from("host_game_requests").select("id", { count: "exact", head: true }).eq("host_id", hostId),
+        db.from("host_invitations").select("id", { count: "exact", head: true }).eq("host_id", hostId),
+        db.from("host_earnings").select("amount, status").eq("host_id", hostId),
+        db.from("host_uploaded_files").select("id", { count: "exact", head: true }).eq("host_id", hostId),
+      ]);
+      const totals = (earnSum.data ?? []).reduce((a: Record<string, number>, r: { status: string; amount: string | number }) => {
+        a[r.status] = (a[r.status] ?? 0) + Number(r.amount ?? 0);
+        return a;
+      }, {});
+      return successResponse({
+        host, counts: {
+          requests: reqCount.count ?? 0, invitations: invCount.count ?? 0,
+          files: fileCount.count ?? 0,
+        },
+        earnings_totals: totals,
+      });
+    }
+
+    if (parts.length === 2 && req.method === "POST" &&
+        ["approve", "reject", "suspend", "reactivate"].includes(action)) {
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
+      const patch: Record<string, unknown> = { updated_at: nowIso() };
+      if (action === "approve") {
+        patch.application_status = "approved"; patch.approved_at = nowIso();
+        patch.approved_by = actorId; patch.status = "active";
+        patch.rejection_reason = null; patch.suspension_reason = null;
+      } else if (action === "reject") {
+        patch.application_status = "rejected"; patch.rejected_at = nowIso();
+        patch.rejection_reason = reason; patch.status = "inactive";
+      } else if (action === "suspend") {
+        patch.application_status = "suspended"; patch.suspended_at = nowIso();
+        patch.suspension_reason = reason; patch.status = "inactive";
+      } else {
+        patch.application_status = "approved"; patch.suspended_at = null;
+        patch.suspension_reason = null; patch.status = "active";
+      }
+      const { data, error } = await db.from("show_hosts").update(patch).eq("id", hostId).select("*").single();
+      if (error || !data) return errorResponse("host_not_found", 404);
+      await audit(db, actorId, `host_${action}`, "show_host", hostId, { reason });
+      return successResponse({ host: data });
+    }
+
+    if (parts.length === 2 && parts[1] === "files" && req.method === "GET") {
+      const { data, error } = await db.from("host_uploaded_files").select("*")
+        .eq("host_id", hostId).order("created_at", { ascending: false });
+      if (error) return errorResponse("failed_to_list_files", 500);
+      return successResponse({ files: data ?? [] });
+    }
+
+    return errorResponse("not_found", 404);
+  } catch (err) {
+    console.error("[admin-hosts] unhandled:", err);
+    return errorResponse(sanitizeError(err), 500);
+  }
+});
+
+async function handleSubResource(req: Request, parts: string[], actorId: string, db: DB): Promise<Response> {
+  const resource = parts[0];
+  const method = req.method;
+
+  // ── /admin/hosts/files/:id/(approve|reject) ──────────────────────────────
+  if (resource === "files" && parts.length === 3 && method === "POST") {
+    const fileId = parts[1]; const act = parts[2];
+    if (!["approve", "reject"].includes(act)) return errorResponse("invalid_action", 400);
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
+    const patch: Record<string, unknown> = {
+      status: act === "approve" ? "approved" : "rejected",
+      reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso(),
+      rejection_reason: act === "reject" ? reason : null,
+    };
+    const { data, error } = await db.from("host_uploaded_files").update(patch).eq("id", fileId).select("*").single();
+    if (error || !data) return errorResponse("file_not_found", 404);
+    await audit(db, actorId, `host_file_${act}`, "host_uploaded_file", fileId, { reason });
+    return successResponse({ file: data });
+  }
+
+  // ── /admin/hosts/requests ────────────────────────────────────────────────
+  if (resource === "requests") {
+    if (parts.length === 1 && method === "GET") {
+      const status = new URL(req.url).searchParams.get("status");
+      let q = db.from("host_game_requests")
+        .select("*, games(id, title, scheduled_at, status), show_hosts!host_id(id, name)")
+        .order("created_at", { ascending: false });
+      if (status) q = q.eq("status", status);
+      const { data, error } = await q;
+      if (error) return errorResponse("failed_to_list_requests", 500);
+      return successResponse({ requests: data ?? [] });
+    }
+    if (parts.length === 3 && method === "POST") {
+      const reqId = parts[1]; const act = parts[2];
+      if (!["approve", "reject"].includes(act)) return errorResponse("invalid_action", 400);
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const note = typeof body.admin_note === "string" ? body.admin_note.slice(0, 500) : null;
+      const { data: r } = await db.from("host_game_requests").select("*").eq("id", reqId).maybeSingle();
+      if (!r || r.status !== "pending") return errorResponse("request_not_actionable", 409);
+      if (act === "approve") {
+        const { data: conflict } = await db.rpc("check_host_schedule_conflict",
+          { p_host_id: r.host_id, p_game_id: r.game_id });
+        if (conflict === true) return errorResponse("schedule_conflict", 409);
+        await db.from("host_game_requests").update({ status: "approved", admin_note: note,
+          reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso() }).eq("id", reqId);
+        await db.from("games").update({ host_id: r.host_id, updated_at: nowIso() }).eq("id", r.game_id);
+      } else {
+        await db.from("host_game_requests").update({ status: "rejected", admin_note: note,
+          reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso() }).eq("id", reqId);
+      }
+      await audit(db, actorId, `host_request_${act}`, "host_game_request", reqId, { admin_note: note });
+      return successResponse({ ok: true, status: act === "approve" ? "approved" : "rejected" });
+    }
+  }
+
+  // ── /admin/hosts/invitations ─────────────────────────────────────────────
+  if (resource === "invitations") {
+    if (parts.length === 1 && method === "GET") {
+      const status = new URL(req.url).searchParams.get("status");
+      let q = db.from("host_invitations")
+        .select("*, games(id, title, scheduled_at, status), show_hosts!host_id(id, name)")
+        .order("created_at", { ascending: false });
+      if (status) q = q.eq("status", status);
+      const { data, error } = await q;
+      if (error) return errorResponse("failed_to_list_invitations", 500);
+      return successResponse({ invitations: data ?? [] });
+    }
+    if (parts.length === 1 && method === "POST") {
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const hostId = body.host_id as string; const gameId = body.game_id as string;
+      const message = typeof body.message === "string" ? body.message.slice(0, 1000) : null;
+      const expiresAt = typeof body.expires_at === "string" ? body.expires_at : null;
+      if (!hostId || !gameId) return errorResponse("host_id_and_game_id_required", 400);
+      const { data: h } = await db.from("show_hosts").select("application_status").eq("id", hostId).maybeSingle();
+      if (!h) return errorResponse("host_not_found", 404);
+      if (h.application_status !== "approved") return errorResponse("host_not_approved", 409);
+      const { data: g } = await db.from("games").select("id, mode, status, host_id").eq("id", gameId).maybeSingle();
+      if (!g) return errorResponse("game_not_found", 404);
+      if (g.host_id) return errorResponse("game_already_has_host", 409);
+      const { data, error } = await db.from("host_invitations").insert({
+        host_id: hostId, game_id: gameId, invited_by: actorId, status: "sent",
+        admin_message: message, expires_at: expiresAt,
+        created_at: nowIso(), updated_at: nowIso(),
+      }).select("*").single();
+      if (error) {
+        if ((error.message ?? "").toLowerCase().includes("unique")) return errorResponse("already_invited", 409);
+        return errorResponse(sanitizeError(error), 400);
+      }
+      await audit(db, actorId, "host_invitation_sent", "host_invitation", data.id, { host_id: hostId, game_id: gameId });
+      return successResponse({ invitation: data }, 201);
+    }
+    if (parts.length === 3 && parts[2] === "cancel" && method === "POST") {
+      const invId = parts[1];
+      const { data: inv } = await db.from("host_invitations").select("status").eq("id", invId).maybeSingle();
+      if (!inv) return errorResponse("invitation_not_found", 404);
+      if (inv.status !== "sent") return errorResponse("only_sent_can_be_cancelled", 409);
+      await db.from("host_invitations").update({ status: "cancelled", updated_at: nowIso() }).eq("id", invId);
+      await audit(db, actorId, "host_invitation_cancelled", "host_invitation", invId, null);
+      return successResponse({ ok: true });
+    }
+  }
+
+  // ── /admin/hosts/earnings ────────────────────────────────────────────────
+  if (resource === "earnings") {
+    if (parts.length === 1 && method === "GET") {
+      const status = new URL(req.url).searchParams.get("status");
+      const hostId = new URL(req.url).searchParams.get("host_id");
+      let q = db.from("host_earnings")
+        .select("*, games(id, title, ended_at), show_hosts!host_id(id, name)")
+        .order("created_at", { ascending: false });
+      if (status) q = q.eq("status", status);
+      if (hostId) q = q.eq("host_id", hostId);
+      const { data, error } = await q;
+      if (error) return errorResponse("failed_to_list_earnings", 500);
+      return successResponse({ earnings: data ?? [] });
+    }
+    if (parts.length === 1 && method === "POST") {
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const hostId = body.host_id as string; const gameId = body.game_id as string;
+      const amount = Number(body.amount); const note = typeof body.note === "string" ? body.note.slice(0, 500) : null;
+      if (!hostId || !gameId || !Number.isFinite(amount) || amount < 0) return errorResponse("invalid_input", 400);
+      const { data, error } = await db.from("host_earnings").insert({
+        host_id: hostId, game_id: gameId, amount, status: "pending", note,
+        created_at: nowIso(), updated_at: nowIso(),
+      }).select("*").single();
+      if (error) {
+        if ((error.message ?? "").toLowerCase().includes("unique")) return errorResponse("earning_already_exists_for_game", 409);
+        return errorResponse(sanitizeError(error), 400);
+      }
+      await audit(db, actorId, "host_earning_created", "host_earning", data.id, { amount });
+      return successResponse({ earning: data }, 201);
+    }
+    if (parts.length === 3 && parts[2] === "approve" && method === "POST") {
+      // INV-16 atomic approve: insert transaction(type=host_earning) + credit
+      // profiles.wallet_balance + set host_earnings.transaction_id.
+      const id = parts[1];
+      const { data: e } = await db.from("host_earnings").select("*").eq("id", id).maybeSingle();
+      if (!e) return errorResponse("earning_not_found", 404);
+      if (e.status !== "pending") return errorResponse("only_pending_can_be_approved", 409);
+      const { data: h } = await db.from("show_hosts").select("auth_user_id, total_earnings").eq("id", e.host_id).maybeSingle();
+      if (!h || !h.auth_user_id) return errorResponse("host_has_no_auth_user", 409);
+      const { data: tx, error: txErr } = await db.from("transactions").insert({
+        user_id: h.auth_user_id, type: "host_earning", amount: e.amount, status: "completed",
+        description: `Host earning — game ${e.game_id}`, game_id: e.game_id, admin_id: actorId,
+        created_at: nowIso(),
+      }).select("id").single();
+      if (txErr || !tx) return errorResponse(sanitizeError(txErr ?? new Error("tx_insert_failed")), 500);
+      const { error: walletErr } = await db.rpc("increment_wallet_balance",
+        { p_user_id: h.auth_user_id, p_amount: e.amount });
+      if (walletErr) {
+        // Best-effort: log but DO NOT delete the transaction (R-05). Manual admin reconciliation needed.
+        console.error("[admin-hosts] wallet credit failed after tx insert:", walletErr.message);
+      }
+      await db.from("show_hosts").update({
+        total_earnings: Number(h.total_earnings ?? 0) + Number(e.amount), updated_at: nowIso(),
+      }).eq("id", e.host_id);
+      const { data: updated } = await db.from("host_earnings").update({
+        status: "approved", transaction_id: tx.id, approved_by: actorId,
+        approved_at: nowIso(), updated_at: nowIso(),
+      }).eq("id", id).select("*").single();
+      await audit(db, actorId, "host_earning_approved", "host_earning", id, { transaction_id: tx.id });
+      return successResponse({ earning: updated, transaction_id: tx.id });
+    }
+    if (parts.length === 3 && parts[2] === "cancel" && method === "POST") {
+      const id = parts[1];
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
+      const { data: e } = await db.from("host_earnings").select("status").eq("id", id).maybeSingle();
+      if (!e) return errorResponse("earning_not_found", 404);
+      if (e.status !== "pending") return errorResponse("only_pending_can_be_cancelled", 409);
+      await db.from("host_earnings").update({
+        status: "cancelled", cancelled_reason: reason, updated_at: nowIso(),
+      }).eq("id", id);
+      await audit(db, actorId, "host_earning_cancelled", "host_earning", id, { reason });
+      return successResponse({ ok: true });
+    }
+  }
+
+  // ── /admin/hosts/payment-methods ─────────────────────────────────────────
+  if (resource === "payment-methods") {
+    if (parts.length === 1 && method === "GET") {
+      const hostId = new URL(req.url).searchParams.get("host_id");
+      let q = db.from("host_payment_methods").select("*, show_hosts!host_id(id, name)")
+        .order("created_at", { ascending: false });
+      if (hostId) q = q.eq("host_id", hostId);
+      const { data, error } = await q;
+      if (error) return errorResponse("failed_to_list_methods", 500);
+      return successResponse({ methods: data ?? [] });
+    }
+    if (parts.length === 3 && method === "POST" && ["verify", "reject"].includes(parts[2])) {
+      const id = parts[1]; const act = parts[2];
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
+      const patch: Record<string, unknown> = {
+        status: act === "verify" ? "active" : "rejected",
+        verified_at: act === "verify" ? nowIso() : null,
+        verified_by: actorId, rejected_reason: act === "reject" ? reason : null,
+        updated_at: nowIso(),
+      };
+      const { data, error } = await db.from("host_payment_methods").update(patch).eq("id", id).select("*").single();
+      if (error || !data) return errorResponse("method_not_found", 404);
+      await audit(db, actorId, `host_payment_method_${act}`, "host_payment_method", id, { reason });
+      return successResponse({ method: data });
+    }
+  }
+
+  return errorResponse("not_found", 404);
+}
+
+export {};

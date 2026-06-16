@@ -6,6 +6,8 @@
 #                                           Link manifests + reset-password
 #                                           web fallback)
 #   api.quiz4win.com   → 127.0.0.1:5802   (api container, Deno edge functions)
+#   host.quiz4win.com  → 127.0.0.1:5803   (host container, Next.js — host
+#                                           dashboard mobile-first PWA)
 #
 # Variables are read from the project-root .env file (see .env.docker.example).
 
@@ -308,6 +310,31 @@ services:
       # the quiz4win.debug.logs RabbitMQ queue (run deploy/debug-consumer to read).
       DEBUG_LOG_MQ: ${DEBUG_LOG_MQ:-false}
       DEBUG_LOG_QUEUE: ${DEBUG_LOG_QUEUE:-quiz4win.debug.logs}
+    networks:
+      - quiz4win
+
+  # ─── Host Dashboard (host.quiz4win.com — Next.js mobile-first PWA) ──────────
+  host:
+    build:
+      context: ./host-app
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY}}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.quiz4win.com}
+        NEXT_PUBLIC_HOST_URL: ${NEXT_PUBLIC_HOST_URL:-https://host.quiz4win.com}
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_HOST_APP_NAME:-Quiz4Win Host}
+    image: quiz4win-host:latest
+    container_name: quiz4win-host
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5803:3000"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-${NEXT_PUBLIC_SUPABASE_ANON_KEY}}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.quiz4win.com}
+      NEXT_PUBLIC_HOST_URL: ${NEXT_PUBLIC_HOST_URL:-https://host.quiz4win.com}
     networks:
       - quiz4win
 
