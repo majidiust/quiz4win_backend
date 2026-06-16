@@ -1,15 +1,27 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { authFetch } from "@/lib/auth-api";
 
+/**
+ * Calls POST /auth/signup on api.quiz4win.com (custom branded route — the
+ * supabase.auth.signUp SDK method routes to /auth/v1/signup which is NOT
+ * proxied in production per R-11.3). The backend creates the user via
+ * admin.auth.admin.generateLink(type='signup') and dispatches a branded
+ * Brevo email containing the action link + 6-digit OTP. No session is
+ * returned; the user must verify their email before signing in.
+ */
 export async function signupAction(formData: FormData) {
+  const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
 
+  if (!name || name.length < 2) {
+    redirect(`/signup?error=${encodeURIComponent("Name is required")}&email=${encodeURIComponent(email)}`);
+  }
   if (!email || !password) {
-    redirect(`/signup?error=${encodeURIComponent("Email and password required")}`);
+    redirect(`/signup?error=${encodeURIComponent("Email and password required")}&email=${encodeURIComponent(email)}`);
   }
   if (password.length < 8) {
     redirect(`/signup?error=${encodeURIComponent("Password must be at least 8 characters")}&email=${encodeURIComponent(email)}`);
@@ -18,19 +30,17 @@ export async function signupAction(formData: FormData) {
     redirect(`/signup?error=${encodeURIComponent("Passwords do not match")}&email=${encodeURIComponent(email)}`);
   }
 
-  const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) {
-    const msg = /already registered/i.test(error.message)
-      ? "An account with this email already exists"
-      : error.message || "Sign-up failed";
+  const r = await authFetch<{ user: { id?: string } | null; requires_confirmation?: boolean }>(
+    "/auth/signup",
+    { name, email, password },
+  );
+  if (!r.ok) {
+    const map: Record<string, string> = {
+      email_taken: "An account with this email already exists",
+      invalid_referral: "Referral code is invalid",
+    };
+    const msg = map[r.error] ?? (r.error || "Sign-up failed");
     redirect(`/signup?error=${encodeURIComponent(msg)}&email=${encodeURIComponent(email)}`);
   }
-
-  // If the project requires email confirmation, no session yet — go to OTP verify.
-  // If session was issued immediately (confirmations disabled), go to onboarding.
-  if (!data.session) {
-    redirect(`/verify-otp?email=${encodeURIComponent(email)}`);
-  }
-  redirect("/onboarding/apply");
+  redirect(`/verify-otp?email=${encodeURIComponent(email)}`);
 }

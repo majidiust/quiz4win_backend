@@ -8,7 +8,7 @@ export const metadata = { title: "Sign up — Quiz4Win Host" };
 
 export default async function SignupPage({
   searchParams,
-}: { searchParams: Promise<{ error?: string; email?: string }> }) {
+}: { searchParams: Promise<{ error?: string; email?: string; name?: string }> }) {
   const sp = await searchParams;
   return (
     <Card className="p-6">
@@ -24,6 +24,8 @@ export default async function SignupPage({
       ) : null}
 
       <form action={signupAction} className="mt-6 flex flex-col gap-3">
+        <Input label="Full name" type="text" name="name" autoComplete="name" defaultValue={sp.name ?? ""}
+          placeholder="Your name" required minLength={2} />
         <Input label="Email" type="email" name="email" autoComplete="email" defaultValue={sp.email ?? ""}
           placeholder="you@example.com" required />
         <Input label="Password" type="password" name="password" autoComplete="new-password"

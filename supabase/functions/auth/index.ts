@@ -233,13 +233,21 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── POST /auth/verify-otp ──────────────────────────────────────────────
+    // Accepts:
+    //   type='recovery' — password-reset OTP from /auth/forgot-password
+    //   type='signup' (or 'email') — email-confirmation OTP from /auth/signup
+    //                                  (host-app sign-up flow uses this)
     if (path === "verify-otp" && req.method === "POST") {
       const { email, token, type } = await req.json();
-      if (!email || !token || type !== "recovery") {
-        return errorResponse("email, token, and type=recovery are required", 400);
+      const normType: "recovery" | "signup" | null =
+        type === "recovery" ? "recovery"
+        : (type === "signup" || type === "email") ? "signup"
+        : null;
+      if (!email || !token || !normType) {
+        return errorResponse("email, token, and type in (recovery|signup|email) are required", 400);
       }
       const supabase = getPublicClient();
-      const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "recovery" });
+      const { data, error } = await supabase.auth.verifyOtp({ email, token, type: normType });
       if (error) {
         const code = error.message.toLowerCase().includes("expired") ? "otp_expired" : "otp_invalid";
         return errorResponse(code, error.message.includes("expired") ? 401 : 400);
@@ -247,7 +255,42 @@ Deno.serve(async (req: Request) => {
       return successResponse({
         access_token: data.session?.access_token,
         refresh_token: data.session?.refresh_token,
+        user: data.user,
       });
+    }
+
+    // ── POST /auth/resend-confirmation ─────────────────────────────────────
+    // Re-mints the signup confirmation link via the admin client and re-sends
+    // the branded email through Brevo. Always returns 200 to avoid leaking
+    // account existence (R-01).
+    if (path === "resend-confirmation" && req.method === "POST") {
+      const { email } = await req.json();
+      if (!email) return errorResponse("email is required", 400);
+      const redirectTo = (Deno.env.get("EMAIL_CONFIRM_REDIRECT_URL") ??
+        ((Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "") + "/auth/callback"));
+      (async () => {
+        try {
+          const admin = getAdminClient();
+          const { data, error } = await admin.auth.admin.generateLink({
+            type: "signup", email, options: { redirectTo },
+          });
+          if (error || !data) {
+            console.warn(`[auth] resend-confirmation: generateLink failed for ${email}: ${error?.message ?? "no data"}`);
+            return;
+          }
+          const actionUrl = (data.properties as { action_link?: string } | null)?.action_link;
+          const otp = (data.properties as { email_otp?: string } | null)?.email_otp;
+          if (data.user?.email && actionUrl) {
+            const tpl = confirmEmailTemplate({ name: data.user.user_metadata?.full_name ?? "", actionUrl, otp });
+            sendEmail({ to: { email: data.user.email, name: data.user.user_metadata?.full_name ?? "" }, ...tpl }).catch((err) =>
+              console.warn("[auth] resend-confirmation email failed:", err),
+            );
+          }
+        } catch (e) {
+          console.warn(`[auth] resend-confirmation threw: ${(e as Error).message}`);
+        }
+      })();
+      return successResponse({ message: "If the email exists, a confirmation has been re-sent." });
     }
 
     // ── POST /auth/update-password ─────────────────────────────────────────

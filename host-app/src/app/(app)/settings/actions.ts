@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
 import { api } from "@/lib/api";
 
 const LANG_OPTIONS = ["en", "ar", "fa", "tr", "es", "pt", "fr", "de"];
@@ -23,7 +23,18 @@ export async function updateProfileAction(formData: FormData) {
 }
 
 export async function signOutAction() {
-  const supabase = await createSupabaseServerClient();
-  await supabase.auth.signOut();
+  // Best-effort: revoke the server-side refresh token via the custom
+  // branded route (R-11.3). Failures are swallowed — local sign-out below
+  // always succeeds regardless of network state.
+  try { await api("/auth/signout", { method: "POST" }); } catch { /* ignore */ }
+
+  // Local sign-out: drop every cookie whose name starts with sb-...-auth-token
+  // (including chunked variants .0/.1/...).
+  const store = await cookies();
+  for (const c of store.getAll()) {
+    if (/^sb-[^.]+-auth-token(\.\d+)?$/.test(c.name)) {
+      store.delete(c.name);
+    }
+  }
   redirect("/signin");
 }
