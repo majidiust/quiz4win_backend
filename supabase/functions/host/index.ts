@@ -37,9 +37,7 @@ import { errorResponse, successResponse, sanitizeError } from "../_shared/errors
 import { validateJWT } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
 import { uploadObject } from "../_shared/s3.ts";
-
-const LIVEKIT_API_KEY = Deno.env.get("LIVEKIT_API_KEY") ?? "";
-const LIVEKIT_API_SECRET = Deno.env.get("LIVEKIT_API_SECRET") ?? "";
+import { signAccessToken } from "../_shared/livekit.ts";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 const ALLOWED_FILE_MIME = new Set([
@@ -252,28 +250,8 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
   return await dispatchHostExtra(req, parts, host, db);
 }
 
-// ─── LiveKit access-token mint (HS256 JWT, no SDK) ─────────────────────────
-async function mintLiveKitToken(opts: { identity: string; name?: string; room: string; ttlSeconds?: number }): Promise<string> {
-  if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) throw new Error("livekit_not_configured");
-  const now = Math.floor(Date.now() / 1000);
-  const exp = now + (opts.ttlSeconds ?? 6 * 60 * 60);
-  const header = { alg: "HS256", typ: "JWT" };
-  const payload = {
-    iss: LIVEKIT_API_KEY,
-    sub: opts.identity,
-    nbf: now, iat: now, exp,
-    name: opts.name ?? opts.identity,
-    video: { room: opts.room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true },
-  };
-  const b64u = (s: string) => btoa(s).replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const enc = (o: unknown) => b64u(JSON.stringify(o));
-  const signingInput = `${enc(header)}.${enc(payload)}`;
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(LIVEKIT_API_SECRET),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signingInput)));
-  const sigB64 = btoa(String.fromCharCode(...sig)).replace(/=+$/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-  return `${signingInput}.${sigB64}`;
-}
+// LiveKit access-token mint is delegated to _shared/livekit.ts signAccessToken.
+// We pass canPublish + canPublishData = true for hosts (they actively broadcast).
 
 async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: DB): Promise<Response> {
   const method = req.method;
@@ -347,9 +325,14 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
     if (parts.length === 4 && parts[3] === "live" && method === "POST") {
       if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
       const room = g.livekit_room_name || `game-${gameId}`;
-      let token: string;
-      try { token = await mintLiveKitToken({ identity: `host-${host.id}`, name: (host as { name?: string }).name ?? "Host", room }); }
-      catch { return errorResponse("livekit_not_configured", 503); }
+      if (!Deno.env.get("LIVEKIT_API_KEY") || !Deno.env.get("LIVEKIT_API_SECRET")) {
+        return errorResponse("livekit_not_configured", 503);
+      }
+      const token = await signAccessToken(
+        `host-${host.id}`,
+        room,
+        { roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true },
+      );
       await db.from("host_stream_sessions").update({
         status: "live", started_at: nowIso(), livekit_token_minted_at: nowIso(), updated_at: nowIso(),
       }).eq("host_id", host.id).eq("game_id", gameId);

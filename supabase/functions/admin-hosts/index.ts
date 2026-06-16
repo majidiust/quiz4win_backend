@@ -33,6 +33,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateAdminAccess } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
+import { notifyHost, formatAmount } from "../_shared/host_notifications.ts";
 
 const SUB_RESOURCES = new Set(["files", "requests", "invitations", "earnings", "payment-methods"]);
 const APP_STATUSES = new Set(["pending", "approved", "rejected", "suspended"]);
@@ -130,6 +131,17 @@ Deno.serve(async (req: Request) => {
       const { data, error } = await db.from("show_hosts").update(patch).eq("id", hostId).select("*").single();
       if (error || !data) return errorResponse("host_not_found", 404);
       await audit(db, actorId, `host_${action}`, "show_host", hostId, { reason });
+
+      const NOTIFY_COPY: Record<string, { title: string; body: string }> = {
+        approve:    { title: "Application approved",  body: "Your host application has been approved. You can now request games and accept invitations." },
+        reject:     { title: "Application rejected",  body: reason ? `Your application was rejected: ${reason}` : "Your application was rejected. You may re-apply." },
+        suspend:    { title: "Account suspended",     body: reason ? `Your host account has been suspended: ${reason}` : "Your host account has been suspended." },
+        reactivate: { title: "Account reactivated",   body: "Your host account is active again. Welcome back!" },
+      };
+      const copy = NOTIFY_COPY[action];
+      if (copy) {
+        void notifyHost(db, { hostId, type: "host_application", title: copy.title, body: copy.body, data: { action, reason } });
+      }
       return successResponse({ host: data });
     }
 
@@ -165,6 +177,17 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
     const { data, error } = await db.from("host_uploaded_files").update(patch).eq("id", fileId).select("*").single();
     if (error || !data) return errorResponse("file_not_found", 404);
     await audit(db, actorId, `host_file_${act}`, "host_uploaded_file", fileId, { reason });
+    const fr = data as { host_id: string; file_type: string };
+    void notifyHost(db, {
+      hostId: fr.host_id,
+      type: "host_file",
+      title: act === "approve" ? "File approved" : "File rejected",
+      body: act === "approve"
+        ? `Your ${fr.file_type.replaceAll("_", " ")} file has been approved.`
+        : reason ? `Your ${fr.file_type.replaceAll("_", " ")} file was rejected: ${reason}`
+                 : `Your ${fr.file_type.replaceAll("_", " ")} file was rejected.`,
+      data: { file_id: fileId, file_type: fr.file_type, action: act, reason },
+    });
     return successResponse({ file: data });
   }
 
@@ -199,6 +222,18 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
           reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso() }).eq("id", reqId);
       }
       await audit(db, actorId, `host_request_${act}`, "host_game_request", reqId, { admin_note: note });
+      const { data: game } = await db.from("games").select("title").eq("id", r.game_id).maybeSingle();
+      const gameTitle = (game as { title?: string } | null)?.title ?? "the game";
+      void notifyHost(db, {
+        hostId: r.host_id,
+        type: "host_request",
+        title: act === "approve" ? "Request approved" : "Request rejected",
+        body: act === "approve"
+          ? `Your request to host "${gameTitle}" has been approved. The game is now assigned to you.`
+          : note ? `Your request to host "${gameTitle}" was rejected: ${note}`
+                 : `Your request to host "${gameTitle}" was rejected.`,
+        data: { request_id: reqId, game_id: r.game_id, action: act, admin_note: note },
+      });
       return successResponse({ ok: true, status: act === "approve" ? "approved" : "rejected" });
     }
   }
@@ -237,15 +272,31 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
         return errorResponse(sanitizeError(error), 400);
       }
       await audit(db, actorId, "host_invitation_sent", "host_invitation", data.id, { host_id: hostId, game_id: gameId });
+      const { data: gm } = await db.from("games").select("title, scheduled_at").eq("id", gameId).maybeSingle();
+      const gTitle = (gm as { title?: string } | null)?.title ?? "a game";
+      void notifyHost(db, {
+        hostId,
+        type: "host_invite",
+        title: "New invitation",
+        body: `You've been invited to host "${gTitle}". Open invitations to accept or reject.`,
+        data: { invitation_id: data.id, game_id: gameId, scheduled_at: (gm as { scheduled_at?: string } | null)?.scheduled_at ?? null, message },
+      });
       return successResponse({ invitation: data }, 201);
     }
     if (parts.length === 3 && parts[2] === "cancel" && method === "POST") {
       const invId = parts[1];
-      const { data: inv } = await db.from("host_invitations").select("status").eq("id", invId).maybeSingle();
+      const { data: inv } = await db.from("host_invitations").select("status, host_id, game_id").eq("id", invId).maybeSingle();
       if (!inv) return errorResponse("invitation_not_found", 404);
       if (inv.status !== "sent") return errorResponse("only_sent_can_be_cancelled", 409);
       await db.from("host_invitations").update({ status: "cancelled", updated_at: nowIso() }).eq("id", invId);
       await audit(db, actorId, "host_invitation_cancelled", "host_invitation", invId, null);
+      void notifyHost(db, {
+        hostId: inv.host_id,
+        type: "host_invite",
+        title: "Invitation cancelled",
+        body: "An admin cancelled an invitation that was waiting for your response.",
+        data: { invitation_id: invId, game_id: inv.game_id, action: "cancelled" },
+      });
       return successResponse({ ok: true });
     }
   }
@@ -309,19 +360,35 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
         approved_at: nowIso(), updated_at: nowIso(),
       }).eq("id", id).select("*").single();
       await audit(db, actorId, "host_earning_approved", "host_earning", id, { transaction_id: tx.id });
+      void notifyHost(db, {
+        hostId: e.host_id,
+        type: "host_earning",
+        title: "Earning approved",
+        body: `Your earning of ${formatAmount(e.amount, e.currency ?? "USD")} has been approved and added to your wallet.`,
+        data: { earning_id: id, transaction_id: tx.id, amount: e.amount, currency: e.currency ?? "USD", game_id: e.game_id },
+      });
       return successResponse({ earning: updated, transaction_id: tx.id });
     }
     if (parts.length === 3 && parts[2] === "cancel" && method === "POST") {
       const id = parts[1];
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
       const reason = typeof body.reason === "string" ? body.reason.slice(0, 500) : null;
-      const { data: e } = await db.from("host_earnings").select("status").eq("id", id).maybeSingle();
+      const { data: e } = await db.from("host_earnings").select("status, host_id, amount, currency").eq("id", id).maybeSingle();
       if (!e) return errorResponse("earning_not_found", 404);
       if (e.status !== "pending") return errorResponse("only_pending_can_be_cancelled", 409);
       await db.from("host_earnings").update({
         status: "cancelled", cancelled_reason: reason, updated_at: nowIso(),
       }).eq("id", id);
       await audit(db, actorId, "host_earning_cancelled", "host_earning", id, { reason });
+      void notifyHost(db, {
+        hostId: e.host_id,
+        type: "host_earning",
+        title: "Earning cancelled",
+        body: reason
+          ? `A pending earning of ${formatAmount(e.amount, e.currency ?? "USD")} was cancelled: ${reason}`
+          : `A pending earning of ${formatAmount(e.amount, e.currency ?? "USD")} was cancelled.`,
+        data: { earning_id: id, reason, amount: e.amount, currency: e.currency ?? "USD" },
+      });
       return successResponse({ ok: true });
     }
   }
@@ -350,6 +417,17 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
       const { data, error } = await db.from("host_payment_methods").update(patch).eq("id", id).select("*").single();
       if (error || !data) return errorResponse("method_not_found", 404);
       await audit(db, actorId, `host_payment_method_${act}`, "host_payment_method", id, { reason });
+      const pm = data as { host_id: string; method_type: string };
+      void notifyHost(db, {
+        hostId: pm.host_id,
+        type: "host_payment_method",
+        title: act === "verify" ? "Payment method verified" : "Payment method rejected",
+        body: act === "verify"
+          ? `Your ${pm.method_type.replaceAll("_", " ")} payout method is now active.`
+          : reason ? `Your ${pm.method_type.replaceAll("_", " ")} method was rejected: ${reason}`
+                   : `Your ${pm.method_type.replaceAll("_", " ")} method was rejected.`,
+        data: { payment_method_id: id, method_type: pm.method_type, action: act, reason },
+      });
       return successResponse({ method: data });
     }
   }
