@@ -23,8 +23,9 @@ Quiz4Win is a **real-money quiz gaming platform**. The backend infrastructure co
 | `panel.quiz4win.com` | 5800 → 3000 | `quiz4win-admin` (Next.js)        | Admin panel (staff) |
 | `app.quiz4win.com`   | 5801 → 8080 | `quiz4win-app` (nginx:alpine)     | Customer Universal Link host: AASA + assetlinks manifests, password-reset web fallback, landing page |
 | `api.quiz4win.com`   | 5802 → 8000 | `quiz4win-api` (Deno edge functions)    | All customer + admin REST/Edge endpoints |
+| `host.quiz4win.com`  | 5803 → 3000 | `quiz4win-host` (Next.js)         | Host dashboard (self-service mobile-first PWA) — Phase 8, see §6 Host Platform |
 
-Host nginx terminates TLS for all three subdomains and proxies to the loopback ports above. See `deploy/nginx/*.conf` and `docker-compose.yml`.
+Host nginx terminates TLS for all four subdomains and proxies to the loopback ports above. See `deploy/nginx/*.conf` and `docker-compose.yml`.
 
 ---
 

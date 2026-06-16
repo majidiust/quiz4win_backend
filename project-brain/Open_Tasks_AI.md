@@ -62,6 +62,24 @@ Owner: A-01 (Augment Code Agent)
 
 ---
 
+## P1 — Host Platform (multi-phase build)
+
+> Decisions logged 2026-06-09 in `Change_Log_AI.md` (D-1..D-6, human-approved). Architecture surface in `Architecture_Map.md` §6 (new `host.quiz4win.com` subsystem). Invariants in `Domain_Knowledge.md` INV-16/17/18.
+
+- [P1] [IN_PROGRESS] [A-01] **Host Platform — Phase 0: project-brain & decisions** — Architecture_Map / Domain_Knowledge / Change_Log / Open_Tasks updated; D-1..D-6 logged.
+- [P1] [TODO]        [A-01] **Host Platform — Phase 1: DB schema migration** — `20260609000000_host_platform_phase1_schema.sql`: extend `show_hosts`, extend `transactions.type` (preserve `earnings_transfer`, add `host_earning`/`host_payout`), create `host_game_requests`, `host_invitations`, `host_stream_sessions`, `host_earnings`, `host_payment_methods`, `host_uploaded_files`. RLS enabled, policies in Phase 1b. Deploy via `db-maintainer` (R-12).
+- [P1] [TODO]        [A-01] **Host Platform — Phase 1b: RLS policies migration** — Per-host-owns-own-rows + admin SECURITY DEFINER helpers. Follow-up after Phase 2 endpoint wiring.
+- [P1] [TODO]        [A-01] **Host Platform — Phase 2: Host application & profile API** — Edge Functions `host/` (apply, /me GET/PATCH, avatar), `admin-hosts/` (list/approve/reject/suspend). Conflict-detection helper `check_host_schedule_conflict`.
+- [P1] [TODO]        [A-01] **Host Platform — Phase 3: Game discovery & requests** — `GET /host/games/available`, `POST /host/games/:id/request`, admin approve/reject (INV-17 enforced).
+- [P1] [TODO]        [A-01] **Host Platform — Phase 4: Invitations** — Admin send/cancel; host accept/reject with INV-17 conflict check; auto-expiry job (template-generator companion).
+- [P1] [TODO]        [A-01] **Host Platform — Phase 5: Stream readiness session** — `host-streams/` with state machine (created→testing→ready→live→ended/failed); LiveKit host token mint (existing creds).
+- [P1] [TODO]        [A-01 + A-05] **Host Platform — Phase 6: Earnings, payouts, payment methods** — INV-16 reservation pattern; `host_payment_methods` CRUD + admin verification; reuse existing `withdrawals` flow for cash-out (R-08 KYC applies). A-05 review required.
+- [P2] [TODO]        [A-01] **Host Platform — Phase 7: Notifications, files, audit** — `host_uploaded_files` CRUD + admin review; reuse `notifications` table with `type='host_*'`.
+- [P1] [TODO]        [A-01] **Host Platform — Phase 8: `host-app/` Next.js mobile-first frontend** — New folder + Docker service `quiz4win-host` on port 5803 + nginx vhost; dark glassmorphism, 16 screens, PWA-installable.
+- [P1] [TODO]        [A-01] **Host Platform — Phase 9: Admin panel host management pages** — `admin/src/app/(app)/hosts/*` (list, detail, approval, files review, earnings approve, payment-method verify, invitations).
+
+---
+
 ## P2 — Important Tasks
 
 - [P2] [TODO] [A-01] **Implement `kyc-submit` Edge Function** — Accept KYC document upload reference; update `kyc_status` to `pending`; store metadata.

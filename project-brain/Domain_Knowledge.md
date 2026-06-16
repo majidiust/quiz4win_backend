@@ -158,6 +158,47 @@ A participant MUST have submitted **at least one real answer** (correct or wrong
 
 This invariant applies **across all game types** including unlimited-lives games (`allowed_wrong_answers = NULL`) where the ghost sweep never fires an elimination. The entry fee is NOT refunded for a no-show — they paid to play and chose not to participate.
 
+### INV-16 — Host Earnings Reservation Pattern (R-05 preserved)
+
+Host earnings MUST follow a two-stage reservation pattern that preserves the append-only nature of `public.transactions` (R-05):
+
+1. **Pending stage** — On game completion, an admin-reviewed `host_earnings` row is created with `status = 'pending'`, `amount_cents`, `host_id`, `game_id`, and **no** `transaction_id`. No money has moved.
+2. **Approved stage** — When an admin approves the earning, a SINGLE atomic DB transaction:
+   - INSERTs a `transactions` row with `type = 'host_earning'`
+   - Credits `profiles.wallet_balance` by `amount_cents`
+   - UPDATEs the `host_earnings` row to `status = 'approved'` and sets `transaction_id` to the new transaction's id and `approved_at = now()`.
+
+`host_earnings` is the lifecycle/state surface; `transactions` is the immutable ledger. Once a `host_earning` transaction row exists, it can never be UPDATEd or DELETEd. Cancellation of a still-pending earning is allowed (it has no transaction row yet); cancellation of an approved earning requires a compensating `admin_adjustment` transaction with `reversal_of` reference, never a delete.
+
+Payouts (the host actually receiving the money externally) flow through the existing `withdrawals` table — host wallet balance is just normal wallet balance, R-08 (KYC required for withdrawal) applies equally to hosts.
+
+### INV-17 — No Overlapping Host Assignments
+
+A host MUST NOT be confirmed for two games whose live windows overlap. The live window of a game is `[scheduled_at, scheduled_at + estimated_duration_minutes)` (when `estimated_duration_minutes` is null, a 90-minute default is assumed).
+
+Two assignment events trigger the check:
+- Admin approving a `host_game_request` → reject if any other request/invitation/assignment for the same host overlaps.
+- Host accepting a `host_invitation` → reject the accept with HTTP 409 if any overlap exists.
+
+The check runs server-side in the Edge Function using a `SECURITY DEFINER` SQL helper (`check_host_schedule_conflict(host_id, game_id)`). Frontend hints are advisory only.
+
+### INV-18 — Host Application & Status Gates
+
+Two flags on `show_hosts` gate every host action:
+- `application_status ∈ {'pending','approved','rejected','suspended'}` — onboarding/lifecycle.
+- `status ∈ {'active','inactive'}` — operational visibility (existing column, used by `public-featured-host`).
+
+| Action | Required state |
+|---|---|
+| Sign in to `host.quiz4win.com` | `auth.users.email_confirmed_at IS NOT NULL` (Supabase GoTrue) |
+| Apply to be a host | `auth_user_id` exists, no `show_hosts` row yet, or `application_status = 'rejected'` |
+| Edit own profile / upload files / request games | `application_status = 'approved'` AND `status != 'suspended'` |
+| Receive invitations | same as above |
+| Start a stream session | same as above, AND host is the assigned host on the game |
+| Receive earnings | same as above; `application_status = 'suspended'` freezes new earnings but preserves already-approved ones |
+
+A `suspended` host cannot perform any new write action; reading own historic data remains allowed. `rejected` is a terminal state for that application — the user may re-apply (a new `application_status = 'pending'` cycle).
+
 ---
 
 ## 4. Regulatory & Compliance Notes
