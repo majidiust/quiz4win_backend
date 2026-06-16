@@ -276,10 +276,14 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
     if (parts[2] === "accept") {
       const { data: conflict } = await db.rpc("check_host_schedule_conflict", { p_host_id: host.id, p_game_id: inv.game_id });
       if (conflict === true) return errorResponse("schedule_conflict", 409);
+      // Conditional claim: only succeeds when no other host got there first.
+      // The trg_close_stale_host_offers_on_assign trigger cleans up the rest.
+      const { data: claimed } = await db.from("games")
+        .update({ host_id: host.id, updated_at: nowIso() })
+        .eq("id", inv.game_id).is("host_id", null).select("id").maybeSingle();
+      if (!claimed) return errorResponse("game_already_has_host", 409);
       const { error: e1 } = await db.from("host_invitations").update({ status: "accepted", responded_at: nowIso(), updated_at: nowIso() }).eq("id", parts[1]);
       if (e1) return errorResponse(sanitizeError(e1), 500);
-      const { error: e2 } = await db.from("games").update({ host_id: host.id, updated_at: nowIso() }).eq("id", inv.game_id);
-      if (e2) return errorResponse(sanitizeError(e2), 500);
       return successResponse({ ok: true, status: "accepted" });
     } else {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -324,6 +328,12 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
     }
     if (parts.length === 4 && parts[3] === "live" && method === "POST") {
       if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
+      // A host may only go live for a game that is at least near its window.
+      // Allow upcoming/open/live; refuse completed/cancelled/ended so a stale
+      // mobile session cannot mint a fresh LiveKit token after the game.
+      if (!["upcoming", "open", "live"].includes(g.status)) {
+        return errorResponse("game_not_live_able", 409);
+      }
       const room = g.livekit_room_name || `game-${gameId}`;
       if (!Deno.env.get("LIVEKIT_API_KEY") || !Deno.env.get("LIVEKIT_API_SECRET")) {
         return errorResponse("livekit_not_configured", 503);
@@ -333,9 +343,22 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
         room,
         { roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true },
       );
-      await db.from("host_stream_sessions").update({
-        status: "live", started_at: nowIso(), livekit_token_minted_at: nowIso(), updated_at: nowIso(),
-      }).eq("host_id", host.id).eq("game_id", gameId);
+      // Upsert the session row so a host who skipped the testing wizard still
+      // ends up with a tracked stream session row (otherwise UPDATE no-ops).
+      const { data: existing } = await db.from("host_stream_sessions").select("id")
+        .eq("host_id", host.id).eq("game_id", gameId).maybeSingle();
+      if (existing) {
+        await db.from("host_stream_sessions").update({
+          status: "live", started_at: nowIso(), livekit_token_minted_at: nowIso(), updated_at: nowIso(),
+        }).eq("id", existing.id);
+      } else {
+        await db.from("host_stream_sessions").insert({
+          host_id: host.id, game_id: gameId, status: "live",
+          camera_ok: true, mic_ok: true, connection_ok: true,
+          started_at: nowIso(), livekit_token_minted_at: nowIso(),
+          created_at: nowIso(), updated_at: nowIso(),
+        });
+      }
       return successResponse({ token, room_name: room, identity: `host-${host.id}` });
     }
     if (parts.length === 4 && parts[3] === "end" && method === "POST") {

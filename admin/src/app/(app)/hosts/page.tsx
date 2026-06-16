@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Users } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
@@ -98,8 +99,8 @@ export default async function HostsPage({
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{(h.country as string) ?? "—"}</TableCell>
-                  <TableCell><StatusBadge status={h.application_status as string} /></TableCell>
-                  <TableCell><StatusBadge status={h.status as string} /></TableCell>
+                  <TableCell><StatusBadge value={h.application_status as string} /></TableCell>
+                  <TableCell><StatusBadge value={h.status as string} /></TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatNumber(Number(h.total_earnings ?? 0))}
                   </TableCell>
@@ -115,12 +116,13 @@ export default async function HostsPage({
             </TableBody>
           </Table>
         ) : (
-          <EmptyState title="No hosts yet" description="Approved hosts will appear here once they apply." />
+          <EmptyState icon={Users} title="No hosts yet" description="Approved hosts will appear here once they apply." />
         )}
       </Card>
 
       {count && count > PAGE_SIZE ? (
-        <DataTablePagination total={count} pageSize={PAGE_SIZE} currentPage={page} />
+        <DataTablePagination total={count} pageSize={PAGE_SIZE} page={page} basePath="/hosts"
+          searchParams={{ application_status: sp.application_status, q: sp.q }} />
       ) : null}
     </>
   );

@@ -6,20 +6,33 @@ import { requireAdmin, type AdminRole } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export interface ActionResult { ok: boolean; message: string }
-const ALL: AdminRole[] = ["super_admin", "admin", "moderator", "finance"];
 const MOD: AdminRole[] = ["super_admin", "admin", "moderator"];
 const FIN: AdminRole[] = ["super_admin", "admin", "finance"];
 
 type DB = ReturnType<typeof createSupabaseAdminClient>;
 const nowIso = () => new Date().toISOString();
 
+// Best-effort audit: schema has details JSONB (NOT metadata) + target_type /
+// target_id (renamed from entity_*) per migration 20260609000300. Errors are
+// swallowed so an admin action does not fail just because the audit row fails.
 async function audit(
   db: DB, adminId: string, action: string, targetType: string, targetId: string, details?: unknown,
 ) {
-  await db.from("admin_audit_log").insert({
-    admin_id: adminId, action, target_type: targetType, target_id: targetId,
-    metadata: details ?? null, created_at: nowIso(),
-  });
+  try {
+    await db.from("admin_audit_log").insert({
+      admin_id: adminId, action, target_type: targetType, target_id: targetId,
+      details: details ?? null, created_at: nowIso(),
+    });
+  } catch (e) { console.warn("[hosts] audit failed:", e); }
+}
+
+// Conditional UPDATE games SET host_id=... WHERE host_id IS NULL — returns
+// true iff this call won the assignment race.
+async function claimGameHost(db: DB, gameId: string, hostId: string): Promise<boolean> {
+  const { data } = await db.from("games")
+    .update({ host_id: hostId, updated_at: nowIso() })
+    .eq("id", gameId).is("host_id", null).select("id").maybeSingle();
+  return Boolean(data);
 }
 
 async function notifyHost(
@@ -104,8 +117,12 @@ export async function reviewHostFile(input: z.infer<typeof FileActionSchema>): P
     reviewed_by: adm.id, reviewed_at: nowIso(),
     rejection_reason: action === "reject" ? reason ?? null : null,
     updated_at: nowIso(),
-  }).eq("id", fileId).select("id, host_id, file_type").single();
+  }).eq("id", fileId).select("id, host_id, file_type, url").single();
   if (error || !file) return { ok: false, message: "File not found" };
+  // Propagate avatar URL to show_hosts so the host's public picture updates on approval.
+  if (action === "approve" && file.file_type === "avatar" && file.url) {
+    await db.from("show_hosts").update({ avatar_url: file.url, updated_at: nowIso() }).eq("id", file.host_id);
+  }
   await audit(db, adm.id, `host_file_${action}`, "host_uploaded_file", fileId, { reason });
   await notifyHost(db, file.host_id as string, "host_file",
     action === "approve" ? "File approved" : "File rejected",
@@ -141,11 +158,13 @@ export async function reviewHostRequest(input: z.infer<typeof RequestActionSchem
     const { data: conflict } = await db.rpc("check_host_schedule_conflict",
       { p_host_id: r.host_id, p_game_id: r.game_id });
     if (conflict === true) return { ok: false, message: "Schedule conflict — host has another show in this window" };
+    const claimed = await claimGameHost(db, r.game_id, r.host_id);
+    if (!claimed) return { ok: false, message: "Game already has a host" };
     await db.from("host_game_requests").update({
       status: "approved", admin_note: adminNote ?? null,
       reviewed_by: adm.id, reviewed_at: nowIso(), updated_at: nowIso(),
     }).eq("id", requestId);
-    await db.from("games").update({ host_id: r.host_id, updated_at: nowIso() }).eq("id", r.game_id);
+    // Stale-state cleanup is handled by trg_close_stale_host_offers_on_assign.
   } else {
     await db.from("host_game_requests").update({
       status: "rejected", admin_note: adminNote ?? null,
@@ -263,14 +282,11 @@ const EarningIdSchema = z.object({
 });
 
 /**
- * INV-16 atomic approve. NOT wrapped in a single DB transaction at the JS
- * layer; we mirror the order from the admin-hosts Edge Function:
- *   1. INSERT transactions(type='host_earning', status='completed')
- *   2. CALL increment_wallet_balance RPC
- *   3. UPDATE show_hosts.total_earnings (cumulative)
- *   4. UPDATE host_earnings (status='approved', transaction_id, approved_at)
- * Step (2) failing after (1) is logged so an admin can reconcile manually
- * (R-05 forbids deleting the transactions row).
+ * INV-16 atomic approve. Delegates the whole flow to the
+ * `approve_host_earning_atomic` SECURITY DEFINER RPC (migration 20260609000300)
+ * so the transactions row, the wallet credit, the show_hosts.total_earnings
+ * increment and the host_earnings status flip all commit (or roll back)
+ * together — partial-credit states are not possible.
  */
 export async function approveHostEarning(input: z.infer<typeof EarningIdSchema>): Promise<ActionResult> {
   const adm = await requireAdmin(FIN);
@@ -278,39 +294,26 @@ export async function approveHostEarning(input: z.infer<typeof EarningIdSchema>)
   if (!p.success) return { ok: false, message: "Invalid input" };
   const db = createSupabaseAdminClient();
 
-  const { data: e } = await db.from("host_earnings").select("*").eq("id", p.data.earningId).maybeSingle();
-  if (!e) return { ok: false, message: "Earning not found" };
-  if (e.status !== "pending") return { ok: false, message: "Only pending earnings can be approved" };
+  const { data: result, error: rpcErr } = await db.rpc("approve_host_earning_atomic",
+    { p_earning_id: p.data.earningId, p_admin_id: adm.id });
+  if (rpcErr) {
+    const msg = (rpcErr.message ?? "").toLowerCase();
+    if (msg.includes("earning_not_found")) return { ok: false, message: "Earning not found" };
+    if (msg.includes("only_pending_can_be_approved")) return { ok: false, message: "Only pending earnings can be approved" };
+    if (msg.includes("host_has_no_auth_user")) return { ok: false, message: "Host has no linked auth user — cannot credit wallet" };
+    return { ok: false, message: rpcErr.message ?? "Failed to approve earning" };
+  }
+  const r = (result ?? {}) as {
+    earning_id: string; transaction_id: string; amount: number | string;
+    currency: string; host_id: string;
+  };
 
-  const { data: h } = await db.from("show_hosts").select("auth_user_id, total_earnings").eq("id", e.host_id).maybeSingle();
-  if (!h || !h.auth_user_id) return { ok: false, message: "Host has no linked auth user — cannot credit wallet" };
+  await audit(db, adm.id, "host_earning_approved", "host_earning", p.data.earningId, { transaction_id: r.transaction_id });
+  await notifyHost(db, r.host_id, "host_earning", "Earning approved",
+    `Your earning of ${r.amount} ${r.currency ?? "USD"} has been approved and added to your wallet.`,
+    { earning_id: p.data.earningId, transaction_id: r.transaction_id, amount: r.amount });
 
-  const { data: tx, error: txErr } = await db.from("transactions").insert({
-    user_id: h.auth_user_id, type: "host_earning", amount: e.amount, status: "completed",
-    description: `Host earning — game ${e.game_id}`, game_id: e.game_id, admin_id: adm.id,
-    created_at: nowIso(),
-  }).select("id").single();
-  if (txErr || !tx) return { ok: false, message: "Failed to insert transaction" };
-
-  const { error: walletErr } = await db.rpc("increment_wallet_balance",
-    { p_user_id: h.auth_user_id, p_amount: e.amount });
-  if (walletErr) console.error("[hosts] wallet credit failed after tx insert:", walletErr.message);
-
-  await db.from("show_hosts").update({
-    total_earnings: Number(h.total_earnings ?? 0) + Number(e.amount), updated_at: nowIso(),
-  }).eq("id", e.host_id);
-
-  await db.from("host_earnings").update({
-    status: "approved", transaction_id: tx.id, approved_by: adm.id,
-    approved_at: nowIso(), updated_at: nowIso(),
-  }).eq("id", p.data.earningId);
-
-  await audit(db, adm.id, "host_earning_approved", "host_earning", p.data.earningId, { transaction_id: tx.id });
-  await notifyHost(db, e.host_id as string, "host_earning", "Earning approved",
-    `Your earning of ${e.amount} ${e.currency ?? "USD"} has been approved and added to your wallet.`,
-    { earning_id: p.data.earningId, transaction_id: tx.id, amount: e.amount });
-
-  revalidatePath(`/hosts/${e.host_id}`);
+  revalidatePath(`/hosts/${r.host_id}`);
   return { ok: true, message: "Earning approved and wallet credited" };
 }
 
@@ -366,5 +369,4 @@ export async function reviewHostPaymentMethod(input: z.infer<typeof PMActionSche
   return { ok: true, message: p.data.action === "verify" ? "Method verified" : "Method rejected" };
 }
 
-// Used to silence unused-symbol warnings when admin imports the type set.
-export type _AllRoles = typeof ALL;
+

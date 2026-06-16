@@ -46,9 +46,17 @@ async function audit(db: DB, actorId: string, action: string, targetType: string
   try {
     await db.from("admin_audit_log").insert({
       admin_id: actorId, action, target_type: targetType, target_id: targetId,
-      details: details ?? null, metadata: details ?? null, created_at: nowIso(),
+      details: details ?? null, created_at: nowIso(),
     });
   } catch (_) { /* audit best-effort */ }
+}
+
+// Sets games.host_id only if it is still NULL; returns true iff this call won
+// the race. Used by request-approve to defeat double-assignment.
+async function claimGameHost(db: DB, gameId: string, hostId: string): Promise<boolean> {
+  const { data } = await db.from("games").update({ host_id: hostId, updated_at: nowIso() })
+    .eq("id", gameId).is("host_id", null).select("id").maybeSingle();
+  return Boolean(data);
 }
 
 Deno.serve(async (req: Request) => {
@@ -177,7 +185,12 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
     const { data, error } = await db.from("host_uploaded_files").update(patch).eq("id", fileId).select("*").single();
     if (error || !data) return errorResponse("file_not_found", 404);
     await audit(db, actorId, `host_file_${act}`, "host_uploaded_file", fileId, { reason });
-    const fr = data as { host_id: string; file_type: string };
+    const fr = data as { host_id: string; file_type: string; url?: string | null };
+    // When an avatar file is approved, propagate the URL onto show_hosts so the
+    // host's public profile picture updates without a manual PATCH /host/me.
+    if (act === "approve" && fr.file_type === "avatar" && fr.url) {
+      await db.from("show_hosts").update({ avatar_url: fr.url, updated_at: nowIso() }).eq("id", fr.host_id);
+    }
     void notifyHost(db, {
       hostId: fr.host_id,
       type: "host_file",
@@ -214,9 +227,12 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
         const { data: conflict } = await db.rpc("check_host_schedule_conflict",
           { p_host_id: r.host_id, p_game_id: r.game_id });
         if (conflict === true) return errorResponse("schedule_conflict", 409);
+        const claimed = await claimGameHost(db, r.game_id, r.host_id);
+        if (!claimed) return errorResponse("game_already_has_host", 409);
         await db.from("host_game_requests").update({ status: "approved", admin_note: note,
           reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso() }).eq("id", reqId);
-        await db.from("games").update({ host_id: r.host_id, updated_at: nowIso() }).eq("id", r.game_id);
+        // The trg_close_stale_host_offers_on_assign trigger cancels the other
+        // pending requests + sent invitations for this game automatically.
       } else {
         await db.from("host_game_requests").update({ status: "rejected", admin_note: note,
           reviewed_by: actorId, reviewed_at: nowIso(), updated_at: nowIso() }).eq("id", reqId);
@@ -332,42 +348,35 @@ async function handleSubResource(req: Request, parts: string[], actorId: string,
       return successResponse({ earning: data }, 201);
     }
     if (parts.length === 3 && parts[2] === "approve" && method === "POST") {
-      // INV-16 atomic approve: insert transaction(type=host_earning) + credit
-      // profiles.wallet_balance + set host_earnings.transaction_id.
+      // INV-16 atomic approve — single SECURITY DEFINER RPC owns the full flow:
+      // SELECT FOR UPDATE on host_earnings, INSERT transactions row, debit
+      // profiles.wallet_balance, increment show_hosts.total_earnings, and
+      // promote host_earnings to approved (with transaction_id). Any failure
+      // rolls the entire block back, so partial-credit states cannot happen.
       const id = parts[1];
-      const { data: e } = await db.from("host_earnings").select("*").eq("id", id).maybeSingle();
-      if (!e) return errorResponse("earning_not_found", 404);
-      if (e.status !== "pending") return errorResponse("only_pending_can_be_approved", 409);
-      const { data: h } = await db.from("show_hosts").select("auth_user_id, total_earnings").eq("id", e.host_id).maybeSingle();
-      if (!h || !h.auth_user_id) return errorResponse("host_has_no_auth_user", 409);
-      const { data: tx, error: txErr } = await db.from("transactions").insert({
-        user_id: h.auth_user_id, type: "host_earning", amount: e.amount, status: "completed",
-        description: `Host earning — game ${e.game_id}`, game_id: e.game_id, admin_id: actorId,
-        created_at: nowIso(),
-      }).select("id").single();
-      if (txErr || !tx) return errorResponse(sanitizeError(txErr ?? new Error("tx_insert_failed")), 500);
-      const { error: walletErr } = await db.rpc("increment_wallet_balance",
-        { p_user_id: h.auth_user_id, p_amount: e.amount });
-      if (walletErr) {
-        // Best-effort: log but DO NOT delete the transaction (R-05). Manual admin reconciliation needed.
-        console.error("[admin-hosts] wallet credit failed after tx insert:", walletErr.message);
+      const { data: result, error: rpcErr } = await db.rpc("approve_host_earning_atomic",
+        { p_earning_id: id, p_admin_id: actorId });
+      if (rpcErr) {
+        const msg = (rpcErr.message ?? "").toLowerCase();
+        if (msg.includes("earning_not_found")) return errorResponse("earning_not_found", 404);
+        if (msg.includes("only_pending_can_be_approved")) return errorResponse("only_pending_can_be_approved", 409);
+        if (msg.includes("host_has_no_auth_user")) return errorResponse("host_has_no_auth_user", 409);
+        return errorResponse(sanitizeError(rpcErr), 500);
       }
-      await db.from("show_hosts").update({
-        total_earnings: Number(h.total_earnings ?? 0) + Number(e.amount), updated_at: nowIso(),
-      }).eq("id", e.host_id);
-      const { data: updated } = await db.from("host_earnings").update({
-        status: "approved", transaction_id: tx.id, approved_by: actorId,
-        approved_at: nowIso(), updated_at: nowIso(),
-      }).eq("id", id).select("*").single();
-      await audit(db, actorId, "host_earning_approved", "host_earning", id, { transaction_id: tx.id });
+      const r = (result ?? {}) as {
+        earning_id: string; transaction_id: string; amount: number | string;
+        currency: string; host_id: string;
+      };
+      const { data: updated } = await db.from("host_earnings").select("*").eq("id", id).maybeSingle();
+      await audit(db, actorId, "host_earning_approved", "host_earning", id, { transaction_id: r.transaction_id });
       void notifyHost(db, {
-        hostId: e.host_id,
+        hostId: r.host_id,
         type: "host_earning",
         title: "Earning approved",
-        body: `Your earning of ${formatAmount(e.amount, e.currency ?? "USD")} has been approved and added to your wallet.`,
-        data: { earning_id: id, transaction_id: tx.id, amount: e.amount, currency: e.currency ?? "USD", game_id: e.game_id },
+        body: `Your earning of ${formatAmount(r.amount, r.currency ?? "USD")} has been approved and added to your wallet.`,
+        data: { earning_id: id, transaction_id: r.transaction_id, amount: r.amount, currency: r.currency ?? "USD" },
       });
-      return successResponse({ earning: updated, transaction_id: tx.id });
+      return successResponse({ earning: updated, transaction_id: r.transaction_id });
     }
     if (parts.length === 3 && parts[2] === "cancel" && method === "POST") {
       const id = parts[1];
