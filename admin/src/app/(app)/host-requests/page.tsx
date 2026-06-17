@@ -43,7 +43,7 @@ export default async function HostRequestsPage({
     .limit(200);
   if (status !== "all") query = query.eq("status", status);
   const { data } = await query;
-  let rows = (data ?? []) as Array<{
+  let rows = (data ?? []) as unknown as Array<{
     id: string; host_id: string; game_id: string; status: string;
     host_note: string | null; admin_note: string | null;
     created_at: string; reviewed_at: string | null;
