@@ -4,6 +4,19 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { api } from "@/lib/api";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+/**
+ * Returns the current user's access token so the browser can upload files
+ * directly to api.quiz4win.com without going through a Next.js server action
+ * (which has a 1 MB default body limit). The session cookie is httpOnly —
+ * browser JS cannot read it — so the token must be fetched server-side.
+ */
+export async function getUploadToken(): Promise<string | null> {
+  const supabase = await createSupabaseServerClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
 
 const LANG_OPTIONS = ["en", "ar", "fa", "tr", "es", "pt", "fr", "de"];
 

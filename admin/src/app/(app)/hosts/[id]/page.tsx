@@ -1,20 +1,24 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Users, Globe, MapPin, Phone, Link2, Send, FileText, ListChecks, Mail, Wallet, CreditCard } from "lucide-react";
+import { ArrowLeft, Users, Globe, MapPin, Phone, Link2, Send, FileText, ListChecks, Mail, Wallet, CreditCard, Video, CalendarClock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/status-badge";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
+import { DetailSection, DetailRow, SummaryCell } from "@/components/detail";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
+import { presignGet } from "@/lib/s3";
 import { formatDateTime, formatRelative, formatMoneyDecimal, formatNumber } from "@/lib/utils";
 import {
   HostStatusActions, FileActions, RequestActions, InvitationActions,
   EarningActions, EarningCreateButton, InvitationSendButton, PaymentMethodActions,
 } from "./host-actions";
+import { HostFileLink, IntroVideoPlayer, InlineImageViewer } from "./host-media";
 
 interface Props { params: Promise<{ id: string }> }
 
@@ -63,6 +67,30 @@ export default async function HostDetailPage({ params }: Props) {
     { url: host.twitter_url as string | null, label: "Twitter / X" },
     { url: host.website_url as string | null, label: "Website" },
   ].filter((s) => s.url);
+
+  // Most recent intro video, selfie, and ID document — viewed via presigned URLs.
+  type UploadedFile = { id: string; file_type: string; s3_key: string | null; url: string | null; mime_type: string | null };
+  const introVideo = files.find((f) => f.file_type === "intro_video") as UploadedFile | undefined;
+  const selfieFile = files.find((f) => f.file_type === "selfie") as UploadedFile | undefined;
+  const idDocFile = files.find((f) => f.file_type === "id_document") as UploadedFile | undefined;
+
+  // Pre-compute presigned URLs server-side so the admin sees files immediately
+  // without requiring a client-side click. Presign window: 1 hour (3600 s).
+  async function resolveFileUrl(file: UploadedFile | undefined): Promise<string | null> {
+    if (!file) return null;
+    if (file.url && (file.url as string).length > 0) return file.url as string;
+    if (!file.s3_key) return null;
+    try { return await presignGet(file.s3_key as string, 3600); } catch { return null; }
+  }
+
+  const [introVideoSrc, selfieSrc, idDocSrc] = await Promise.all([
+    resolveFileUrl(introVideo),
+    resolveFileUrl(selfieFile),
+    resolveFileUrl(idDocFile),
+  ]);
+
+  const avatarUrl = (host.avatar_url as string | null) ?? null;
+  const initials = (host.name as string).split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
 
   return (
     <>
@@ -122,9 +150,7 @@ export default async function HostDetailPage({ params }: Props) {
                         {files.map((f) => (
                           <TableRow key={f.id as string}>
                             <TableCell className="font-medium">
-                              <a href={f.url as string} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                                {(f.file_type as string).replace(/_/g, " ")}
-                              </a>
+                              <HostFileLink fileId={f.id as string} label={(f.file_type as string).replace(/_/g, " ")} />
                             </TableCell>
                             <TableCell><StatusBadge value={f.status as string} /></TableCell>
                             <TableCell className="text-muted-foreground">{formatRelative(f.created_at as string)}</TableCell>
@@ -283,74 +309,92 @@ export default async function HostDetailPage({ params }: Props) {
         </div>
 
         <aside className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-base flex items-center gap-2"><Users className="size-4" />Profile</CardTitle></CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <Row label="Joined" value={host.created_at ? formatDateTime(host.created_at as string) : "—"} />
-              <Row label="Applied" value={host.applied_at ? formatDateTime(host.applied_at as string) : "—"} />
-              <Row label="Approved" value={host.approved_at ? formatDateTime(host.approved_at as string) : "—"} />
-              {host.rejected_at ? <Row label="Rejected" value={formatDateTime(host.rejected_at as string)} /> : null}
-              {host.suspended_at ? <Row label="Suspended" value={formatDateTime(host.suspended_at as string)} /> : null}
-              <Row label="Auth user" value={host.auth_user_id ? <code className="text-xs">{(host.auth_user_id as string).slice(0, 8)}…</code> : "—"} />
-              {host.bio ? (
-                <div>
-                  <div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">Bio</div>
-                  <p className="whitespace-pre-wrap text-sm text-muted-foreground">{host.bio as string}</p>
+          <DetailSection title="Onboarding profile" icon={Users}>
+            <div className="flex items-center gap-3">
+              <Avatar className="size-16">
+                {avatarUrl ? <AvatarImage src={avatarUrl} alt={host.name as string} /> : null}
+                <AvatarFallback className="text-lg">{initials || "?"}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0">
+                <div className="truncate font-medium">{host.name as string}</div>
+                {host.short_bio ? (
+                  <p className="line-clamp-2 text-xs text-muted-foreground">{host.short_bio as string}</p>
+                ) : null}
+              </div>
+            </div>
+            <DetailRow label="Country" value={host.country as string | null} icon={MapPin} />
+            <DetailRow label="Languages" value={langs.length ? langs.join(", ") : null} icon={Globe} />
+            <DetailRow label="Phone" value={host.phone as string | null} icon={Phone} />
+            {host.bio ? (
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">About</div>
+                <p className="whitespace-pre-wrap text-sm text-muted-foreground">{host.bio as string}</p>
+              </div>
+            ) : null}
+            {social.length ? (
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Social</div>
+                <div className="space-y-1">
+                  {social.map((s) => (
+                    <a key={s.label} href={s.url!} target="_blank" rel="noreferrer"
+                       className="block truncate text-sm text-primary hover:underline">
+                      <Link2 className="mr-1 inline size-3" />{s.label}: {s.url}
+                    </a>
+                  ))}
                 </div>
-              ) : null}
-              {social.length ? (
-                <div>
-                  <div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">Social</div>
-                  <div className="space-y-1">
-                    {social.map((s) => (
-                      <a key={s.label} href={s.url!} target="_blank" rel="noreferrer"
-                         className="block truncate text-sm text-primary hover:underline">
-                        <Link2 className="mr-1 inline size-3" />{s.label}: {s.url}
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              {host.rejection_reason ? (
-                <Row label="Rejection reason" value={<span className="text-destructive">{host.rejection_reason as string}</span>} />
-              ) : null}
-              {host.suspension_reason ? (
-                <Row label="Suspension reason" value={<span className="text-warning">{host.suspension_reason as string}</span>} />
-              ) : null}
-            </CardContent>
-          </Card>
+              </div>
+            ) : null}
+            <div>
+              <div className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <Video className="size-3" />Intro video
+              </div>
+              {introVideo ? (
+                <IntroVideoPlayer src={introVideoSrc} fileId={introVideo.id} />
+              ) : (
+                <p className="text-sm text-muted-foreground">Not uploaded.</p>
+              )}
+            </div>
+            {selfieFile ? (
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Selfie</div>
+                <InlineImageViewer src={selfieSrc} fileId={selfieFile.id} label="selfie" />
+              </div>
+            ) : null}
+            {idDocFile ? (
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">ID document</div>
+                <InlineImageViewer src={idDocSrc} fileId={idDocFile.id} label="ID document" />
+              </div>
+            ) : null}
+          </DetailSection>
 
-          <Card>
-            <CardHeader><CardTitle className="text-base flex items-center gap-2"><Send className="size-4" />Earnings summary</CardTitle></CardHeader>
-            <CardContent className="grid grid-cols-2 gap-2 text-sm">
-              <SumCell label="Pending" value={formatMoneyDecimal(totals.pending ?? 0)} />
-              <SumCell label="Approved" value={formatMoneyDecimal(totals.approved ?? 0)} />
-              <SumCell label="Paid" value={formatMoneyDecimal(totals.paid ?? 0)} />
-              <SumCell label="Cancelled" value={formatMoneyDecimal(totals.cancelled ?? 0)} />
-              <SumCell label="Lifetime" value={formatMoneyDecimal(host.total_earnings as string | number)} highlight />
-              <SumCell label="Shows hosted" value={formatNumber(host.shows_hosted as number)} highlight />
-            </CardContent>
-          </Card>
+          <DetailSection title="Timeline" icon={CalendarClock}>
+            <DetailRow label="Joined" value={host.created_at ? formatDateTime(host.created_at as string) : null} />
+            <DetailRow label="Applied" value={host.applied_at ? formatDateTime(host.applied_at as string) : null} />
+            <DetailRow label="Approved" value={host.approved_at ? formatDateTime(host.approved_at as string) : null} />
+            {host.rejected_at ? <DetailRow label="Rejected" value={formatDateTime(host.rejected_at as string)} /> : null}
+            {host.suspended_at ? <DetailRow label="Suspended" value={formatDateTime(host.suspended_at as string)} /> : null}
+            <DetailRow label="Auth user" value={host.auth_user_id ? <code className="text-xs">{(host.auth_user_id as string).slice(0, 8)}…</code> : null} />
+            {host.rejection_reason ? (
+              <DetailRow label="Rejection reason" value={<span className="text-destructive">{host.rejection_reason as string}</span>} />
+            ) : null}
+            {host.suspension_reason ? (
+              <DetailRow label="Suspension reason" value={<span className="text-warning">{host.suspension_reason as string}</span>} />
+            ) : null}
+          </DetailSection>
+
+          <DetailSection title="Earnings summary" icon={Send}>
+            <div className="grid grid-cols-2 gap-2">
+              <SummaryCell label="Pending" value={formatMoneyDecimal(totals.pending ?? 0)} />
+              <SummaryCell label="Approved" value={formatMoneyDecimal(totals.approved ?? 0)} />
+              <SummaryCell label="Paid" value={formatMoneyDecimal(totals.paid ?? 0)} />
+              <SummaryCell label="Cancelled" value={formatMoneyDecimal(totals.cancelled ?? 0)} />
+              <SummaryCell label="Lifetime" value={formatMoneyDecimal(host.total_earnings as string | number)} highlight />
+              <SummaryCell label="Shows hosted" value={formatNumber(host.shows_hosted as number)} highlight />
+            </div>
+          </DetailSection>
         </aside>
       </div>
     </>
-  );
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-3">
-      <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</dt>
-      <dd className="text-sm text-right">{value}</dd>
-    </div>
-  );
-}
-
-function SumCell({ label, value, highlight }: { label: string; value: React.ReactNode; highlight?: boolean }) {
-  return (
-    <div className={highlight ? "rounded-md bg-foreground/5 p-2" : "p-2"}>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="tabular-nums font-medium">{value}</div>
-    </div>
   );
 }

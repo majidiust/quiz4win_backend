@@ -1,12 +1,13 @@
 import Link from "next/link";
-import { FileText, CreditCard, Bell, LogOut, ChevronRight, Camera } from "lucide-react";
+import { FileText, CreditCard, Bell, LogOut, ChevronRight } from "lucide-react";
 import { Card, CardSubtitle, CardTitle } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
-import { updateProfileAction, uploadAvatarAction, signOutAction } from "./actions";
+import { updateProfileAction, signOutAction, getUploadToken } from "./actions";
+import { AvatarPickerSection } from "./avatar-picker";
 
 export const metadata = { title: "Settings — Quiz4Win Host" };
 
@@ -29,8 +30,11 @@ export default async function SettingsPage({
   searchParams,
 }: { searchParams: Promise<{ error?: string; info?: string }> }) {
   const sp = await searchParams;
-  const r = await api<{ host: Host }>("/host/me");
-  const h = r.ok ? r.data?.host : null;
+  const [hostResult, uploadToken] = await Promise.all([
+    api<{ host: Host }>("/host/me"),
+    getUploadToken(),
+  ]);
+  const h = hostResult.ok ? hostResult.data?.host : null;
   const myLangs = new Set(h?.languages ?? []);
 
   return (
@@ -46,34 +50,17 @@ export default async function SettingsPage({
 
       {h ? (
         <Card className="mb-3">
-          <div className="flex items-center gap-4">
-            <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/5">
-              {h.avatar_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={h.avatar_url} alt="Profile picture" className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <Camera className="h-6 w-6 text-[var(--color-q4w-muted)]" />
-                </div>
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle className="truncate">{h.name}</CardTitle>
-                <StatusChip status={h.application_status} />
-              </div>
-              {h.short_bio ? <CardSubtitle>{h.short_bio}</CardSubtitle> : null}
-            </div>
+          {/* Telegram-style avatar picker — click circle to open camera/gallery sheet */}
+          <AvatarPickerSection
+            currentUrl={h.avatar_url}
+            name={h.name}
+            uploadToken={uploadToken}
+          />
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <CardTitle className="truncate">{h.name}</CardTitle>
+            <StatusChip status={h.application_status} />
           </div>
-          <form action={uploadAvatarAction} className="mt-3 flex flex-col gap-2">
-            <input
-              type="file" name="file" accept="image/png,image/jpeg,image/webp,image/heic"
-              className="text-xs text-[var(--color-q4w-muted)] file:mr-3 file:rounded-xl file:border-0 file:bg-[var(--color-q4w-primary)] file:px-3 file:py-2 file:text-xs file:font-medium file:text-white"
-            />
-            <Button type="submit" variant="secondary">
-              <Camera className="mr-2 h-4 w-4" /> {h.avatar_url ? "Change photo" : "Upload photo"}
-            </Button>
-          </form>
+          {h.short_bio ? <CardSubtitle>{h.short_bio}</CardSubtitle> : null}
         </Card>
       ) : null}
 
