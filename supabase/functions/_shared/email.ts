@@ -172,26 +172,43 @@ export function confirmEmailTemplate(opts: {
   actionUrl: string;
   otp?: string;
   ttlHours?: number;
+  /**
+   * When true, the email contains only the 6-digit OTP — no clickable button
+   * or action URL. Used by clients (e.g. host-app) where mail-scanner prefetch
+   * of the link silently burns the shared GoTrue token and bricks the OTP.
+   */
+  otpOnly?: boolean;
 }): { subject: string; html: string; text: string } {
   const subject = "Confirm your Quiz4Win email";
   const ttl = opts.ttlHours ?? 24;
   const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const otpOnly = opts.otpOnly === true && !!opts.otp;
+  const otpBlockHeading = otpOnly ? "Enter this code in the app" : "Or enter this code in the app";
   const otpBlock = opts.otp
-    ? `<p style="margin:20px 0 8px;font-size:13px;color:${BRAND.textMuted};text-transform:uppercase;letter-spacing:.08em;font-weight:600">Or enter this code in the app</p>
+    ? `<p style="margin:20px 0 8px;font-size:13px;color:${BRAND.textMuted};text-transform:uppercase;letter-spacing:.08em;font-weight:600">${otpBlockHeading}</p>
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:0 0 8px"><tr><td align="center" bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:18px 28px">
 <p style="margin:0;font-family:Menlo,Consolas,monospace;font-size:28px;letter-spacing:.35em;color:${BRAND.textDark};font-weight:700">${escapeHtml(opts.otp)}</p>
 </td></tr></table>`
     : "";
+  const bodyIntro = otpOnly
+    ? `<p style="margin:0 0 12px">${greeting} thanks for joining Quiz4Win! Enter the 6-digit code below in the app to confirm your email address.</p>`
+    : `<p style="margin:0 0 12px">${greeting} thanks for joining Quiz4Win! Tap the button below to confirm your email address and start playing.</p>`;
   const { html, text } = renderBrandEmail({
-    preheader: `Confirm your email to activate your Quiz4Win account — link expires in ${ttl} hours.`,
+    preheader: otpOnly
+      ? `Your Quiz4Win confirmation code expires in ${ttl} hours.`
+      : `Confirm your email to activate your Quiz4Win account — link expires in ${ttl} hours.`,
     heroTitle: "Confirm your email",
-    heroSubtitle: "One quick step to activate your Quiz4Win account.",
-    bodyHtml: `<p style="margin:0 0 12px">${greeting} thanks for joining Quiz4Win! Tap the button below to confirm your email address and start playing.</p>
+    heroSubtitle: otpOnly
+      ? "Enter the code below to activate your Quiz4Win account."
+      : "One quick step to activate your Quiz4Win account.",
+    bodyHtml: `${bodyIntro}
 ${otpBlock}
 <p style="margin:16px 0 0;color:${BRAND.textMuted}">If you didn't create a Quiz4Win account, you can safely ignore this email.</p>`,
-    cta: { label: "Confirm email →", url: opts.actionUrl },
-    ctaNote: `This link expires in ${ttl} hours.`,
-    text: `${opts.name ? `Hi ${opts.name}, ` : ""}thanks for joining Quiz4Win! Confirm your email address to activate your account (link expires in ${ttl} hours): ${opts.actionUrl}${opts.otp ? `\n\nOr enter this code in the app: ${opts.otp}` : ""}\n\nIf you didn't create a Quiz4Win account, you can safely ignore this email.`,
+    cta: otpOnly ? undefined : { label: "Confirm email →", url: opts.actionUrl },
+    ctaNote: otpOnly ? `This code expires in ${ttl} hours.` : `This link expires in ${ttl} hours.`,
+    text: otpOnly
+      ? `${opts.name ? `Hi ${opts.name}, ` : ""}thanks for joining Quiz4Win! Enter this code in the app to confirm your email (expires in ${ttl} hours): ${opts.otp}\n\nIf you didn't create a Quiz4Win account, you can safely ignore this email.`
+      : `${opts.name ? `Hi ${opts.name}, ` : ""}thanks for joining Quiz4Win! Confirm your email address to activate your account (link expires in ${ttl} hours): ${opts.actionUrl}${opts.otp ? `\n\nOr enter this code in the app: ${opts.otp}` : ""}\n\nIf you didn't create a Quiz4Win account, you can safely ignore this email.`,
   });
   return { subject, html, text };
 }

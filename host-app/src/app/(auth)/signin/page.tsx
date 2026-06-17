@@ -8,7 +8,7 @@ export const metadata = { title: "Sign in — Quiz4Win Host" };
 
 export default async function SigninPage({
   searchParams,
-}: { searchParams: Promise<{ error?: string; email?: string; next?: string }> }) {
+}: { searchParams: Promise<{ error?: string; email?: string; next?: string; info?: string }> }) {
   const sp = await searchParams;
   return (
     <Card className="p-6">
@@ -16,6 +16,12 @@ export default async function SigninPage({
       <p className="mt-1 text-sm text-[var(--color-q4w-muted)]">
         Sign in to your host account to continue.
       </p>
+
+      {sp.info ? (
+        <div className="mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
+          {sp.info}
+        </div>
+      ) : null}
 
       {sp.error ? (
         <div className="mt-4 rounded-2xl border border-[var(--color-q4w-danger)]/40 bg-[var(--color-q4w-danger)]/10 px-3 py-2 text-xs text-rose-300">

@@ -39,10 +39,15 @@ Deno.serve(async (req: Request) => {
   try {
     // ── POST /auth/signup ──────────────────────────────────────────────────
     if (path === "signup" && req.method === "POST") {
-      const { name, email, password, referral_code } = await req.json();
+      const { name, email, password, referral_code, flow } = await req.json();
       if (!email || !password || !name) {
         return errorResponse("Missing required fields: name, email, password", 400);
       }
+      // flow='otp' suppresses the magic-link button in the confirmation email
+      // and surfaces the OTP code as the primary call-to-action. Used by the
+      // host-app where a mail scanner pre-fetching the link would silently
+      // burn the underlying GoTrue token and make the OTP unusable.
+      const otpOnlyFlow = flow === "otp";
 
       const admin = getAdminClient();
 
@@ -102,17 +107,23 @@ Deno.serve(async (req: Request) => {
       }
 
       // Send the branded confirmation email — non-blocking so a Brevo hiccup
-      // never fails the signup. Includes the magic link plus the 6-digit OTP so
-      // the user can still confirm if a mail scanner pre-consumes the link.
+      // never fails the signup. For `flow:'otp'` we omit the action_link to
+      // immunise the OTP against mail-scanner prefetch (they share one GoTrue
+      // token; a prefetched link kills the OTP too).
       const actionUrl = (data.properties as { action_link?: string } | null)?.action_link;
       const otp = (data.properties as { email_otp?: string } | null)?.email_otp;
-      if (data.user?.email && actionUrl) {
-        const tpl = confirmEmailTemplate({ name, actionUrl, otp });
+      if (data.user?.email && (otpOnlyFlow ? otp : actionUrl)) {
+        const tpl = confirmEmailTemplate({
+          name,
+          actionUrl: otpOnlyFlow ? "" : (actionUrl ?? ""),
+          otp,
+          otpOnly: otpOnlyFlow,
+        });
         sendEmail({ to: { email: data.user.email, name }, ...tpl }).catch((err) =>
           console.warn("[auth] confirmation email failed:", err)
         );
       } else {
-        console.warn(`[auth] signup: no action_link generated for ${email}`);
+        console.warn(`[auth] signup: no action_link/otp generated for ${email}`);
       }
 
       return successResponse({ user: data.user, requires_confirmation: true }, 201);
@@ -249,6 +260,26 @@ Deno.serve(async (req: Request) => {
       const supabase = getPublicClient();
       const { data, error } = await supabase.auth.verifyOtp({ email, token, type: normType });
       if (error) {
+        // For signup confirmations, a mail-scanner / link-prefetcher can
+        // silently burn the underlying GoTrue token before the user types
+        // the OTP — GoTrue then returns expired/invalid even though the
+        // email is now confirmed. Detect that case and surface a distinct
+        // status so the client can route the user straight to sign-in.
+        if (normType === "signup") {
+          try {
+            const admin = getAdminClient();
+            // SECURITY DEFINER RPC — auth schema isn't exposed via PostgREST,
+            // so we bridge through public.auth_email_confirmed. If the email
+            // is already confirmed, the link was prefetched (mail scanner /
+            // preview) and burned the OTP token along with it.
+            const { data: confirmed } = await admin.rpc("auth_email_confirmed", {
+              p_email: String(email),
+            });
+            if (confirmed === true) {
+              return errorResponse("already_confirmed", 409);
+            }
+          } catch (_) { /* fall through to standard error */ }
+        }
         const code = error.message.toLowerCase().includes("expired") ? "otp_expired" : "otp_invalid";
         return errorResponse(code, error.message.includes("expired") ? 401 : 400);
       }
@@ -264,8 +295,9 @@ Deno.serve(async (req: Request) => {
     // the branded email through Brevo. Always returns 200 to avoid leaking
     // account existence (R-01).
     if (path === "resend-confirmation" && req.method === "POST") {
-      const { email } = await req.json();
+      const { email, flow } = await req.json();
       if (!email) return errorResponse("email is required", 400);
+      const otpOnlyFlow = flow === "otp";
       const redirectTo = (Deno.env.get("EMAIL_CONFIRM_REDIRECT_URL") ??
         ((Deno.env.get("APP_URL") ?? "https://app.quiz4win.com").replace(/\/$/, "") + "/auth/callback"));
       (async () => {
@@ -280,8 +312,13 @@ Deno.serve(async (req: Request) => {
           }
           const actionUrl = (data.properties as { action_link?: string } | null)?.action_link;
           const otp = (data.properties as { email_otp?: string } | null)?.email_otp;
-          if (data.user?.email && actionUrl) {
-            const tpl = confirmEmailTemplate({ name: data.user.user_metadata?.full_name ?? "", actionUrl, otp });
+          if (data.user?.email && (otpOnlyFlow ? otp : actionUrl)) {
+            const tpl = confirmEmailTemplate({
+              name: data.user.user_metadata?.full_name ?? "",
+              actionUrl: otpOnlyFlow ? "" : (actionUrl ?? ""),
+              otp,
+              otpOnly: otpOnlyFlow,
+            });
             sendEmail({ to: { email: data.user.email, name: data.user.user_metadata?.full_name ?? "" }, ...tpl }).catch((err) =>
               console.warn("[auth] resend-confirmation email failed:", err),
             );

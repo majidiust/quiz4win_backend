@@ -21,6 +21,12 @@ export async function verifyOtpAction(formData: FormData) {
     { email, token, type: "signup" },
   );
   if (!r.ok) {
+    // already_confirmed: a mail scanner / preview prefetcher consumed the
+    // signup link before the user typed the OTP. The account IS verified —
+    // send them to sign-in instead of dead-ending on "code expired".
+    if (r.error === "already_confirmed") {
+      redirect(`/signin?email=${encodeURIComponent(email)}&info=${encodeURIComponent("Email verified — please sign in")}`);
+    }
     const map: Record<string, string> = {
       otp_expired: "Code expired — request a new one",
       otp_invalid: "Invalid code",
@@ -38,9 +44,11 @@ export async function verifyOtpAction(formData: FormData) {
 export async function resendOtpAction(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   if (!email) redirect(`/verify-otp?error=${encodeURIComponent("Email required")}`);
+  // Match the signup flow — request an OTP-only email (no clickable link)
+  // so mail scanners cannot prefetch and invalidate the code.
   const r = await authFetch<{ message?: string }>(
     "/auth/resend-confirmation",
-    { email },
+    { email, flow: "otp" },
   );
   if (!r.ok) {
     redirect(`/verify-otp?email=${encodeURIComponent(email)}&error=${encodeURIComponent(r.error || "Resend failed")}`);

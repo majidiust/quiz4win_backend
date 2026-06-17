@@ -30,9 +30,12 @@ export async function signupAction(formData: FormData) {
     redirect(`/signup?error=${encodeURIComponent("Passwords do not match")}&email=${encodeURIComponent(email)}`);
   }
 
+  // flow:"otp" instructs the backend to omit the magic-link button from the
+  // confirmation email, so mail-scanner prefetch cannot burn the underlying
+  // GoTrue token (which would otherwise also invalidate the displayed OTP).
   const r = await authFetch<{ user: { id?: string } | null; requires_confirmation?: boolean }>(
     "/auth/signup",
-    { name, email, password },
+    { name, email, password, flow: "otp" },
   );
   if (!r.ok) {
     const map: Record<string, string> = {
