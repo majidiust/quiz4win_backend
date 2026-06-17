@@ -6,7 +6,7 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/utils";
-import { requestGameAction } from "../actions";
+import { requestGameAction, cancelRequestAction } from "../actions";
 
 export const metadata = { title: "Game — Quiz4Win Host" };
 
@@ -28,10 +28,11 @@ export default async function GameDetailPage({
   const { id } = await params;
   const sp = await searchParams;
 
-  const [meRes, gameUpcoming, gameHistory] = await Promise.all([
+  const [meRes, gameUpcoming, gameHistory, reqsRes] = await Promise.all([
     api<{ host: { id: string; application_status: string } }>("/host/me"),
     api<{ games: Game[] }>("/host/games/upcoming"),
     api<{ games: Game[] }>("/host/games/history"),
+    api<{ requests: Array<{ id: string; game_id: string; status: string; host_note: string | null; admin_note: string | null; created_at: string }> }>("/host/games/requests"),
   ]);
   const host = meRes.ok ? meRes.data?.host : null;
   const all = [
@@ -45,9 +46,13 @@ export default async function GameDetailPage({
     if (avail.ok) game = (avail.data?.games ?? []).find((g) => g.id === id);
   }
 
+  const myRequest = (reqsRes.ok ? reqsRes.data?.requests ?? [] : []).find((r) => r.game_id === id);
+  const pendingRequest = myRequest && myRequest.status === "pending" ? myRequest : null;
+  const closedRequest  = myRequest && ["rejected", "cancelled"].includes(myRequest.status) ? myRequest : null;
+
   const isAssigned = !!host && game?.host_id === host.id;
   const isAvailable = !game?.host_id && game?.status === "upcoming";
-  const canRequest = host?.application_status === "approved" && isAvailable;
+  const canRequest = host?.application_status === "approved" && isAvailable && !pendingRequest;
 
   return (
     <>
@@ -98,14 +103,56 @@ export default async function GameDetailPage({
             </Link>
           ) : null}
 
+          {pendingRequest ? (
+            <Card className="mt-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>Request pending review</CardTitle>
+                  <CardSubtitle>
+                    Sent {formatDateTime(pendingRequest.created_at)}. We&apos;ll notify you when an admin responds.
+                  </CardSubtitle>
+                </div>
+                <StatusChip status={pendingRequest.status} />
+              </div>
+              {pendingRequest.host_note ? (
+                <div className="mt-3 rounded-xl border border-[var(--color-q4w-border)] bg-white/5 p-3 text-xs text-[var(--color-q4w-text)]">
+                  &quot;{pendingRequest.host_note}&quot;
+                </div>
+              ) : null}
+              <form action={cancelRequestAction} className="mt-3">
+                <input type="hidden" name="request_id" value={pendingRequest.id} />
+                <Button type="submit" variant="secondary">Withdraw request</Button>
+              </form>
+            </Card>
+          ) : null}
+
+          {closedRequest && isAvailable ? (
+            <div className="mt-3 rounded-2xl border border-[var(--color-q4w-border)] bg-white/5 p-3 text-xs text-[var(--color-q4w-muted)]">
+              Your earlier request was {closedRequest.status}
+              {closedRequest.admin_note ? ` — "${closedRequest.admin_note}"` : "."} You can apply again below.
+            </div>
+          ) : null}
+
           {canRequest ? (
             <Card className="mt-3">
-              <CardTitle className="mb-2">Apply to host this show</CardTitle>
+              <CardTitle className="mb-1">Apply to host this show</CardTitle>
+              <CardSubtitle className="mb-3">
+                Quiz4Win admins review every request — you&apos;ll get a notification with the decision.
+              </CardSubtitle>
               <form action={requestGameAction} className="flex flex-col gap-3">
                 <input type="hidden" name="game_id" value={id} />
                 <Textarea name="note" placeholder="Why you'd be a great fit (optional)" maxLength={500} />
                 <Button type="submit">Send request</Button>
               </form>
+            </Card>
+          ) : null}
+
+          {!canRequest && !pendingRequest && isAvailable && host?.application_status !== "approved" ? (
+            <Card className="mt-3 border border-amber-400/30 bg-amber-500/5">
+              <CardTitle className="mb-1">Approval required</CardTitle>
+              <CardSubtitle>
+                Your host application is {host?.application_status ?? "not submitted"}. You&apos;ll be able to apply for shows once an admin approves your profile.
+              </CardSubtitle>
             </Card>
           ) : null}
         </>

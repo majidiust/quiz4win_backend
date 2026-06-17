@@ -22,6 +22,11 @@ export async function requestGameAction(formData: FormData) {
 export async function cancelRequestAction(formData: FormData) {
   const id = String(formData.get("request_id") ?? "");
   if (!id) return;
-  await api(`/host/games/requests/${id}`, { method: "DELETE" });
-  revalidatePath("/games");
+  const r = await api(`/host/games/requests/${id}`, { method: "DELETE" });
+  // Revalidate the games layout so both /games (any tab) and any open
+  // /games/[id] detail page pick up the new pending-request set.
+  revalidatePath("/games", "layout");
+  if (!r.ok) {
+    redirect(`/games?tab=requests&error=${encodeURIComponent(r.error)}`);
+  }
 }

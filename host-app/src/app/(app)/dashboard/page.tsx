@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle } from "lucide-react";
+import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle, Sparkles, ClipboardList } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardSubtitle } from "@/components/ui/card";
 import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
@@ -14,16 +14,21 @@ interface Host {
 }
 interface Game { id: string; title: string; scheduled_at: string | null; status: string }
 interface Invitation { id: string; status: string; games?: Game | null }
+interface Req { id: string; status: string; game_id: string }
 
 export default async function DashboardPage() {
-  const [me, upcoming, invites] = await Promise.all([
+  const [me, upcoming, available, invites, reqs] = await Promise.all([
     api<{ host: Host }>("/host/me"),
     api<{ games: Game[] }>("/host/games/upcoming"),
+    api<{ games: Game[] }>("/host/games/available"),
     api<{ invitations: Invitation[] }>("/host/invitations"),
+    api<{ requests: Req[] }>("/host/games/requests"),
   ]);
   const host = me.ok ? me.data?.host : null;
   const nextGame = upcoming.ok ? upcoming.data?.games?.[0] : null;
   const pendingInvites = (invites.ok ? invites.data?.invitations ?? [] : []).filter((i) => i.status === "sent");
+  const pendingReqs = (reqs.ok ? reqs.data?.requests ?? [] : []).filter((r) => r.status === "pending");
+  const availableCount = available.ok ? available.data?.games?.length ?? 0 : 0;
 
   return (
     <>
@@ -69,6 +74,26 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
+      {host?.application_status === "approved" && availableCount > 0 ? (
+        <Link href="/games?tab=available" className="mt-3 block">
+          <Card className="border border-[var(--color-q4w-primary)]/30 bg-[var(--color-q4w-primary)]/5">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-[var(--color-q4w-primary)]" />
+                <CardTitle>Apply for shows</CardTitle>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                  {availableCount} open
+                </span>
+                <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+              </div>
+            </CardHeader>
+            <CardSubtitle>{availableCount === 1 ? "An upcoming show is" : `${availableCount} upcoming shows are`} open for host requests. Tap to apply.</CardSubtitle>
+          </Card>
+        </Link>
+      ) : null}
+
       <Link href="/invitations" className="mt-3 block">
         <Card>
           <CardHeader>
@@ -88,6 +113,26 @@ export default async function DashboardPage() {
             : <CardSubtitle>Tap to review and accept.</CardSubtitle>}
         </Card>
       </Link>
+
+      {pendingReqs.length > 0 ? (
+        <Link href="/games?tab=requests" className="mt-3 block">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-[var(--color-q4w-primary)]" />
+                <CardTitle>My applications</CardTitle>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                  {pendingReqs.length} pending
+                </span>
+                <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+              </div>
+            </CardHeader>
+            <CardSubtitle>Awaiting admin review.</CardSubtitle>
+          </Card>
+        </Link>
+      ) : null}
 
       <Card className="mt-3">
         <CardHeader>
