@@ -22,6 +22,25 @@ export async function updateProfileAction(formData: FormData) {
   redirect("/settings?info=Saved");
 }
 
+export async function uploadAvatarAction(formData: FormData) {
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    redirect(`/settings?error=${encodeURIComponent("Select an image first")}`);
+  }
+  const upload = new FormData();
+  upload.set("file", file);
+  const r = await api("/host/me/avatar", { method: "POST", body: upload });
+  revalidatePath("/settings");
+  revalidatePath("/dashboard");
+  if (!r.ok) {
+    const msg = r.error === "file_too_large" ? "Image too large (max 25 MB)"
+      : r.error === "unsupported_mime" ? "Use a JPG, PNG, WEBP or HEIC image"
+      : r.error;
+    redirect(`/settings?error=${encodeURIComponent(msg)}`);
+  }
+  redirect("/settings?info=Photo updated");
+}
+
 export async function signOutAction() {
   // Best-effort: revoke the server-side refresh token via the custom
   // branded route (R-11.3). Failures are swallowed — local sign-out below

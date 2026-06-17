@@ -7,8 +7,10 @@
  *
  * Routes (under /host/*):
  *   POST   /host/apply                            — apply / re-apply to be a host
+ *   POST   /host/avatar-temp                      — upload avatar before applying (onboarding)
  *   GET    /host/me                               — own profile
  *   PATCH  /host/me                               — edit own profile
+ *   POST   /host/me/avatar                        — upload/replace profile picture
  *   POST   /host/me/files                         — upload verification file
  *   GET    /host/me/files                         — list own files
  *   DELETE /host/me/files/:id                     — delete own pending file
@@ -54,6 +56,8 @@ const PAY_METHODS = new Set([
   "btc", "eth", "trx", "bnb", "sol", "ton", "other",
 ]);
 const FILE_TYPES = new Set(["avatar", "selfie", "id_document", "intro_video", "screenshot", "other"]);
+// Avatars / profile pictures are images only (stored public-read, R-15.3).
+const AVATAR_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 
 const nowIso = () => new Date().toISOString();
 const requireApproved = (h: { application_status: string; status: string }) =>
@@ -77,7 +81,7 @@ Deno.serve(async (req: Request) => {
       if (!name || name.length < 2 || name.length > 120) return errorResponse("name_invalid", 400);
 
       const { data: existing } = await db.from("show_hosts").select("id, application_status").eq("auth_user_id", user.id).maybeSingle();
-      const fields = {
+      const fields: Record<string, unknown> = {
         name,
         auth_user_id: user.id,
         application_status: "pending",
@@ -96,6 +100,11 @@ Deno.serve(async (req: Request) => {
         applied_at: nowIso(),
         updated_at: nowIso(),
       };
+      // Only set avatar_url when the onboarding wizard supplied one (uploaded via
+      // /host/avatar-temp), so a re-apply without a new picture never wipes it.
+      if (typeof body.avatar_url === "string" && body.avatar_url) {
+        fields.avatar_url = body.avatar_url.slice(0, 500);
+      }
 
       if (existing) {
         if (existing.application_status === "approved") return errorResponse("already_a_host", 409);
@@ -115,6 +124,25 @@ Deno.serve(async (req: Request) => {
         return errorResponse(sanitizeError(error), 400);
       }
       return successResponse({ host: data }, 201);
+    }
+
+    // ── POST /host/avatar-temp ───────────────────────────────────────────────
+    // Onboarding wizard avatar upload: runs before a show_hosts row exists, so it
+    // keys by auth user id and returns the public URL for /host/apply to persist.
+    // R-15: server-side size/MIME validation, S3 helper, public-read for avatars.
+    if (parts[0] === "avatar-temp" && parts.length === 1 && req.method === "POST") {
+      const form = await req.formData().catch(() => null);
+      if (!form) return errorResponse("invalid_form", 400);
+      const file = form.get("file");
+      if (!(file instanceof File)) return errorResponse("file_required", 400);
+      if (file.size > MAX_FILE_BYTES) return errorResponse("file_too_large", 413);
+      const mime = file.type || "application/octet-stream";
+      if (!AVATAR_MIME.has(mime)) return errorResponse("unsupported_mime", 415);
+      const ext = (file.name.split(".").pop() ?? "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6) || "jpg";
+      const key = `avatars/${user.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      const buf = await file.arrayBuffer();
+      const r = await uploadObject(key, buf, mime, "public-read");
+      return successResponse({ url: r.publicUrl, key }, 201);
     }
 
     // From here on every route needs the caller's host row.
@@ -171,6 +199,30 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
     }
   }
 
+  // ── POST /host/me/avatar ─────────────────────────────────────────────────────
+  // Upload / replace the profile picture. Allowed for any non-suspended host
+  // (incl. pending) so the picture is visible to admins during review.
+  if (parts[0] === "me" && parts[1] === "avatar" && parts.length === 2 && method === "POST") {
+    if (host.status === "suspended" || host.application_status === "suspended") {
+      return errorResponse("account_suspended", 403);
+    }
+    const form = await req.formData().catch(() => null);
+    if (!form) return errorResponse("invalid_form", 400);
+    const file = form.get("file");
+    if (!(file instanceof File)) return errorResponse("file_required", 400);
+    if (file.size > MAX_FILE_BYTES) return errorResponse("file_too_large", 413);
+    const mime = file.type || "application/octet-stream";
+    if (!AVATAR_MIME.has(mime)) return errorResponse("unsupported_mime", 415);
+    const ext = (file.name.split(".").pop() ?? "jpg").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6) || "jpg";
+    const key = `hosts/${host.id}/avatar/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+    const buf = await file.arrayBuffer();
+    const r = await uploadObject(key, buf, mime, "public-read");
+    const { data, error } = await db.from("show_hosts")
+      .update({ avatar_url: r.publicUrl, updated_at: nowIso() }).eq("id", host.id).select("*").single();
+    if (error) return errorResponse(sanitizeError(error), 500);
+    return successResponse({ host: data, url: r.publicUrl });
+  }
+
   // ── /host/me/files ─────────────────────────────────────────────────────────
   if (parts[0] === "me" && parts[1] === "files") {
     if (parts.length === 2 && method === "GET") {
@@ -179,20 +231,28 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
       return successResponse({ files: data ?? [] });
     }
     if (parts.length === 2 && method === "POST") {
-      if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
       const form = await req.formData().catch(() => null);
       if (!form) return errorResponse("invalid_form", 400);
       const file = form.get("file");
       const fileType = (form.get("file_type") as string ?? "other").toLowerCase();
       if (!(file instanceof File)) return errorResponse("file_required", 400);
       if (!FILE_TYPES.has(fileType)) return errorResponse("invalid_file_type", 400);
+      // Onboarding media (intro video, avatar) may be uploaded while the host is
+      // still pending review; every other file type requires an approved host.
+      if (host.status === "suspended" || host.application_status === "suspended") {
+        return errorResponse("account_suspended", 403);
+      }
+      const onboardingType = fileType === "intro_video" || fileType === "avatar";
+      if (!onboardingType && !requireApproved(host)) return errorResponse("host_not_approved", 403);
       if (file.size > MAX_FILE_BYTES) return errorResponse("file_too_large", 413);
       const mime = file.type || "application/octet-stream";
       if (!ALLOWED_FILE_MIME.has(mime)) return errorResponse("unsupported_mime", 415);
       const ext = (file.name.split(".").pop() ?? "bin").toLowerCase().slice(0, 6);
       const key = `hosts/${host.id}/${fileType}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      // Avatars are shown unauthenticated (public-read); everything else is private.
+      const visibility = fileType === "avatar" ? "public-read" : "private";
       const buf = await file.arrayBuffer();
-      const r = await uploadObject(key, buf, mime, "private");
+      const r = await uploadObject(key, buf, mime, visibility);
       const { data, error } = await db.from("host_uploaded_files").insert({
         host_id: host.id, file_type: fileType, s3_key: key, url: r.publicUrl ?? "",
         mime_type: mime, file_size_bytes: file.size, status: "pending",

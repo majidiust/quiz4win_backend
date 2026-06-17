@@ -1,6 +1,6 @@
 # Quiz4Win Backend — Universal Rules
 
-Last updated: 2026-06-04 (rev 4)
+Last updated: 2026-06-17 (rev 5)
 Owner: A-02 (Project Memory Guardian)
 
 > These rules are **non-negotiable**. No agent may override them. Any violation must be flagged immediately in `Change_Log_AI.md` with the `[RULE]` prefix, and all work on the affected area must halt until resolved.
@@ -222,3 +222,42 @@ New helpers following the same pattern may be added; importing the Supabase SDK 
 Supabase Edge Functions (inside `supabase/functions/`) are exempt because they run inside Supabase's managed runtime and receive the client via the platform injection — but even there, no new `createClient` call should be added unless strictly necessary.
 
 **Action:** Any PR or commit that adds `@supabase/supabase-js` as a dependency to a Docker-deployed service, or calls `createClient` outside an Edge Function, is a rule violation and must be reverted.
+
+---
+
+## R-15 — All User File Uploads Go Through the S3 Helper
+
+Every user-supplied file (avatars, KYC documents, host intro videos, screenshots, support attachments, and any future media) MUST be stored in the S3-compatible object store (DigitalOcean Spaces) exclusively via the shared helper at `supabase/functions/_shared/s3.ts` (`uploadObject` / `presignGet` / `deleteObject` / `buildPublicUrl`). Direct `@aws-sdk/client-s3` usage, base64-in-DB blobs, or storing files on the container filesystem are forbidden.
+
+### R-15.1 — Server-side validation (never trust the client)
+
+Inside the Edge Function — before calling `uploadObject` — the handler MUST:
+1. Verify the JWT (R-03) and resolve the caller's identity.
+2. Enforce a **maximum size** (current ceiling: `25 MB` = `MAX_FILE_BYTES`). Reject oversize with HTTP 413.
+3. Validate the **MIME type** against an explicit allow-list (`ALLOWED_FILE_MIME`). Reject others with HTTP 415. Never derive trust from the file extension alone.
+4. Validate the logical **file type / category** against an allow-list (e.g. `FILE_TYPES`).
+
+### R-15.2 — Key naming convention
+
+Object keys are server-generated, never client-supplied. Use a stable, owner-scoped, collision-proof key:
+
+```
+hosts/<host_id>/<file_type>/<timestamp>-<uuid>.<ext>     # host files (show_hosts.id)
+avatars/<auth_user_id>/<timestamp>-<uuid>.<ext>          # pre-apply / onboarding avatars (no host row yet)
+kyc/<user_id>/<doc_type>.<ext>                           # KYC documents
+```
+
+The extension is sanitised (lower-cased, length-capped) and the random `uuid` prevents enumeration/overwrite.
+
+### R-15.3 — Visibility tiers
+
+- **`public-read`** — only for content meant to be shown unauthenticated in apps: **avatars / host profile pictures**. Persist the public URL.
+- **`private`** (default) — everything that is sensitive or under review: **KYC documents, host intro videos, screenshots, support attachments**. Serve these only via short-lived presigned URLs (`presignGet`); never persist a long-lived public URL for them.
+
+When in doubt, default to `private`.
+
+### R-15.4 — Persist the key, mint URLs on read
+
+Always store the S3 **object key** (`s3_key`) in the database as the source of truth. For private objects, generate presigned URLs at read time. Deleting a DB row that references an object SHOULD also `deleteObject` the key (cleanup path).
+
+**Action:** Any upload path that bypasses `uploadObject`, skips size/MIME validation, accepts a client-supplied object key, or marks sensitive content `public-read` is a rule violation. Flag it with `[RULE]` in `Change_Log_AI.md` and halt the affected upload path until corrected.

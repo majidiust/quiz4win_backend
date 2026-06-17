@@ -5,6 +5,23 @@ import { api } from "@/lib/api";
 
 const LANG_OPTIONS = ["en", "ar", "fa", "tr", "es", "pt", "fr", "de"] as const;
 
+export type UploadResult = { ok: true; url: string } | { ok: false; error: string };
+
+/**
+ * Uploads an avatar before the host has applied (no show_hosts row yet).
+ * Posts to /host/avatar-temp and returns the public URL for the wizard to keep
+ * and submit alongside the application. All S3 handling happens server-side (R-15).
+ */
+export async function uploadAvatarTempAction(formData: FormData): Promise<UploadResult> {
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Select an image first" };
+  const upload = new FormData();
+  upload.set("file", file);
+  const r = await api<{ url: string }>("/host/avatar-temp", { method: "POST", body: upload });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, url: r.data.url };
+}
+
 export async function applyAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   if (!name || name.length < 2) {
@@ -13,6 +30,7 @@ export async function applyAction(formData: FormData) {
   const langs = (formData.getAll("languages") as string[]).filter((l) => (LANG_OPTIONS as readonly string[]).includes(l));
   const body = {
     name,
+    avatar_url: String(formData.get("avatar_url") ?? "").trim() || null,
     country: String(formData.get("country") ?? "").trim() || null,
     languages: langs,
     phone: String(formData.get("phone") ?? "").trim() || null,
@@ -34,5 +52,6 @@ export async function applyAction(formData: FormData) {
       : r.error;
     redirect(`/onboarding/apply?error=${encodeURIComponent(msg)}`);
   }
-  redirect("/dashboard?welcome=1");
+  // Continue onboarding with the intro-video step before landing on the dashboard.
+  redirect("/onboarding/intro-video");
 }
