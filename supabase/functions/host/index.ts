@@ -44,7 +44,13 @@ const ALLOWED_FILE_MIME = new Set([
   "image/jpeg", "image/png", "image/webp", "image/heic",
   "application/pdf", "video/mp4", "video/quicktime", "video/webm",
 ]);
-const PAY_METHODS = new Set(["iban", "bank_account", "paypal", "usdt_trc20", "usdt_erc20", "btc", "other"]);
+// Crypto-only set offered by the host-app UI. The DB CHECK constraint keeps
+// legacy bank/paypal types valid for historical rows but the API no longer
+// accepts them on new inserts.
+const PAY_METHODS = new Set([
+  "usdt_trc20", "usdt_erc20", "usdt_bep20", "usdt_polygon",
+  "btc", "eth", "trx", "bnb", "sol", "ton", "other",
+]);
 const FILE_TYPES = new Set(["avatar", "selfie", "id_document", "intro_video", "screenshot", "other"]);
 
 const nowIso = () => new Date().toISOString();
