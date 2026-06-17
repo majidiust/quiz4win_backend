@@ -198,7 +198,7 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
   // ── /host/games/available, /upcoming, /history, /requests ─────────────────
   if (parts[0] === "games" && parts[1] === "available" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("games")
-      .select("id, title, mode, category, language, scheduled_at, prize_pool, host_payout, time_per_question, questions_count, livekit_room_name, status")
+      .select("id, title, mode, category, language, scheduled_at, prize_pool, time_per_question, questions_count, livekit_room_name, status")
       .is("host_id", null).eq("mode", "live").eq("status", "upcoming")
       .order("scheduled_at", { ascending: true }).limit(100);
     if (error) return errorResponse("failed_to_list_games", 500);
@@ -214,7 +214,7 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
   }
   if (parts[0] === "games" && parts[1] === "history" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("games")
-      .select("id, title, mode, category, language, scheduled_at, ended_at, prize_pool, participant_count, total_winners, status")
+      .select("id, title, mode, category, language, scheduled_at, ended_at, prize_pool, total_participants, total_winners, status")
       .eq("host_id", host.id).in("status", ["completed", "cancelled", "ended"])
       .order("ended_at", { ascending: false }).limit(100);
     if (error) return errorResponse("failed_to_list_games", 500);
