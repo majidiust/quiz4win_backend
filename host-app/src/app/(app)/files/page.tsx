@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
 import { uploadFileAction, deleteFileAction } from "./actions";
+import { FilePreview } from "./file-preview";
 
 export const metadata = { title: "Verification files — Quiz4Win Host" };
 
@@ -80,10 +81,7 @@ export default async function FilesPage({
               <StatusChip status={f.status} />
             </div>
             <div className="mt-3 flex gap-2">
-              {f.url ? (
-                <a href={f.url} target="_blank" rel="noopener noreferrer"
-                  className="text-xs text-[var(--color-q4w-primary)]">Preview</a>
-              ) : null}
+              <FilePreview fileId={f.id} mime={f.mime_type} label={f.file_type.replaceAll("_", " ")} />
               {f.status === "pending" ? (
                 <form action={deleteFileAction}>
                   <input type="hidden" name="id" value={f.id} />

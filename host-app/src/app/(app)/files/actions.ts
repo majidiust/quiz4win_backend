@@ -19,6 +19,20 @@ export async function uploadFileAction(formData: FormData) {
   redirect("/files?info=Uploaded");
 }
 
+export type PreviewUrlResult = { ok: true; url: string } | { ok: false; error: string };
+
+/**
+ * Resolves a short-lived view URL for one of the host's own verification files.
+ * Private files (selfie, ID, intro video, etc.) are returned as a presigned GET;
+ * avatars resolve to their public URL. The session token never leaves the server.
+ */
+export async function getFilePreviewUrl(id: string): Promise<PreviewUrlResult> {
+  if (!id) return { ok: false, error: "missing_id" };
+  const r = await api<{ url: string }>(`/host/me/files/${id}/url`);
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, url: r.data.url };
+}
+
 export async function deleteFileAction(formData: FormData) {
   const id = String(formData.get("id") ?? "");
   if (!id) return;

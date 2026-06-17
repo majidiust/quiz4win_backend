@@ -13,6 +13,7 @@
  *   POST   /host/me/avatar                        — upload/replace profile picture
  *   POST   /host/me/files                         — upload verification file
  *   GET    /host/me/files                         — list own files
+ *   GET    /host/me/files/:id/url                 — presigned view URL for own file
  *   DELETE /host/me/files/:id                     — delete own pending file
  *   GET    /host/games/available                  — assignable upcoming games
  *   GET    /host/games/upcoming                   — games assigned to me
@@ -38,7 +39,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, sanitizeError } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
-import { uploadObject } from "../_shared/s3.ts";
+import { uploadObject, presignGet } from "../_shared/s3.ts";
 import { signAccessToken } from "../_shared/livekit.ts";
 import {
   sendEmail,
@@ -457,6 +458,17 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB, h
       const { error } = await db.from("host_uploaded_files").delete().eq("id", parts[2]);
       if (error) return errorResponse(sanitizeError(error), 500);
       return successResponse({ ok: true });
+    }
+    // GET /host/me/files/:id/url — short-lived view URL for the host's own file.
+    if (parts.length === 4 && parts[3] === "url" && method === "GET") {
+      const { data: row } = await db.from("host_uploaded_files")
+        .select("id, host_id, file_type, s3_key, url").eq("id", parts[2]).maybeSingle();
+      if (!row || row.host_id !== host.id) return errorResponse("file_not_found", 404);
+      // Avatars are public-read; everything else is private → presigned GET (10 min).
+      const url = row.file_type === "avatar"
+        ? (row.url as string)
+        : await presignGet(row.s3_key as string, 600);
+      return successResponse({ url });
     }
   }
 
