@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getUploadToken } from "./actions";
+import { signOutAction } from "@/app/(app)/settings/actions";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "https://api.quiz4win.com").replace(/\/$/, "");
 
@@ -210,9 +211,15 @@ export default function IntroVideoPage() {
           const json = await res.json() as { error?: string };
           errCode = json.error ?? errCode;
         } catch { /* ignore */ }
+        // An expired/invalid session: don't dead-end the user with a message —
+        // fully sign out (clears cookies server-side) and send them to /signin.
+        if (res.status === 401 || errCode === "unauthorized") {
+          streamRef.current?.getTracks().forEach((t) => t.stop());
+          await signOutAction();
+          return;
+        }
         const msg = errCode === "file_too_large" ? "Recording too large — please record a shorter clip"
           : errCode === "unsupported_mime" ? "This recording format isn't supported"
-          : errCode === "unauthorized" ? "Session expired — please sign in again"
           : errCode;
         setError(msg);
       }
