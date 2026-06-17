@@ -4,10 +4,39 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin, type AdminRole } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { presignGet } from "@/lib/s3";
 
 export interface ActionResult { ok: boolean; message: string }
 const MOD: AdminRole[] = ["super_admin", "admin", "moderator"];
 const FIN: AdminRole[] = ["super_admin", "admin", "finance"];
+
+// ─── getHostFileSignedUrl ────────────────────────────────────────────────────
+// Resolves a viewable URL for a host_uploaded_files row. Public-read files
+// (avatars) already carry a direct url; private files (intro_video, selfie,
+// id_document, …) are presigned on demand for a short, admin-only window.
+export type SignedUrlResult = { ok: true; url: string } | { ok: false; message: string };
+
+export async function getHostFileSignedUrl(fileId: string): Promise<SignedUrlResult> {
+  await requireAdmin([...MOD, "finance"]);
+  const p = z.object({ fileId: z.string().uuid() }).safeParse({ fileId });
+  if (!p.success) return { ok: false, message: "Invalid input" };
+  const db = createSupabaseAdminClient();
+  const { data: file } = await db
+    .from("host_uploaded_files")
+    .select("s3_key, url")
+    .eq("id", p.data.fileId)
+    .maybeSingle();
+  if (!file) return { ok: false, message: "File not found" };
+  if (file.url) return { ok: true, url: file.url as string };
+  if (!file.s3_key) return { ok: false, message: "File has no stored object key" };
+  try {
+    const url = await presignGet(file.s3_key as string, 300);
+    return { ok: true, url };
+  } catch (err) {
+    console.error("[hosts] presign failed:", err instanceof Error ? err.message : err);
+    return { ok: false, message: "Could not generate a viewing link" };
+  }
+}
 
 type DB = ReturnType<typeof createSupabaseAdminClient>;
 const nowIso = () => new Date().toISOString();
