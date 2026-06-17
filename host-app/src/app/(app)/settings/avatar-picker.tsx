@@ -5,7 +5,7 @@
  *
  * Clicking the avatar circle opens a bottom sheet with three options:
  *   • Choose an avatar — scrollable grid of 40 predefined 3-D avatars (jsDelivr CDN)
- *   • Take photo       — opens the front-facing camera (capture="user")
+ *   • Take photo       — opens an in-app live camera (getUserMedia)
  *   • Choose from gallery — standard image file picker
  *
  * Predefined avatar selection calls PATCH /host/me with { avatar_url } directly
@@ -14,8 +14,8 @@
  * session cookie is httpOnly.
  */
 
-import { useRef, useState, useTransition } from "react";
-import { Camera, ChevronLeft, ImageIcon, Sparkles, X } from "lucide-react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { Camera, ChevronLeft, ImageIcon, Sparkles, SwitchCamera, X } from "lucide-react";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "https://api.quiz4win.com").replace(/\/$/, "");
 
@@ -47,8 +47,93 @@ export function AvatarPickerSection({ currentUrl, name, uploadToken, onChanged }
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
+  // In-app camera capture (getUserMedia) — more reliable than the file-input
+  // `capture` attribute, which silently falls back to a file picker on many
+  // browsers/devices. The hidden cameraRef input is kept only as a last resort.
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+
   function openDialog() { setDialogOpen(true); setShowGrid(false); }
   function closeDialog() { setDialogOpen(false); setShowGrid(false); }
+
+  function stopStream() {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }
+
+  async function openCamera() {
+    setError(null);
+    setCameraError(null);
+    // No camera API (e.g. insecure context or unsupported browser) → fall back.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      cameraRef.current?.click();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+      streamRef.current = stream;
+      setDialogOpen(false);
+      setCameraOpen(true);
+    } catch {
+      // Permission denied or no camera available → native file picker fallback.
+      cameraRef.current?.click();
+    }
+  }
+
+  function closeCamera() { stopStream(); setCameraOpen(false); }
+
+  async function switchCamera() {
+    const next = facingMode === "user" ? "environment" : "user";
+    stopStream();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: next }, audio: false });
+      streamRef.current = stream;
+      setFacingMode(next);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => { /* */ });
+      }
+    } catch {
+      setCameraError("Unable to switch camera.");
+    }
+  }
+
+  function capturePhoto() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return;
+    // Centre-crop to a square so it matches the round avatar frame.
+    const size = Math.min(video.videoWidth, video.videoHeight);
+    const sx = (video.videoWidth - size) / 2;
+    const sy = (video.videoHeight - size) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    // Mirror the front camera so the saved photo matches the live preview.
+    if (facingMode === "user") { ctx.translate(size, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, size, size);
+    canvas.toBlob((blob) => {
+      if (!blob) { setCameraError("Capture failed — please try again."); return; }
+      const file = new File([blob], `photo_${Date.now()}.jpg`, { type: "image/jpeg" });
+      closeCamera();
+      handleFile(file);
+    }, "image/jpeg", 0.92);
+  }
+
+  // Attach the live stream once the <video> element mounts; always stop the
+  // camera when the component unmounts.
+  useEffect(() => {
+    if (cameraOpen && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => { /* */ });
+    }
+  }, [cameraOpen]);
+
+  useEffect(() => () => stopStream(), []);
 
   async function patchAvatarUrl(url: string): Promise<boolean> {
     if (!uploadToken) return false;
@@ -237,7 +322,7 @@ export function AvatarPickerSection({ currentUrl, name, uploadToken, onChanged }
                 </button>
                 <button
                   type="button"
-                  onClick={() => cameraRef.current?.click()}
+                  onClick={openCamera}
                   className="glass flex items-center gap-3 rounded-2xl px-4 py-3 text-left hover:bg-white/10"
                 >
                   <div className="flex h-9 w-9 items-center justify-center rounded-full bg-pink-500/20">
@@ -263,6 +348,48 @@ export function AvatarPickerSection({ currentUrl, name, uploadToken, onChanged }
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Full-screen in-app camera */}
+      {cameraOpen ? (
+        <div className="fixed inset-0 z-[60] flex flex-col bg-black">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`h-full w-full object-cover ${facingMode === "user" ? "-scale-x-100" : ""}`}
+          />
+          {cameraError ? (
+            <p className="absolute inset-x-0 top-[max(env(safe-area-inset-top),20px)] text-center text-sm text-rose-400">
+              {cameraError}
+            </p>
+          ) : null}
+          <div className="absolute inset-x-0 bottom-0 flex items-center justify-between px-10 pb-[max(env(safe-area-inset-bottom),28px)] pt-6">
+            <button
+              type="button"
+              onClick={closeCamera}
+              aria-label="Cancel"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20"
+            >
+              <X className="h-6 w-6" />
+            </button>
+            <button
+              type="button"
+              onClick={capturePhoto}
+              aria-label="Take photo"
+              className="h-[72px] w-[72px] rounded-full border-4 border-white bg-white/30 transition active:scale-95"
+            />
+            <button
+              type="button"
+              onClick={switchCamera}
+              aria-label="Switch camera"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur transition hover:bg-white/20"
+            >
+              <SwitchCamera className="h-6 w-6" />
+            </button>
           </div>
         </div>
       ) : null}
