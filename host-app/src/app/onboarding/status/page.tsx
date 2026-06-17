@@ -56,12 +56,12 @@ export default async function StatusPage() {
 function PendingScreen({ name }: { name: string }) {
   return (
     <div className="flex w-full flex-col items-center gap-6 text-center">
-      {/* Animated glow orb */}
+      {/* Animated glow orb — pink/fuchsia theme */}
       <div className="relative flex h-28 w-28 items-center justify-center">
-        <div className="absolute inset-0 animate-ping rounded-full bg-amber-500/20" />
-        <div className="absolute inset-2 animate-pulse rounded-full bg-amber-500/15" />
-        <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-amber-500/40 bg-amber-500/10">
-          <svg className="h-10 w-10 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <div className="absolute inset-0 animate-ping rounded-full bg-pink-500/15" />
+        <div className="absolute inset-2 animate-pulse rounded-full bg-fuchsia-500/10" />
+        <div className="relative flex h-20 w-20 items-center justify-center rounded-full border border-pink-500/40 bg-gradient-to-br from-pink-500/20 to-fuchsia-500/10">
+          <svg className="h-10 w-10 text-pink-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z" />
           </svg>
         </div>
@@ -69,7 +69,7 @@ function PendingScreen({ name }: { name: string }) {
 
       <div>
         <h1 className="text-2xl font-bold">Hi {name} 👋</h1>
-        <p className="mt-2 text-[var(--color-q4w-muted)]">Your application is under review</p>
+        <p className="mt-2 text-white/50">Your application is under review</p>
       </div>
 
       {/* Progress steps */}
@@ -81,18 +81,18 @@ function PendingScreen({ name }: { name: string }) {
         </ol>
       </Card>
 
-      <CardSubtitle className="text-center">
+      <p className="text-center text-xs text-white/40">
         We&apos;ll email you when your application is reviewed. This usually takes 1–3 business days.
-      </CardSubtitle>
+      </p>
 
       <div className="flex w-full flex-col gap-3">
-        <a href="/onboarding/status" className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-white/5 text-sm font-medium text-[var(--color-q4w-muted)] transition hover:bg-white/10">
+        <a href="/onboarding/status" className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-sm font-medium text-white/60 transition hover:bg-white/10 hover:text-white">
           Refresh status
         </a>
-        <Link href="/onboarding/intro-video" className="text-center text-xs text-[var(--color-q4w-muted)] underline underline-offset-2">
+        <Link href="/onboarding/intro-video" className="text-center text-xs text-white/40 underline underline-offset-2 hover:text-white/70">
           Re-record intro video
         </Link>
-        <Link href="/signin" className="text-center text-xs text-[var(--color-q4w-muted)]">Sign out</Link>
+        <Link href="/signin" className="text-center text-xs text-white/35 hover:text-white/60">Sign out</Link>
       </div>
     </div>
   );
@@ -119,10 +119,10 @@ function RejectedScreen({ notes }: { notes?: string | null }) {
         </Card>
       ) : null}
       <div className="flex w-full flex-col gap-3">
-        <Link href="/onboarding/apply" className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-[var(--color-q4w-primary)] text-sm font-medium text-white transition">
+        <Link href="/onboarding/apply" className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-pink-300 via-fuchsia-300 to-teal-300 text-sm font-semibold text-black shadow-[0_10px_40px_-10px_rgba(236,72,153,0.5)] transition hover:opacity-90">
           Submit a new application
         </Link>
-        <Link href="/signin" className="text-center text-xs text-[var(--color-q4w-muted)]">Sign out</Link>
+        <Link href="/signin" className="text-center text-xs text-white/35 hover:text-white/60">Sign out</Link>
       </div>
     </div>
   );
@@ -151,15 +151,15 @@ function Step({ done, active, label, description }: { done?: boolean; active?: b
   return (
     <li className="flex items-start gap-3">
       <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
-        done  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-400"
-        : active ? "border-amber-500/50 bg-amber-500/15 text-amber-400 animate-pulse"
-        : "border-white/10 bg-white/5 text-[var(--color-q4w-muted)]"
+        done  ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300"
+        : active ? "border-pink-400/50 bg-pink-500/15 text-pink-300 animate-pulse"
+        : "border-white/10 bg-white/5 text-white/30"
       }`}>
         {done ? "✓" : active ? "…" : "○"}
       </div>
       <div className="text-left">
-        <div className={`text-sm font-medium ${active ? "text-amber-200" : done ? "text-emerald-200" : "text-[var(--color-q4w-muted)]"}`}>{label}</div>
-        <div className="text-[11px] text-[var(--color-q4w-muted)]">{description}</div>
+        <div className={`text-sm font-medium ${active ? "text-pink-200" : done ? "text-emerald-200" : "text-white/40"}`}>{label}</div>
+        <div className="text-[11px] text-white/35">{description}</div>
       </div>
     </li>
   );

@@ -6,7 +6,9 @@ import { Video, Square, RotateCcw, CheckCircle2, CameraOff, Lightbulb } from "lu
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { uploadIntroVideoAction } from "./actions";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "https://api.quiz4win.com").replace(/\/$/, "");
 
 const MAX_SECONDS = 120;
 const REVEAL_AT = 10;
@@ -171,16 +173,48 @@ export default function IntroVideoPage() {
     if (blob.size > MAX_BYTES) { setError("Recording too large — record a shorter clip."); return; }
     const { ext, type } = pickMime();
     const file = new File([blob], `intro.${ext}`, { type });
-    const fd = new FormData();
-    fd.set("file", file);
     setError(null);
     startTransition(async () => {
-      const r = await uploadIntroVideoAction(fd);
-      if (r.ok) {
+      // Upload directly from the browser to the backend API so the video never
+      // passes through a Next.js server action (which has a 1 MB default body
+      // limit that is unreliable in standalone/Docker deployments).
+      let token: string | undefined;
+      try {
+        const supabase = createSupabaseBrowserClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        token = session?.access_token;
+      } catch { /* proceed without token — backend will 401 */ }
+
+      const fd = new FormData();
+      fd.set("file_type", "intro_video");
+      fd.set("file", file);
+
+      let res: Response;
+      try {
+        res = await fetch(`${API_URL}/host/me/files`, {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        });
+      } catch (e) {
+        setError((e as Error).message ?? "Network error — please try again.");
+        return;
+      }
+
+      if (res.ok) {
         streamRef.current?.getTracks().forEach((t) => t.stop());
         router.push("/onboarding/status");
       } else {
-        setError(r.error);
+        let errCode = `http_${res.status}`;
+        try {
+          const json = await res.json() as { error?: string };
+          errCode = json.error ?? errCode;
+        } catch { /* ignore */ }
+        const msg = errCode === "file_too_large" ? "Recording too large — please record a shorter clip"
+          : errCode === "unsupported_mime" ? "This recording format isn't supported"
+          : errCode === "unauthorized" ? "Session expired — please sign in again"
+          : errCode;
+        setError(msg);
       }
     });
   }

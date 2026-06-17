@@ -9,10 +9,14 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const STYLES: Record<ButtonVariant, string> = {
-  primary: "bg-[var(--color-q4w-primary)] text-white active:bg-[var(--color-q4w-primary-2)]",
-  secondary: "glass text-[var(--color-q4w-text)]",
-  ghost: "text-[var(--color-q4w-muted)] hover:text-[var(--color-q4w-text)]",
-  danger: "bg-[var(--color-q4w-danger)] text-white",
+  // Gradient + pink glow shadow — matches quiz4win.com/become-host CTA style.
+  primary:
+    "bg-gradient-to-r from-pink-300 via-fuchsia-300 to-teal-300 text-black font-semibold " +
+    "shadow-[0_10px_40px_-10px_rgba(236,72,153,0.55)] hover:opacity-90 active:opacity-80",
+  secondary: "glass border border-white/10 text-[var(--color-q4w-text)] hover:bg-white/10",
+  ghost: "text-white/50 hover:text-white",
+  danger:
+    "bg-rose-500/20 border border-rose-400/30 text-rose-200 hover:bg-rose-500/30",
 };
 
 export const Button = forwardRef<HTMLButtonElement, Props>(function Button(

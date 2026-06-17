@@ -7,11 +7,14 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   hint?: string;
 }
 
-const baseField = "h-12 w-full rounded-2xl border border-[var(--color-q4w-border)] " +
-  "bg-[var(--color-q4w-glass)] px-4 text-sm text-[var(--color-q4w-text)] " +
-  "placeholder:text-[var(--color-q4w-muted)] focus:outline-none " +
-  "focus:border-[var(--color-q4w-primary)] focus:ring-2 focus:ring-[var(--color-q4w-primary)]/20 " +
-  "transition";
+// Inner input — matches quiz4win.com/become-host field style.
+const baseInput =
+  "h-11 w-full bg-transparent text-white placeholder:text-white/35 text-sm outline-none border-0 focus:ring-0";
+
+// Outer wrapper — rounded glass pill that glows on focus.
+const baseWrapper =
+  "flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] " +
+  "focus-within:border-white/30 focus-within:bg-white/[0.07] transition-all px-4";
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { label, error, hint, className, id, ...props }, ref,
@@ -20,11 +23,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   return (
     <label className="block" htmlFor={inputId}>
       {label ? (
-        <div className="mb-1.5 ml-1 text-xs font-medium text-[var(--color-q4w-muted)]">{label}</div>
+        <div className="mb-1.5 text-[11px] uppercase tracking-widest text-white/55">{label}</div>
       ) : null}
-      <input ref={ref} id={inputId} className={cn(baseField, error && "border-[var(--color-q4w-danger)]", className)} {...props} />
-      {hint && !error ? <div className="ml-1 mt-1 text-[11px] text-[var(--color-q4w-muted)]">{hint}</div> : null}
-      {error ? <div className="ml-1 mt-1 text-[11px] text-[var(--color-q4w-danger)]">{error}</div> : null}
+      <div className={cn(baseWrapper, error && "border-rose-400/40 bg-rose-500/5")}>
+        <input ref={ref} id={inputId} className={cn(baseInput, className)} {...props} />
+      </div>
+      {hint && !error ? <div className="mt-1 text-[11px] text-white/40">{hint}</div> : null}
+      {error ? <div className="mt-1 text-[11px] text-rose-300">{error}</div> : null}
     </label>
   );
 });
@@ -42,16 +47,18 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   return (
     <label className="block" htmlFor={inputId}>
       {label ? (
-        <div className="mb-1.5 ml-1 text-xs font-medium text-[var(--color-q4w-muted)]">{label}</div>
+        <div className="mb-1.5 text-[11px] uppercase tracking-widest text-white/55">{label}</div>
       ) : null}
-      <textarea
-        ref={ref}
-        id={inputId}
-        className={cn(baseField.replace("h-12", "min-h-[88px] py-3"), error && "border-[var(--color-q4w-danger)]", className)}
-        {...props}
-      />
-      {hint && !error ? <div className="ml-1 mt-1 text-[11px] text-[var(--color-q4w-muted)]">{hint}</div> : null}
-      {error ? <div className="ml-1 mt-1 text-[11px] text-[var(--color-q4w-danger)]">{error}</div> : null}
+      <div className={cn(baseWrapper, "items-start py-3", error && "border-rose-400/40 bg-rose-500/5")}>
+        <textarea
+          ref={ref}
+          id={inputId}
+          className={cn("min-h-[72px] w-full resize-none bg-transparent text-white placeholder:text-white/35 text-sm outline-none border-0 focus:ring-0", className)}
+          {...props}
+        />
+      </div>
+      {hint && !error ? <div className="mt-1 text-[11px] text-white/40">{hint}</div> : null}
+      {error ? <div className="mt-1 text-[11px] text-rose-300">{error}</div> : null}
     </label>
   );
 });

@@ -6,7 +6,7 @@ export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
     <div
       {...props}
       className={cn(
-        "glass rounded-2xl p-4 shadow-[0_18px_44px_-22px_rgba(0,0,0,0.45)]",
+        "glass rounded-3xl border border-white/10 p-4",
         className,
       )}
     />
@@ -22,5 +22,5 @@ export function CardTitle({ className, ...props }: HTMLAttributes<HTMLDivElement
 }
 
 export function CardSubtitle({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("text-xs text-[var(--color-q4w-muted)]", className)} {...props} />;
+  return <div className={cn("text-xs text-white/45", className)} {...props} />;
 }

@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  /* ─── Studio palette ──────────────────────────────────────────────────────
-     Dark stage-backdrop base, warm amber-gold spotlight as the primary accent,
-     vivid violet-purple as the complementary dramatic light.               */
-  --color-q4w-bg:        #09070E;   /* near-black with deep purple depth     */
-  --color-q4w-bg-2:      #100D1C;   /* dark stage surface                    */
+  /* ─── Quiz4Win palette — matches quiz4win.com/become-host ─────────────────
+     Deep near-black canvas; pink/fuchsia as the hero accent; teal as the
+     complementary cool light. Mirrors the marketing site's visual language. */
+  --color-q4w-bg:        #08070D;   /* near-black — same depth as the site   */
+  --color-q4w-bg-2:      #0E0C18;   /* slightly lighter surface              */
   --color-q4w-glass:     rgba(255, 255, 255, 0.045);
-  --color-q4w-border:    rgba(255, 255, 255, 0.09);
-  --color-q4w-text:      #F2EFFE;   /* warm-white stage text                 */
-  --color-q4w-muted:     #6E6882;   /* muted lavender-gray                   */
-  --color-q4w-primary:   #D4860A;   /* warm amber-gold — studio spotlight    */
-  --color-q4w-primary-2: #9333EA;   /* vivid violet — dramatic stage light   */
-  --color-q4w-success:   #22C55E;
-  --color-q4w-warn:      #F59E0B;
-  --color-q4w-danger:    #EF4444;
+  --color-q4w-border:    rgba(255, 255, 255, 0.10);
+  --color-q4w-text:      #F4F0FF;   /* soft-white                            */
+  --color-q4w-muted:     rgba(255, 255, 255, 0.45); /* white/45              */
+  --color-q4w-primary:   #EC4899;   /* pink-500 — main accent                */
+  --color-q4w-primary-2: #14B8A6;   /* teal-500 — complementary accent       */
+  --color-q4w-success:   #34D399;   /* emerald-400                           */
+  --color-q4w-warn:      #FBBF24;   /* amber-400                             */
+  --color-q4w-danger:    #F87171;   /* rose-400                              */
 }
 
 html, body { background: var(--color-q4w-bg); color: var(--color-q4w-text); }
@@ -23,12 +23,12 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
                Roboto, Helvetica, Arial, sans-serif;
   font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
-  /* Overhead spotlight glow (amber-gold) + corner dramatic fill (violet)
-     on a deep stage-black canvas — the "studio" backdrop effect.         */
+  /* Pink glow at top-center, teal glow at bottom-left — exactly the same
+     radial pattern used on quiz4win.com/become-host hero section.        */
   background:
-    radial-gradient(ellipse 70% 50% at 50% -8%,  rgba(212,134,10,0.22), transparent 58%),
-    radial-gradient(ellipse 50% 40% at 100% 90%, rgba(147,51,234,0.18), transparent 55%),
-    radial-gradient(ellipse 40% 30% at 0%   80%, rgba(147,51,234,0.10), transparent 50%),
+    radial-gradient(ellipse 60% 50% at 50% 0%,   rgba(236,72,153,0.18), transparent 60%),
+    radial-gradient(ellipse 50% 60% at 20% 80%,  rgba(20,184,166,0.15), transparent 60%),
+    radial-gradient(ellipse 40% 40% at 80% 70%,  rgba(168,85,247,0.08), transparent 55%),
     var(--color-q4w-bg);
   min-height: 100dvh;
 }

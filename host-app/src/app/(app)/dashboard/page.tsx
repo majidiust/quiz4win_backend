@@ -64,18 +64,18 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-2 gap-3">
         <Link href="/games" className="block">
           <Card>
-            <Gamepad2 className="h-5 w-5 text-[var(--color-q4w-primary)]" />
+            <Gamepad2 className="h-5 w-5 text-pink-300" />
             <div className="mt-3 text-2xl font-semibold tabular-nums">{host?.shows_hosted ?? 0}</div>
-            <div className="text-[11px] text-[var(--color-q4w-muted)]">Shows hosted</div>
+            <div className="text-[11px] text-white/45">Shows hosted</div>
           </Card>
         </Link>
         <Link href="/wallet" className="block">
           <Card>
-            <Wallet className="h-5 w-5 text-[var(--color-q4w-primary)]" />
+            <Wallet className="h-5 w-5 text-teal-300" />
             <div className="mt-3 text-2xl font-semibold tabular-nums">
               {Number(host?.total_earnings ?? 0).toFixed(2)}
             </div>
-            <div className="text-[11px] text-[var(--color-q4w-muted)]">Total earnings</div>
+            <div className="text-[11px] text-white/45">Total earnings</div>
           </Card>
         </Link>
       </div>
@@ -106,17 +106,17 @@ export default async function DashboardPage() {
 
       {host?.application_status === "approved" ? (
         <Link href="/games?tab=available" className="mt-3 block">
-          <Card className="border border-[var(--color-q4w-primary)]/30 bg-[var(--color-q4w-primary)]/5">
+          <Card className="border-pink-500/25 bg-pink-500/5">
             <CardHeader>
               <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-[var(--color-q4w-primary)]" />
+                <Sparkles className="h-4 w-4 text-pink-300" />
                 <CardTitle>Apply for shows</CardTitle>
               </div>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                <span className="rounded-full bg-pink-500/15 px-2 py-0.5 text-xs text-pink-300">
                   {availableCount} open
                 </span>
-                <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+                <ChevronRight className="h-4 w-4 text-white/40" />
               </div>
             </CardHeader>
             <CardSubtitle>
@@ -136,20 +136,20 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4 text-[var(--color-q4w-primary)]" />
+              <Mail className="h-4 w-4 text-fuchsia-300" />
               <CardTitle>Invitations</CardTitle>
             </div>
             <div className="flex items-center gap-2">
               {pendingNotifications > 0 ? (
-                <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+                <span className="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-xs font-medium text-fuchsia-300">
                   {pendingNotifications} pending
                 </span>
               ) : (
-                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/50">
                   0 new
                 </span>
               )}
-              <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+              <ChevronRight className="h-4 w-4 text-white/40" />
             </div>
           </CardHeader>
           {pendingNotifications === 0 ? (
@@ -172,14 +172,14 @@ export default async function DashboardPage() {
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-[var(--color-q4w-primary)]" />
+                <ClipboardList className="h-4 w-4 text-teal-300" />
                 <CardTitle>My applications</CardTitle>
               </div>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                <span className="rounded-full bg-teal-500/15 px-2 py-0.5 text-xs text-teal-300">
                   {pendingReqs.length} pending
                 </span>
-                <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+                <ChevronRight className="h-4 w-4 text-white/40" />
               </div>
             </CardHeader>
             <CardSubtitle>Awaiting admin review.</CardSubtitle>
@@ -190,10 +190,10 @@ export default async function DashboardPage() {
       <Card className="mt-3">
         <CardHeader>
           <CardTitle>Next show</CardTitle>
-          <Link href="/games" className="text-xs text-[var(--color-q4w-muted)]">All</Link>
+          <Link href="/games" className="text-xs text-white/40 hover:text-white/70 transition-colors">All</Link>
         </CardHeader>
         {nextGame ? (
-          <Link href={`/games/${nextGame.id}`} className="block rounded-xl border border-[var(--color-q4w-border)] p-3">
+          <Link href={`/games/${nextGame.id}`} className="block rounded-2xl border border-white/10 p-3 hover:bg-white/5 transition-colors">
             <div className="text-sm font-medium">{nextGame.title}</div>
             <div className="mt-1 text-xs text-[var(--color-q4w-muted)]">{formatDateTime(nextGame.scheduled_at)}</div>
             <div className="mt-2"><StatusChip status={nextGame.status} /></div>
