@@ -14,7 +14,7 @@ export default async function SignupPage({
     <Card className="p-6">
       <h1 className="text-2xl font-semibold">Create your host account</h1>
       <p className="mt-1 text-sm text-[var(--color-q4w-muted)]">
-        We&apos;ll email you a 6-digit code to confirm your address.
+        We&apos;ll email you a verification code to confirm your address.
       </p>
 
       {sp.error ? (

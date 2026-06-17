@@ -15,7 +15,7 @@ export default async function VerifyOtpPage({
     <Card className="p-6">
       <h1 className="text-2xl font-semibold">Verify your email</h1>
       <p className="mt-1 text-sm text-[var(--color-q4w-muted)]">
-        Enter the 6-digit code sent to{" "}
+        Enter the verification code sent to{" "}
         <span className="text-[var(--color-q4w-text)]">{email || "your email"}</span>.
       </p>
 
@@ -33,13 +33,13 @@ export default async function VerifyOtpPage({
       <form action={verifyOtpAction} className="mt-6 flex flex-col gap-3">
         <input type="hidden" name="email" value={email} />
         <Input
-          label="6-digit code"
+          label="Verification code"
           name="token"
           autoComplete="one-time-code"
           inputMode="numeric"
-          pattern="[0-9]{6}"
-          maxLength={6}
-          placeholder="123456"
+          pattern="[0-9]{6,8}"
+          maxLength={8}
+          placeholder="Enter the code from your email"
           className="text-center text-lg tracking-[0.3em]"
           required
         />

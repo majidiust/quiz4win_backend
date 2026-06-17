@@ -8,7 +8,7 @@ import { authFetch } from "@/lib/auth-api";
  * supabase.auth.signUp SDK method routes to /auth/v1/signup which is NOT
  * proxied in production per R-11.3). The backend creates the user via
  * admin.auth.admin.generateLink(type='signup') and dispatches a branded
- * Brevo email containing the action link + 6-digit OTP. No session is
+ * Brevo email containing the action link + email OTP. No session is
  * returned; the user must verify their email before signing in.
  */
 export async function signupAction(formData: FormData) {

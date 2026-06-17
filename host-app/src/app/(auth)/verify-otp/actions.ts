@@ -12,7 +12,9 @@ import { persistSupabaseSession } from "@/lib/session-cookie";
  */
 export async function verifyOtpAction(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const token = String(formData.get("token") ?? "").trim();
+  // Strip spaces/separators an autofill or paste may insert — GoTrue expects
+  // the raw numeric token (length is set in Supabase Auth, currently 8 digits).
+  const token = String(formData.get("token") ?? "").replace(/\D/g, "");
   if (!email || !token) {
     redirect(`/verify-otp?email=${encodeURIComponent(email)}&error=${encodeURIComponent("Code required")}`);
   }
