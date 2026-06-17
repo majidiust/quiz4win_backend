@@ -158,6 +158,8 @@ A participant MUST have submitted **at least one real answer** (correct or wrong
 
 This invariant applies **across all game types** including unlimited-lives games (`allowed_wrong_answers = NULL`) where the ghost sweep never fires an elimination. The entry fee is NOT refunded for a no-show — they paid to play and chose not to participate.
 
+> **Full host logic reference** — application lifecycle, assignment flows, `host_assignment_status` state machine, `requires_host` flag, fee/commission, stream session guard, and host-app UI decision tree: **`docs/host-logic.md`** (required reading for any task touching host assignment, host-app endpoints, or host earnings).
+
 ### INV-16 — Host Earnings Reservation Pattern (R-05 preserved)
 
 Host earnings MUST follow a two-stage reservation pattern that preserves the append-only nature of `public.transactions` (R-05):
