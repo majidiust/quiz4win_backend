@@ -25,3 +25,29 @@ export async function rejectInvitationAction(formData: FormData) {
   revalidatePath("/invitations");
   redirect(`/invitations?info=${encodeURIComponent("Rejected")}`);
 }
+
+// ── Direct admin assignments (games.host_assignment_status='pending') ────────
+// These surface on the Invitations page alongside host_invitations but use the
+// game accept/reject endpoints. Redirect back to /invitations to stay in context.
+export async function acceptAssignmentAction(formData: FormData) {
+  const gameId = String(formData.get("game_id") ?? "");
+  if (!gameId) return;
+  const r = await api(`/host/games/${gameId}/accept`, { method: "POST", body: {} });
+  revalidatePath("/invitations");
+  revalidatePath("/games", "layout");
+  revalidatePath("/dashboard");
+  if (!r.ok) redirect(`/invitations?error=${encodeURIComponent(r.error)}`);
+  redirect(`/invitations?info=${encodeURIComponent("Assignment accepted")}`);
+}
+
+export async function rejectAssignmentAction(formData: FormData) {
+  const gameId = String(formData.get("game_id") ?? "");
+  const note = String(formData.get("note") ?? "");
+  if (!gameId) return;
+  const r = await api(`/host/games/${gameId}/reject`, { method: "POST", body: { note: note || null } });
+  revalidatePath("/invitations");
+  revalidatePath("/games", "layout");
+  revalidatePath("/dashboard");
+  if (!r.ok) redirect(`/invitations?error=${encodeURIComponent(r.error)}`);
+  redirect(`/invitations?info=${encodeURIComponent("Assignment rejected")}`);
+}

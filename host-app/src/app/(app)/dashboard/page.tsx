@@ -105,11 +105,9 @@ export default async function DashboardPage() {
         </Link>
       ) : null}
 
-      {/* Invitations: direct-assign pending + sent host_invitations */}
-      <Link
-        href={pendingAssignments.length > 0 ? "/games?tab=upcoming" : "/invitations"}
-        className="mt-3 block"
-      >
+      {/* Invitations: direct-assign pending + sent host_invitations.
+          The Invitations page surfaces both, so always link there. */}
+      <Link href="/invitations" className="mt-3 block">
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
