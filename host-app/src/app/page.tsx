@@ -1,38 +1,39 @@
 import Link from "next/link";
 import { ChevronRight, Zap, Users, Trophy, Clock, Shield, Star, TrendingUp } from "lucide-react";
 
+// Stats sourced from quiz4win.com/become-host
 const STATS = [
-  { value: "€850", label: "avg. per show" },
-  { value: "< 1 hr", label: "approval time" },
-  { value: "10 k+", label: "players / game" },
+  { value: "2.4k", label: "shows / month" },
+  { value: "180+", label: "active hosts" },
+  { value: "47", label: "countries" },
 ];
 
 const STEPS = [
   {
     icon: Shield,
     step: "01",
-    title: "Apply once",
-    body: "Fill your host profile — takes 2 minutes. Our team reviews it, usually the same hour.",
+    title: "Apply to host a show",
+    body: "Sign up on the host portal — onboarding takes under 5 minutes, no waiting list.",
   },
   {
     icon: Star,
     step: "02",
-    title: "Get approved",
-    body: "Approved hosts receive game invitations and can request open show slots themselves.",
+    title: "Get onboarded live",
+    body: "Production support, stage graphics, and live ops are all handled by Quiz4Win. You just bring your energy.",
   },
   {
     icon: TrendingUp,
     step: "03",
-    title: "Host & earn",
-    body: "Go live, entertain thousands of players, and collect earnings instantly when the show ends.",
+    title: "Host & earn per show",
+    body: "Earn a flat fee of $150–$1,000 scaled by your real audience size, plus 1%–5% revenue share of participant entries.",
   },
 ];
 
 const BENEFITS = [
-  { icon: Zap, title: "Instant pay-out", body: "Earnings hit your wallet the moment a show ends. No delays." },
-  { icon: Users, title: "Massive audience", body: "Every game surfaces to thousands of active players — you just show up." },
-  { icon: Trophy, title: "Build fame", body: "Grow your host rating, collect followers, unlock bigger and better shows." },
-  { icon: Clock, title: "Your schedule", body: "Accept only the games that fit your life. Zero minimums." },
+  { icon: Zap, title: "Transparent payouts", body: "Fixed fee confirmed before the show, revenue share paid out right after. No surprises." },
+  { icon: Users, title: "Keep your community", body: "Bring your audience — they stay yours. Cross-promo on every show amplifies your reach." },
+  { icon: Trophy, title: "Full production support", body: "Stage graphics, live ops, and tech all handled by Quiz4Win. You focus on the show." },
+  { icon: Clock, title: "Real revenue share", body: "Earn 1%–5% of participant entries every show, on top of your guaranteed flat fee." },
 ];
 
 export default function HomePage() {
@@ -60,15 +61,15 @@ export default function HomePage() {
 
       {/* ── Hero headline ────────────────────────────────────────────── */}
       <h1 className="mb-4 text-[2.6rem] font-bold leading-[1.08] tracking-tight">
-        Turn your knowledge<br />
-        into{" "}
+        Step on the stage.<br />
         <span className="bg-gradient-to-r from-pink-400 via-fuchsia-400 to-teal-400 bg-clip-text text-transparent">
-          real income.
+          Get paid every show.
         </span>
       </h1>
       <p className="mb-8 text-sm leading-relaxed text-[var(--color-q4w-muted)]">
-        Host live quiz shows, engage thousands of real players, and collect
-        earnings — all from your phone. Apply once, get approved, start earning.
+        Quiz4Win turns creators and presenters into prime-time hosts. Bring your
+        audience, host live competitions, and earn a flat fee per show plus a
+        real share of participation revenue.
       </p>
 
       {/* ── Primary CTA ──────────────────────────────────────────────── */}
@@ -81,7 +82,7 @@ export default function HomePage() {
         </Link>
       </div>
       <p className="mb-10 text-center text-[10px] text-[var(--color-q4w-muted)]">
-        Free to apply · No commitment · Approved within the hour
+        Free to apply · No waiting list · Under 5 minutes to onboard
       </p>
 
       {/* ── Social-proof stats ───────────────────────────────────────── */}
@@ -133,18 +134,26 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── Scarcity nudge ───────────────────────────────────────────── */}
-      <div className="mb-10 rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-center">
-        <p className="text-xs font-medium text-amber-300">
-          🔥 Host slots are capped per region to keep quality high. Once we reach capacity, applications close.
-        </p>
+      {/* ── Earnings breakdown ───────────────────────────────────────── */}
+      <div className="mb-10 rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-4">
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-300">Your earnings</p>
+        <div className="flex justify-between gap-3">
+          <div>
+            <div className="text-base font-bold text-white">$150 – $1,000</div>
+            <div className="text-[10px] text-amber-200/70">per-show fee, scaled by audience</div>
+          </div>
+          <div className="text-right">
+            <div className="text-base font-bold text-white">1% – 5%</div>
+            <div className="text-[10px] text-amber-200/70">revenue share of entries</div>
+          </div>
+        </div>
       </div>
 
       {/* ── Bottom CTA block ─────────────────────────────────────────── */}
       <section className="glass rounded-3xl p-6 text-center">
-        <h2 className="mb-2 text-xl font-bold">Ready to start earning?</h2>
+        <h2 className="mb-2 text-xl font-bold">Ready to go live?</h2>
         <p className="mb-5 text-xs leading-relaxed text-[var(--color-q4w-muted)]">
-          Join the hosts already making money every week.<br />It only takes 2 minutes to apply.
+          180+ hosts across 47 countries are already earning every show.<br />Onboarding takes under 5 minutes — no waiting list.
         </p>
         <Link
           href="/signup"
