@@ -173,6 +173,153 @@ function revalidatePaths(id: string) {
   revalidatePath("/dashboard");
 }
 
+/* ----------------------- HOST WITHDRAWALS ----------------------------- */
+
+const HApproveSchema = z.object({ id: z.string().uuid(), note: z.string().trim().max(500).optional() });
+const HRejectSchema = z.object({ id: z.string().uuid(), reason: z.string().trim().min(3).max(500) });
+const HCompleteSchema = z.object({
+  id: z.string().uuid(),
+  transaction_reference: z.string().trim().min(2).max(200),
+  note: z.string().trim().max(500).optional(),
+});
+
+async function loadHostWithdrawal(id: string) {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
+    .from("host_withdrawals")
+    .select("id, host_id, amount, status, show_hosts(auth_user_id)")
+    .eq("id", id)
+    .maybeSingle();
+  return { db, data, error };
+}
+
+export async function approveHostWithdrawal(input: z.infer<typeof HApproveSchema>): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin", "finance"]);
+  const parsed = HApproveSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Invalid input" };
+
+  const { db, data: w, error } = await loadHostWithdrawal(parsed.data.id);
+  if (error || !w) return { ok: false, message: "Withdrawal not found" };
+  if (w.status !== "pending") return { ok: false, message: "Only pending withdrawals can be approved" };
+
+  const now = new Date().toISOString();
+  const { error: updErr } = await db
+    .from("host_withdrawals")
+    .update({ status: "processing", reviewed_by: admin.id, reviewed_at: now, internal_note: parsed.data.note ?? null, updated_at: now })
+    .eq("id", parsed.data.id)
+    .eq("status", "pending");
+  if (updErr) return { ok: false, message: "Failed to approve" };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id, action: "host_withdrawal_approved",
+    target_type: "host_withdrawal", target_id: parsed.data.id,
+    details: { note: parsed.data.note ?? null }, created_at: now,
+  });
+  revalidateHostWithdrawalPaths(parsed.data.id);
+  return { ok: true, message: "Payout moved to processing" };
+}
+
+export async function rejectHostWithdrawal(input: z.infer<typeof HRejectSchema>): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin", "finance"]);
+  const parsed = HRejectSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Invalid input" };
+
+  const { db, data: w, error } = await loadHostWithdrawal(parsed.data.id);
+  if (error || !w) return { ok: false, message: "Withdrawal not found" };
+  if (!["pending", "processing"].includes(w.status)) {
+    return { ok: false, message: "Withdrawal can no longer be rejected" };
+  }
+
+  const now = new Date().toISOString();
+  const { error: updErr } = await db
+    .from("host_withdrawals")
+    .update({ status: "rejected", rejection_reason: parsed.data.reason, reviewed_by: admin.id, reviewed_at: now, updated_at: now })
+    .eq("id", parsed.data.id);
+  if (updErr) return { ok: false, message: "Failed to reject" };
+
+  // Refund the held amount back to profiles.wallet_balance
+  const hostRow = w.show_hosts as { auth_user_id?: string } | null;
+  const authUserId = hostRow?.auth_user_id;
+  if (authUserId) {
+    const amountNum = Number.parseFloat(String(w.amount));
+    const { data: profile } = await db.from("profiles").select("wallet_balance").eq("id", authUserId).maybeSingle();
+    if (profile) {
+      const nextBalance = (Number.parseFloat(String(profile.wallet_balance ?? "0")) + amountNum).toFixed(2);
+      await db.from("profiles").update({ wallet_balance: nextBalance, updated_at: now }).eq("id", authUserId);
+    }
+    // Append-only refund transaction (R-05)
+    await db.from("transactions").insert({
+      user_id: authUserId, type: "refund", amount: String(w.amount), status: "completed",
+      description: `Refund: host payout rejected — ${parsed.data.reason}`, created_at: now,
+    });
+    // Notify host
+    await db.from("notifications").insert({
+      user_id: authUserId, type: "host_withdrawal",
+      title: "Withdrawal rejected",
+      body: `Your payout request was rejected: ${parsed.data.reason}. The amount has been returned to your balance.`,
+      read: false, created_at: now,
+    });
+  }
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id, action: "host_withdrawal_rejected",
+    target_type: "host_withdrawal", target_id: parsed.data.id,
+    details: { reason: parsed.data.reason }, created_at: now,
+  });
+  revalidateHostWithdrawalPaths(parsed.data.id, w.host_id as string);
+  return { ok: true, message: "Payout rejected and refunded" };
+}
+
+export async function completeHostWithdrawal(input: z.infer<typeof HCompleteSchema>): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin", "finance"]);
+  const parsed = HCompleteSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: "Invalid input" };
+
+  const { db, data: w, error } = await loadHostWithdrawal(parsed.data.id);
+  if (error || !w) return { ok: false, message: "Withdrawal not found" };
+  if (w.status !== "processing") return { ok: false, message: "Only processing withdrawals can be marked completed" };
+
+  const now = new Date().toISOString();
+  const { error: updErr } = await db
+    .from("host_withdrawals")
+    .update({ status: "completed", transaction_reference: parsed.data.transaction_reference, internal_note: parsed.data.note ?? null, completed_at: now, updated_at: now })
+    .eq("id", parsed.data.id)
+    .eq("status", "processing");
+  if (updErr) return { ok: false, message: "Failed to mark completed" };
+
+  // Update the pending transaction to completed
+  await db.from("transactions")
+    .update({ status: "completed" })
+    .eq("user_id", (w.show_hosts as { auth_user_id?: string } | null)?.auth_user_id ?? "")
+    .eq("type", "host_payout")
+    .eq("status", "pending");
+
+  const authUserId = (w.show_hosts as { auth_user_id?: string } | null)?.auth_user_id;
+  if (authUserId) {
+    await db.from("notifications").insert({
+      user_id: authUserId, type: "host_withdrawal",
+      title: "Payout sent",
+      body: `Your payout has been processed. TX reference: ${parsed.data.transaction_reference}`,
+      read: false, created_at: now,
+    });
+  }
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id, action: "host_withdrawal_completed",
+    target_type: "host_withdrawal", target_id: parsed.data.id,
+    details: { transaction_reference: parsed.data.transaction_reference }, created_at: now,
+  });
+  revalidateHostWithdrawalPaths(parsed.data.id, w.host_id as string);
+  return { ok: true, message: "Payout marked as completed" };
+}
+
+function revalidateHostWithdrawalPaths(id: string, hostId?: string) {
+  revalidatePath("/finance/host-withdrawals");
+  revalidatePath(`/finance/host-withdrawals/${id}`);
+  revalidatePath("/dashboard");
+  if (hostId) revalidatePath(`/hosts/${hostId}`);
+}
+
 /* ----------------------------- PAYMENTS ------------------------------- */
 
 const ReconcileSchema = z.object({ id: z.string().uuid() });

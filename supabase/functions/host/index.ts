@@ -33,6 +33,9 @@
  *   POST   /host/payment-methods                  — create method
  *   PATCH  /host/payment-methods/:id              — update label / is_default
  *   DELETE /host/payment-methods/:id              — delete (non-active only)
+ *   GET    /host/withdrawals                      — own withdrawal history
+ *   POST   /host/withdrawals                      — request a payout (≥ $10)
+ *   GET    /host/withdrawals/:id                  — detail view
  */
 
 import { handleCors } from "../_shared/cors.ts";
@@ -796,6 +799,112 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
       if (r.status === "active") return errorResponse("cannot_delete_active_method", 409);
       await db.from("host_payment_methods").delete().eq("id", parts[1]);
       return successResponse({ ok: true });
+    }
+  }
+
+  // ── /host/withdrawals ─────────────────────────────────────────────────────
+  if (parts[0] === "withdrawals") {
+    // GET /host/withdrawals — list own withdrawal requests
+    if (parts.length === 1 && method === "GET") {
+      const statusFilter = url.searchParams.get("status");
+      const limit = Math.min(Number(url.searchParams.get("limit") ?? "50"), 200);
+      let q = db.from("host_withdrawals")
+        // deno-lint-ignore no-explicit-any
+        .select("id, amount, currency, status, note, crypto_coin, crypto_network, crypto_address, transaction_reference, rejection_reason, requested_at, reviewed_at, completed_at, payment_method_id") as any;
+      q = q.eq("host_id", host.id).order("requested_at", { ascending: false }).limit(limit);
+      if (statusFilter) q = q.eq("status", statusFilter);
+      const { data, error } = await q;
+      if (error) return errorResponse("failed_to_list_withdrawals", 500);
+      return successResponse({ withdrawals: data ?? [] });
+    }
+
+    // GET /host/withdrawals/:id — detail view
+    if (parts.length === 2 && method === "GET") {
+      const { data, error } = await db.from("host_withdrawals")
+        .select("*").eq("id", parts[1]).eq("host_id", host.id).maybeSingle();
+      if (error || !data) return errorResponse("withdrawal_not_found", 404);
+      return successResponse({ withdrawal: data });
+    }
+
+    // POST /host/withdrawals — create withdrawal request
+    if (parts.length === 1 && method === "POST") {
+      if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
+
+      const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const paymentMethodId = typeof body.payment_method_id === "string" ? body.payment_method_id.trim() : "";
+      const amountRaw = Number(body.amount);
+      const note = typeof body.note === "string" ? body.note.slice(0, 500) : null;
+
+      if (!paymentMethodId) return errorResponse("payment_method_id_required", 400);
+      if (!Number.isFinite(amountRaw) || amountRaw < 10) return errorResponse("amount_must_be_at_least_10", 400);
+      const amount = Math.round(amountRaw * 100) / 100;
+
+      // Verify payment method belongs to host and is active
+      const { data: pm } = await db.from("host_payment_methods")
+        .select("id, host_id, status, method_type, account_details")
+        .eq("id", paymentMethodId).eq("host_id", host.id).maybeSingle();
+      if (!pm) return errorResponse("payment_method_not_found", 404);
+      if (pm.status !== "active") return errorResponse("payment_method_not_active", 409);
+
+      // No more than one pending/processing withdrawal at a time
+      const { count: pendingCount } = await db.from("host_withdrawals")
+        .select("id", { count: "exact", head: true })
+        .eq("host_id", host.id).in("status", ["pending", "processing"]);
+      if ((pendingCount ?? 0) > 0) return errorResponse("withdrawal_already_pending", 409);
+
+      // Resolve host → profile
+      const { data: authRow } = await db.from("show_hosts").select("auth_user_id").eq("id", host.id).maybeSingle();
+      if (!authRow?.auth_user_id) return errorResponse("host_has_no_auth_user", 500);
+
+      const { data: profile } = await db.from("profiles").select("id, wallet_balance").eq("id", authRow.auth_user_id).maybeSingle();
+      if (!profile) return errorResponse("profile_not_found", 500);
+
+      const currentBalance = Number(profile.wallet_balance ?? 0);
+      if (currentBalance < amount) return errorResponse("insufficient_balance", 409);
+
+      // Debit wallet_balance atomically (R-02, R-05)
+      const newBalance = Math.round((currentBalance - amount) * 100) / 100;
+      const { error: balErr } = await db.from("profiles")
+        .update({ wallet_balance: newBalance.toFixed(2), updated_at: nowIso() })
+        .eq("id", authRow.auth_user_id);
+      if (balErr) return errorResponse("failed_to_debit_balance", 500);
+
+      // Snapshot crypto details from payment method
+      const acct = (pm.account_details as Record<string, string> | null) ?? {};
+      const cryptoCoin = typeof pm.method_type === "string" ? pm.method_type.toUpperCase() : null;
+      const cryptoNetwork = acct.network ?? null;
+      const cryptoAddress = acct.address ?? null;
+
+      // Append-only transaction record (R-05)
+      await db.from("transactions").insert({
+        user_id: authRow.auth_user_id, type: "host_payout",
+        amount: amount.toFixed(2), status: "pending",
+        description: `Host payout request — ${pm.method_type}`,
+        created_at: nowIso(),
+      });
+
+      // Create withdrawal record
+      const { data: withdrawal, error: wErr } = await db.from("host_withdrawals").insert({
+        host_id: host.id, payment_method_id: paymentMethodId,
+        amount: amount.toFixed(2), currency: "USD", status: "pending",
+        note, crypto_coin: cryptoCoin, crypto_network: cryptoNetwork, crypto_address: cryptoAddress,
+        requested_at: nowIso(), created_at: nowIso(), updated_at: nowIso(),
+      }).select("*").single();
+      if (wErr) {
+        // Best-effort rollback of balance debit
+        await db.from("profiles").update({ wallet_balance: currentBalance.toFixed(2), updated_at: nowIso() }).eq("id", authRow.auth_user_id);
+        return errorResponse("failed_to_create_withdrawal", 500);
+      }
+
+      // Notify host
+      await db.from("notifications").insert({
+        user_id: authRow.auth_user_id, type: "host_withdrawal",
+        title: "Withdrawal request submitted",
+        body: `Your payout request for $${amount.toFixed(2)} has been submitted and is under review.`,
+        read: false, created_at: nowIso(),
+      });
+
+      return successResponse({ withdrawal }, 201);
     }
   }
 

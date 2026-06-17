@@ -4,6 +4,7 @@ import { ArrowLeft, Users, Globe, MapPin, Phone, Link2, Send, FileText, ListChec
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge } from "@/components/status-badge";
@@ -37,13 +38,14 @@ export default async function HostDetailPage({ params }: Props) {
   const { data: host } = await db.from("show_hosts").select("*").eq("id", hostId).maybeSingle();
   if (!host) notFound();
 
-  const [filesQ, reqsQ, invsQ, earningsQ, methodsQ, availableGamesQ] = await Promise.all([
+  const [filesQ, reqsQ, invsQ, earningsQ, methodsQ, availableGamesQ, withdrawalsQ] = await Promise.all([
     db.from("host_uploaded_files").select("*").eq("host_id", hostId).order("created_at", { ascending: false }),
     db.from("host_game_requests").select("*, games(id, title, scheduled_at, status)").eq("host_id", hostId).order("created_at", { ascending: false }),
     db.from("host_invitations").select("*, games(id, title, scheduled_at, status)").eq("host_id", hostId).order("created_at", { ascending: false }),
     db.from("host_earnings").select("*, games(id, title, ended_at)").eq("host_id", hostId).order("created_at", { ascending: false }),
     db.from("host_payment_methods").select("*").eq("host_id", hostId).order("created_at", { ascending: false }),
     db.from("games").select("id, title, scheduled_at").is("host_id", null).eq("mode", "live").eq("status", "upcoming").order("scheduled_at", { ascending: true }).limit(50),
+    db.from("host_withdrawals").select("id, amount, currency, status, crypto_coin, crypto_network, requested_at, completed_at, transaction_reference").eq("host_id", hostId).order("requested_at", { ascending: false }).limit(50),
   ]);
 
   const files = filesQ.data ?? [];
@@ -52,6 +54,7 @@ export default async function HostDetailPage({ params }: Props) {
   const earnings = earningsQ.data ?? [];
   const methods = methodsQ.data ?? [];
   const availableGames = availableGamesQ.data ?? [];
+  const withdrawals = withdrawalsQ.data ?? [];
 
   const totals = earnings.reduce<Record<string, number>>((a, r) => {
     a[r.status as string] = (a[r.status as string] ?? 0) + Number(r.amount ?? 0);
@@ -132,6 +135,7 @@ export default async function HostDetailPage({ params }: Props) {
               <TabsTrigger value="invitations">Invitations ({invitations.length})</TabsTrigger>
               <TabsTrigger value="earnings">Earnings ({earnings.length})</TabsTrigger>
               <TabsTrigger value="methods">Payout ({methods.length})</TabsTrigger>
+              <TabsTrigger value="withdrawals">Withdrawals ({withdrawals.length})</TabsTrigger>
             </TabsList>
 
             <TabsContent value="files">
@@ -302,6 +306,46 @@ export default async function HostDetailPage({ params }: Props) {
                       </TableBody>
                     </Table>
                   ) : <EmptyState icon={CreditCard} title="No payout methods" description="The host has not added any payout destinations yet." />}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="withdrawals">
+              <Card>
+                <CardContent className="p-0">
+                  {withdrawals.length ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Coin</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Requested</TableHead>
+                          <TableHead>Completed</TableHead>
+                          <TableHead className="text-right">Detail</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {withdrawals.map((w) => (
+                          <TableRow key={w.id as string}>
+                            <TableCell className="font-mono text-xs">{formatMoneyDecimal(w.amount as string | number)}</TableCell>
+                            <TableCell className="text-xs">
+                              {(w.crypto_coin as string | null) ?? "—"}
+                              {w.crypto_network ? <span className="text-muted-foreground"> · {w.crypto_network as string}</span> : null}
+                            </TableCell>
+                            <TableCell><StatusBadge value={w.status as string} /></TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{formatRelative(w.requested_at as string)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{w.completed_at ? formatRelative(w.completed_at as string) : "—"}</TableCell>
+                            <TableCell className="text-right">
+                              <Button asChild variant="ghost" size="sm">
+                                <Link href={`/finance/host-withdrawals/${w.id as string}`}>Open</Link>
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : <EmptyState icon={Wallet} title="No withdrawal requests" description="This host has not requested any payouts yet." />}
                 </CardContent>
               </Card>
             </TabsContent>

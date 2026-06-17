@@ -34,9 +34,14 @@ export default async function WalletPage() {
         <Card>
           <CardSubtitle>Wallet balance</CardSubtitle>
           <div className="mt-2 text-2xl font-semibold tabular-nums">{formatMoney(wallet, currency)}</div>
-          <Link href="/payment-methods" className="mt-2 inline-block text-xs text-[var(--color-q4w-primary)]">
-            Payout methods →
-          </Link>
+          <div className="mt-2 flex flex-col gap-1">
+            <Link href="/withdrawals" className="text-xs text-[var(--color-q4w-primary)]">
+              Request payout →
+            </Link>
+            <Link href="/payment-methods" className="text-xs text-[var(--color-q4w-muted)]">
+              Payout methods →
+            </Link>
+          </div>
         </Card>
         <Card>
           <CardSubtitle>Pending earnings</CardSubtitle>
