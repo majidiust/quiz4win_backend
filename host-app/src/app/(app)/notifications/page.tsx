@@ -16,7 +16,7 @@ export default async function NotificationsPage() {
 
   return (
     <>
-      <PageHeader title="Notifications" />
+      <PageHeader title="Notifications" back="/settings" />
 
       {list.length === 0 ? (
         <Card><CardSubtitle>You&apos;re all caught up.</CardSubtitle></Card>

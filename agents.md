@@ -51,6 +51,8 @@ Last updated: 2026-05-22
 | R-12 | Migrations applied exclusively by `db-maintainer` container — never `supabase db push`, `psql -f`, or any manual SQL; deploy with `docker compose up -d --force-recreate db-maintainer` |
 | R-13 | `supabase` CLI is banned from all instructions, scripts, and docs — use Docker Compose equivalents only |
 | R-14 | No Supabase SDK (`createClient`) in Docker-deployed backend services — all DB access via `dbSelect` / `dbInsert` / `dbUpdate` / `dbRpc` PostgREST helpers |
+| R-15 | All user file uploads go through the S3 helper (`_shared/s3.ts`) — server-side size/MIME validation, server-generated keys, private-by-default visibility |
+| R-16 | Features must be end-to-end complete & backward-compatible — propagate a new feature across all subs (DB, API, all frontends, workers, docs); additive-only, no breaking changes; complete every mirror sub/caller before "done" |
 
 
 ---

@@ -1,6 +1,6 @@
 # Quiz4Win Backend — Universal Rules
 
-Last updated: 2026-06-17 (rev 5)
+Last updated: 2026-06-17 (rev 6)
 Owner: A-02 (Project Memory Guardian)
 
 > These rules are **non-negotiable**. No agent may override them. Any violation must be flagged immediately in `Change_Log_AI.md` with the `[RULE]` prefix, and all work on the affected area must halt until resolved.
@@ -261,3 +261,32 @@ When in doubt, default to `private`.
 Always store the S3 **object key** (`s3_key`) in the database as the source of truth. For private objects, generate presigned URLs at read time. Deleting a DB row that references an object SHOULD also `deleteObject` the key (cleanup path).
 
 **Action:** Any upload path that bypasses `uploadObject`, skips size/MIME validation, accepts a client-supplied object key, or marks sensitive content `public-read` is a rule violation. Flag it with `[RULE]` in `Change_Log_AI.md` and halt the affected upload path until corrected.
+
+---
+
+## R-16 — Features Must Be End-to-End Complete & Backward-Compatible
+
+Any new feature implemented in one section of the system MUST be carried through **every** affected subdomain/layer, and MUST remain compatible with existing behaviour. A feature is not "done" when it works in a single place — it is done only when every surface that touches it is consistent.
+
+### R-16.1 — Propagate across all subs
+
+When a feature (a new field, status, endpoint, business rule, or capability) is introduced, the implementing agent MUST check and update **all** of these where applicable:
+- **Database** — schema/migration, RLS policy, and any RPC that reads/writes the data.
+- **Edge Functions / API** — every endpoint that exposes or consumes the data (customer `games`, `host`, `admin-*`, `public-*`, etc.).
+- **Frontends** — every client that renders or sends it: `admin/` panel, `host-app/`, and the mobile/customer app.
+- **Orchestrator / workers** — `game-orchestrator`, `template-generator`, and any consumer of the changed data.
+- **Shared types & docs** — `_shared/database.types.ts`, `docs/*`, and the relevant `project-brain/` files (`Architecture_Map.md`, `Domain_Knowledge.md`).
+
+A feature that exists in one sub (e.g. admin) but is missing in its mirror sub (e.g. host-app, or the public read endpoint) is an **incomplete feature** and is treated as a bug. (Example precedent: `usage=loser` added to admin + DB constraint but missed in `public-sounds` — logged 2026-06-08.)
+
+### R-16.2 — Backward compatibility is mandatory
+
+- New columns/fields are **additive** with safe defaults; never break an existing reader. Existing API response shapes and request contracts must keep working (additive only) unless a versioned, human-approved migration of all callers is performed in the same change.
+- New `CHECK`/enum values must be reflected in **every** validator and read path simultaneously (see R-16.1) so an older sub never rejects a value a newer sub can produce.
+- Removing or renaming a field/endpoint requires updating every caller in the same change set, plus a `[BLOCKED]` entry if any caller is outside this repo.
+
+### R-16.3 — Completeness check before "done"
+
+Before marking any feature complete, the agent MUST (per the Augment completeness workflow) search the codebase for **all** downstream call sites, mirror subs, and tests affected by the change, and update them — or explicitly list any deferred surface as a `[TODO]` task in `Open_Tasks_AI.md` with the reason.
+
+**Action:** Shipping a feature in one sub while leaving a mirror sub, caller, or read path inconsistent is a rule violation. Flag it with `[RULE]` in `Change_Log_AI.md` and complete the missing surfaces (or file the explicit `[TODO]`) before the change is considered done.
