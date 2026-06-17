@@ -115,3 +115,115 @@ ${ctaNote ? `<tr><td style="padding:0 36px">${ctaNote}</td></tr>` : ""}
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
+
+function hostAppUrl(): string {
+  return (process.env.HOST_APP_URL ?? "https://host.quiz4win.com").replace(/\/$/, "");
+}
+
+/**
+ * Sent to a host when an admin approves, rejects, suspends, or reactivates
+ * their application. Rendered by the Next.js admin panel (Node.js context).
+ */
+export function hostStatusChangedEmailTemplate(opts: {
+  name: string;
+  action: "approve" | "reject" | "suspend" | "reactivate";
+  reason?: string | null;
+  hostAppUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = (opts.hostAppUrl ?? hostAppUrl());
+  const nameHtml = opts.name ? escapeHtml(opts.name) : "";
+  const greeting = nameHtml ? `Hi ${nameHtml},` : "Hi,";
+
+  const COPY: Record<"approve" | "reject" | "suspend" | "reactivate", {
+    subject: string; heroTitle: string; heroSubtitle: string;
+    body: string; ctaLabel: string; ctaUrl: string; ctaVariant: CtaVariant;
+  }> = {
+    approve: {
+      subject: "🎉 Your Quiz4Win host application has been approved!",
+      heroTitle: "You're approved! 🎉",
+      heroSubtitle: "Welcome to the Quiz4Win host team.",
+      body: `${greeting} great news — your host application has been reviewed and <strong>approved</strong>! You can now request games and accept host invitations.</p><p style="margin:12px 0 0;color:${BRAND.textMuted}">Log in to your host dashboard to see available shows and get started.`,
+      ctaLabel: "Go to host dashboard →",
+      ctaUrl: `${app}/dashboard`,
+      ctaVariant: "win",
+    },
+    reject: {
+      subject: "Your Quiz4Win host application — update",
+      heroTitle: "Application update",
+      heroSubtitle: "Thank you for your interest in hosting on Quiz4Win.",
+      body: `${greeting} after reviewing your application, we've decided not to move forward at this time.${opts.reason ? `</p><p style="margin:12px 0 0"><strong>Reason:</strong> ${escapeHtml(opts.reason)}` : ""}</p><p style="margin:12px 0 0;color:${BRAND.textMuted}">You're welcome to re-apply in the future if your circumstances change.`,
+      ctaLabel: "Learn more →",
+      ctaUrl: "https://quiz4win.com/become-host",
+      ctaVariant: "primary",
+    },
+    suspend: {
+      subject: "Your Quiz4Win host account has been suspended",
+      heroTitle: "Account suspended",
+      heroSubtitle: "Your host access has been temporarily suspended.",
+      body: `${greeting} your Quiz4Win host account has been <strong>suspended</strong>.${opts.reason ? `</p><p style="margin:12px 0 0"><strong>Reason:</strong> ${escapeHtml(opts.reason)}` : ""}</p><p style="margin:12px 0 0;color:${BRAND.textMuted}">If you believe this is an error, please contact our support team.`,
+      ctaLabel: "Contact support →",
+      ctaUrl: "https://quiz4win.com/support",
+      ctaVariant: "dark",
+    },
+    reactivate: {
+      subject: "Your Quiz4Win host account is active again 🎤",
+      heroTitle: "Account reactivated 🎤",
+      heroSubtitle: "Your host access has been restored.",
+      body: `${greeting} your Quiz4Win host account is <strong>active again</strong>! You can log in, request shows, and accept invitations.`,
+      ctaLabel: "Go to host dashboard →",
+      ctaUrl: `${app}/dashboard`,
+      ctaVariant: "win",
+    },
+  };
+  const c = COPY[opts.action];
+  const { html, text } = renderBrandEmail({
+    preheader: c.heroTitle,
+    heroTitle: c.heroTitle,
+    heroSubtitle: c.heroSubtitle,
+    bodyHtml: `<p style="margin:0 0 12px">${c.body}</p>`,
+    cta: { label: c.ctaLabel, url: c.ctaUrl, variant: c.ctaVariant },
+    text: `${c.heroTitle}\n\n${opts.name ? `Hi ${opts.name}, ` : ""}${c.body.replace(/<[^>]+>/g, "").trim()}.\n\n${c.ctaLabel}: ${c.ctaUrl}`,
+  });
+  return { subject: c.subject, html, text };
+}
+
+/**
+ * Sent to a host when the admin approves or rejects an uploaded file
+ * (intro video, selfie, ID document, avatar, screenshot, etc.)
+ */
+export function hostFileReviewedEmailTemplate(opts: {
+  name: string;
+  fileLabel: string;
+  action: "approve" | "reject";
+  reason?: string | null;
+  hostAppUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = (opts.hostAppUrl ?? hostAppUrl());
+  const nameHtml = opts.name ? escapeHtml(opts.name) : "";
+  const greeting = nameHtml ? `Hi ${nameHtml},` : "Hi,";
+  const fileLabelHtml = escapeHtml(opts.fileLabel);
+  const approved = opts.action === "approve";
+
+  const subject = approved
+    ? `Your ${opts.fileLabel} has been approved ✅`
+    : `Your ${opts.fileLabel} needs attention`;
+  const { html, text } = renderBrandEmail({
+    preheader: approved
+      ? `Your ${opts.fileLabel} was reviewed and approved by the Quiz4Win team.`
+      : `Your ${opts.fileLabel} was not approved — ${opts.reason ?? "see details inside"}.`,
+    heroTitle: approved ? `${fileLabelHtml} approved ✅` : `${fileLabelHtml} rejected`,
+    heroSubtitle: approved
+      ? "Your file has passed our review."
+      : "Your file did not pass our review.",
+    bodyHtml: approved
+      ? `<p style="margin:0 0 12px">${greeting} your <strong>${fileLabelHtml}</strong> has been <strong style="color:${BRAND.win}">approved</strong> by our team. 🎉</p>
+<p style="margin:0;color:${BRAND.textMuted}">Check your host dashboard for the latest status of your application.</p>`
+      : `<p style="margin:0 0 12px">${greeting} unfortunately your <strong>${fileLabelHtml}</strong> did not pass our review.${opts.reason ? `</p><p style="margin:12px 0 0"><strong>Reason:</strong> ${escapeHtml(opts.reason)}` : ""}</p>
+<p style="margin:12px 0 0;color:${BRAND.textMuted}">You can upload a new file from your host dashboard.</p>`,
+    cta: { label: "Open host dashboard →", url: `${app}/dashboard`, variant: approved ? "win" : "primary" },
+    text: approved
+      ? `${greeting} your ${opts.fileLabel} has been approved! Check your dashboard: ${app}/dashboard`
+      : `${greeting} your ${opts.fileLabel} was not approved.${opts.reason ? ` Reason: ${opts.reason}` : ""} Upload a new file: ${app}/dashboard`,
+  });
+  return { subject, html, text };
+}

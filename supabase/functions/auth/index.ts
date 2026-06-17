@@ -18,7 +18,7 @@ import { corsHeaders, handleCors } from "../_shared/cors.ts";
 import { errorResponse, successResponse, tooManyRequests } from "../_shared/errors.ts";
 import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient, getPublicClient } from "../_shared/supabase.ts";
-import { sendEmail, confirmEmailTemplate, recoveryTemplate } from "../_shared/email.ts";
+import { sendEmail, confirmEmailTemplate, recoveryTemplate, hostWelcomeTemplate, adminHostEventTemplate } from "../_shared/email.ts";
 
 // Common frontend naming aliases → canonical backend paths. Lets the iOS
 // and admin apps call either `/auth/login` or `/auth/signin` etc. without
@@ -283,6 +283,38 @@ Deno.serve(async (req: Request) => {
         const code = error.message.toLowerCase().includes("expired") ? "otp_expired" : "otp_invalid";
         return errorResponse(code, error.message.includes("expired") ? 401 : 400);
       }
+      // Fire welcome email to the host + admin new-user notification after a
+      // successful signup OTP. Best-effort only — never blocks the response.
+      if (normType === "signup" && data.user?.email) {
+        const userEmail = data.user.email;
+        const userName: string = (data.user.user_metadata?.full_name as string | undefined) ?? "";
+        (async () => {
+          try {
+            const tpl = hostWelcomeTemplate({ name: userName });
+            await sendEmail({ to: { email: userEmail, name: userName || undefined }, ...tpl });
+          } catch (e) {
+            console.warn("[auth] welcome email failed:", e);
+          }
+          try {
+            const adminEmail = Deno.env.get("ADMIN_EMAIL");
+            if (adminEmail) {
+              const tpl = adminHostEventTemplate({
+                heading: "New host registered",
+                intro: "A new host has verified their email and joined Quiz4Win.",
+                rows: [
+                  ["Name", userName || "(not set)"],
+                  ["Email", userEmail],
+                  ["User ID", data.user!.id],
+                ],
+              });
+              await sendEmail({ to: { email: adminEmail }, ...tpl });
+            }
+          } catch (e) {
+            console.warn("[auth] admin new-host notification failed:", e);
+          }
+        })();
+      }
+
       return successResponse({
         access_token: data.session?.access_token,
         refresh_token: data.session?.refresh_token,

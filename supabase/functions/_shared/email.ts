@@ -371,3 +371,106 @@ export function winTemplate(opts: {
   });
   return { subject, html, text };
 }
+
+// ─── Host lifecycle templates ──────────────────────────────────────────────
+// Sent from the host Edge Function as a host completes onboarding. Admin-side
+// approve/reject emails are rendered separately in the Next.js admin panel.
+
+const hostUrl = (override?: string) =>
+  (override ?? Deno.env.get("HOST_APP_URL") ?? "https://host.quiz4win.com").replace(/\/$/, "");
+
+/** Sent to a new host after they verify their email address (OTP verify-otp success). */
+export function hostWelcomeTemplate(opts: {
+  name: string;
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = hostUrl(opts.appUrl);
+  const greeting = opts.name ? `Welcome, ${escapeHtml(opts.name)}! 🎤` : "Welcome to Quiz4Win! 🎤";
+  const subject = `Welcome to Quiz4Win — your host journey begins now 🎤`;
+  const { html, text } = renderBrandEmail({
+    preheader: `Your email is verified — complete your host profile to get started.`,
+    heroTitle: greeting,
+    heroSubtitle: "Your email is verified — let's set up your host profile.",
+    bodyHtml: `<p style="margin:0 0 12px">You're one step closer to hosting live trivia shows on Quiz4Win! Here's what to do next:</p>
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:8px 0 16px"><tr><td bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:18px 22px">
+  <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+    <tr><td valign="top" width="30" style="padding:0 0 10px"><div style="width:24px;height:24px;line-height:24px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:12px;font-weight:800">1</div></td><td valign="top" style="padding:2px 0 10px;font-size:14px;color:${BRAND.textDark}"><strong>Complete your profile</strong><br><span style="color:${BRAND.textMuted}">Tell us about yourself, your style, and your experience.</span></td></tr>
+    <tr><td valign="top" width="30" style="padding:0 0 10px"><div style="width:24px;height:24px;line-height:24px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:12px;font-weight:800">2</div></td><td valign="top" style="padding:2px 0 10px;font-size:14px;color:${BRAND.textDark}"><strong>Record an intro video</strong><br><span style="color:${BRAND.textMuted}">Show us your hosting vibe in 60 seconds.</span></td></tr>
+    <tr><td valign="top" width="30"><div style="width:24px;height:24px;line-height:24px;text-align:center;background:${BRAND.primary};color:#fff;border-radius:999px;font-size:12px;font-weight:800">3</div></td><td valign="top" style="padding:2px 0;font-size:14px;color:${BRAND.textDark}"><strong>Get approved</strong><br><span style="color:${BRAND.textMuted}">Our team reviews your application and you're on the air!</span></td></tr>
+  </table>
+</td></tr></table>
+<p style="margin:0;color:${BRAND.textMuted}">Questions? Just reply to this email — we're happy to help.</p>`,
+    cta: { label: "Complete your profile →", url: `${app}/onboarding/apply` },
+    text: `${opts.name ? `Welcome, ${opts.name}!` : "Welcome!"} Your Quiz4Win email is verified.\n\nWhat's next:\n1. Complete your profile — tell us about yourself\n2. Record an intro video — show your hosting vibe\n3. Get approved — our team reviews and you're on the air!\n\nGet started: ${app}/onboarding/apply`,
+  });
+  return { subject, html, text };
+}
+
+/** Sent to a host when a verification file / intro video / avatar is uploaded. */
+export function hostUploadReceivedTemplate(opts: {
+  name: string;
+  fileLabel: string;
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = hostUrl(opts.appUrl);
+  const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const subject = `We received your ${opts.fileLabel}`;
+  const { html, text } = renderBrandEmail({
+    preheader: `Your ${opts.fileLabel} was uploaded to Quiz4Win and is now under review.`,
+    heroTitle: "Upload received ✅",
+    heroSubtitle: `Your ${escapeHtml(opts.fileLabel)} is now under review.`,
+    bodyHtml: `<p style="margin:0 0 12px">${greeting} we've received your <strong>${escapeHtml(opts.fileLabel)}</strong>. Our team will review it shortly and you'll get an email as soon as it's approved.</p>
+<p style="margin:0;color:${BRAND.textMuted}">You can track the status of all your documents from your host dashboard.</p>`,
+    cta: { label: "Open host dashboard →", url: `${app}/dashboard` },
+    text: `${greeting} we've received your ${opts.fileLabel}. Our team will review it shortly and email you once it's approved. Track status: ${app}/dashboard`,
+  });
+  return { subject, html, text };
+}
+
+/** Sent to a host the moment onboarding is complete (intro video recorded). */
+export function hostOnboardingCompleteTemplate(opts: {
+  name: string;
+  appUrl?: string;
+}): { subject: string; html: string; text: string } {
+  const app = hostUrl(opts.appUrl);
+  const greeting = opts.name ? `Hi ${escapeHtml(opts.name)},` : "Hi,";
+  const subject = "Your host onboarding is complete 🎬";
+  const { html, text } = renderBrandEmail({
+    preheader: "You've finished host onboarding — your application is now under final review.",
+    heroTitle: "Onboarding complete 🎬",
+    heroSubtitle: "Your host application is now under final review.",
+    bodyHtml: `<p style="margin:0 0 12px">${greeting} you've completed every onboarding step, including your intro video. 🎉</p>
+<p style="margin:0 0 12px">Our team will review your profile and intro video, and you'll receive an email the moment a decision is made.</p>
+<p style="margin:0;color:${BRAND.textMuted}">Thanks for your patience — great hosts are worth the wait.</p>`,
+    cta: { label: "View application status →", url: `${app}/onboarding/status` },
+    text: `${greeting} you've completed host onboarding including your intro video. Our team will review it and email you when a decision is made. Status: ${app}/onboarding/status`,
+  });
+  return { subject, html, text };
+}
+
+/** Generic internal notification sent to the admin team about a host event. */
+export function adminHostEventTemplate(opts: {
+  heading: string;
+  intro: string;
+  rows: Array<[string, string]>;
+  adminUrl?: string;
+  ctaLabel?: string;
+}): { subject: string; html: string; text: string } {
+  const admin = (opts.adminUrl ?? Deno.env.get("ADMIN_PANEL_URL") ??
+    Deno.env.get("NEXT_PUBLIC_ADMIN_URL") ?? "https://panel.quiz4win.com").replace(/\/$/, "");
+  const rowsHtml = opts.rows.map(([k, v]) =>
+    `<tr><td style="padding:6px 12px 6px 0;font-size:13px;color:${BRAND.textMuted};vertical-align:top;white-space:nowrap">${escapeHtml(k)}</td><td style="padding:6px 0;font-size:14px;color:${BRAND.textDark};font-weight:600">${escapeHtml(v)}</td></tr>`,
+  ).join("");
+  const subject = `[Quiz4Win Hosts] ${opts.heading}`;
+  const { html, text } = renderBrandEmail({
+    preheader: opts.intro,
+    heroTitle: opts.heading,
+    bodyHtml: `<p style="margin:0 0 12px">${escapeHtml(opts.intro)}</p>
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin:8px 0 4px"><tr><td bgcolor="${BRAND.bg}" style="background:${BRAND.bg};border:1px solid ${BRAND.border};border-radius:12px;padding:14px 18px">
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">${rowsHtml}</table>
+</td></tr></table>`,
+    cta: { label: opts.ctaLabel ?? "Open admin panel →", url: `${admin}/hosts` },
+    text: `${opts.intro}\n\n${opts.rows.map(([k, v]) => `${k}: ${v}`).join("\n")}\n\nAdmin panel: ${admin}/hosts`,
+  });
+  return { subject, html, text };
+}

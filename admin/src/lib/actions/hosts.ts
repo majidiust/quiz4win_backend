@@ -5,6 +5,8 @@ import { z } from "zod";
 import { requireAdmin, type AdminRole } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { presignGet } from "@/lib/s3";
+import { sendEmail } from "@/lib/admin-auth/email";
+import { hostStatusChangedEmailTemplate, hostFileReviewedEmailTemplate } from "@/lib/admin-auth/email-brand";
 
 export interface ActionResult { ok: boolean; message: string }
 const MOD: AdminRole[] = ["super_admin", "admin", "moderator"];
@@ -53,6 +55,22 @@ async function audit(
       details: details ?? null, created_at: nowIso(),
     });
   } catch (e) { console.warn("[hosts] audit failed:", e); }
+}
+
+/** Resolves a host's email and display name for transactional emails. */
+async function getHostEmailInfo(
+  db: DB, hostId: string,
+): Promise<{ email: string; name: string } | null> {
+  try {
+    const { data: h } = await db.from("show_hosts").select("name, auth_user_id").eq("id", hostId).maybeSingle();
+    const authUserId = (h as { auth_user_id?: string | null; name?: string | null } | null)?.auth_user_id;
+    const hostName = (h as { name?: string | null } | null)?.name ?? "";
+    if (!authUserId) return null;
+    const { data: p } = await db.from("profiles").select("email").eq("id", authUserId).maybeSingle();
+    const email = (p as { email?: string | null } | null)?.email;
+    if (!email) return null;
+    return { email, name: hostName };
+  } catch { return null; }
 }
 
 // Conditional UPDATE games SET host_id=... WHERE host_id IS NULL — returns
@@ -224,6 +242,15 @@ export async function setHostStatus(input: z.infer<typeof HostActionSchema>): Pr
   };
   await notifyHost(db, hostId, "host_application", COPY[action].title, COPY[action].body, { action, reason });
 
+  // Send branded email to host — best-effort, never blocks the action.
+  getHostEmailInfo(db, hostId).then((info) => {
+    if (!info) return;
+    const tpl = hostStatusChangedEmailTemplate({ name: info.name, action, reason });
+    sendEmail({ to: info.email, subject: tpl.subject, html: tpl.html, text: tpl.text }).catch((e) =>
+      console.error("[hosts] status email failed:", e instanceof Error ? e.message : e)
+    );
+  }).catch((e) => console.error("[hosts] getHostEmailInfo failed:", e instanceof Error ? e.message : e));
+
   revalidatePath(`/hosts/${hostId}`); revalidatePath("/hosts");
   return { ok: true, message: COPY[action].title };
 }
@@ -261,6 +288,17 @@ export async function reviewHostFile(input: z.infer<typeof FileActionSchema>): P
       ? `Your ${(file.file_type as string).replaceAll("_", " ")} file has been approved.`
       : reason ? `Your file was rejected: ${reason}` : `Your file was rejected.`,
     { file_id: fileId, action, reason });
+
+  // Send branded email to host — best-effort, never blocks the action.
+  const fileLabel = (file.file_type as string).replaceAll("_", " ");
+  getHostEmailInfo(db, file.host_id as string).then((info) => {
+    if (!info) return;
+    const tpl = hostFileReviewedEmailTemplate({ name: info.name, fileLabel, action, reason });
+    sendEmail({ to: info.email, subject: tpl.subject, html: tpl.html, text: tpl.text }).catch((e) =>
+      console.error("[hosts] file-review email failed:", e instanceof Error ? e.message : e)
+    );
+  }).catch((e) => console.error("[hosts] getHostEmailInfo failed:", e instanceof Error ? e.message : e));
+
   revalidatePath(`/hosts/${file.host_id}`);
   return { ok: true, message: action === "approve" ? "File approved" : "File rejected" };
 }

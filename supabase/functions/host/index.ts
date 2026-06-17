@@ -40,7 +40,13 @@ import { validateJWT } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
 import { uploadObject } from "../_shared/s3.ts";
 import { signAccessToken } from "../_shared/livekit.ts";
-import { sendEmail } from "../_shared/email.ts";
+import {
+  sendEmail,
+  hostApplicationReceivedTemplate,
+  hostUploadReceivedTemplate,
+  hostOnboardingCompleteTemplate,
+  adminHostEventTemplate,
+} from "../_shared/email.ts";
 import { notifyHost } from "../_shared/host_notifications.ts";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -122,6 +128,32 @@ Deno.serve(async (req: Request) => {
           return errorResponse("name_taken", 409);
         }
         return errorResponse(sanitizeError(error), 400);
+      }
+      // Best-effort emails: application received (host) + new application (admin).
+      if (user.email) {
+        const hostEmail = user.email;
+        const hostName = name;
+        (async () => {
+          try {
+            const tpl = hostApplicationReceivedTemplate({ name: hostName });
+            await sendEmail({ to: { email: hostEmail, name: hostName }, ...tpl });
+          } catch (e) { console.warn("[host/apply] application email failed:", e); }
+          try {
+            const adminEmail = Deno.env.get("ADMIN_EMAIL");
+            if (adminEmail) {
+              const tpl = adminHostEventTemplate({
+                heading: "New host application",
+                intro: "A host submitted a new application and is pending review.",
+                rows: [
+                  ["Name", hostName],
+                  ["Email", hostEmail],
+                  ["Host ID", (data as { id: string }).id],
+                ],
+              });
+              await sendEmail({ to: { email: adminEmail }, ...tpl });
+            }
+          } catch (e) { console.warn("[host/apply] admin notification failed:", e); }
+        })();
       }
       return successResponse({ host: data }, 201);
     }
@@ -226,7 +258,7 @@ Deno.serve(async (req: Request) => {
     const { data: host } = await db.from("show_hosts").select("*").eq("auth_user_id", user.id).maybeSingle();
     if (!host) return errorResponse("not_a_host", 404);
 
-    return await dispatchHost(req, parts, host, db);
+    return await dispatchHost(req, parts, host, db, user.email ?? null);
   } catch (err) {
     console.error("[host] unhandled:", err);
     return errorResponse(sanitizeError(err), 500);
@@ -251,7 +283,7 @@ function maskFeeFields(g: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): Promise<Response> {
+async function dispatchHost(req: Request, parts: string[], host: Host, db: DB, hostEmail: string | null): Promise<Response> {
   const method = req.method;
   // ── GET/PATCH /host/me ─────────────────────────────────────────────────────
   if (parts[0] === "me" && parts.length === 1) {
@@ -306,6 +338,27 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
     const { data, error } = await db.from("show_hosts")
       .update({ avatar_url: r.publicUrl, updated_at: nowIso() }).eq("id", host.id).select("*").single();
     if (error) return errorResponse(sanitizeError(error), 500);
+    // Best-effort notification: avatar uploaded.
+    if (hostEmail) {
+      const hostName = (host.name as string | null) ?? "";
+      (async () => {
+        try {
+          const tpl = hostUploadReceivedTemplate({ name: hostName, fileLabel: "profile photo" });
+          await sendEmail({ to: { email: hostEmail, name: hostName || undefined }, ...tpl });
+        } catch (e) { console.warn("[host/avatar] upload email failed:", e); }
+        try {
+          const adminEmail = Deno.env.get("ADMIN_EMAIL");
+          if (adminEmail) {
+            const tpl = adminHostEventTemplate({
+              heading: "Host avatar uploaded",
+              intro: `${hostName || "A host"} uploaded a new profile photo.`,
+              rows: [["Host", hostName || host.id], ["Host ID", host.id]],
+            });
+            await sendEmail({ to: { email: adminEmail }, ...tpl });
+          }
+        } catch (e) { console.warn("[host/avatar] admin notification failed:", e); }
+      })();
+    }
     return successResponse({ host: data, url: r.publicUrl });
   }
 
@@ -345,6 +398,51 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
         created_at: nowIso(), updated_at: nowIso(),
       }).select("*").single();
       if (error) return errorResponse(sanitizeError(error), 500);
+      // Best-effort emails: upload received (host) + notification (admin).
+      if (hostEmail) {
+        const hostName = (host.name as string | null) ?? "";
+        const fileLabel = fileType.replaceAll("_", " ");
+        const isFirstIntroVideo = fileType === "intro_video";
+        // Check whether this is the very first intro_video (onboarding milestone).
+        let isFirstUpload = false;
+        if (isFirstIntroVideo) {
+          const { count } = await db.from("host_uploaded_files")
+            .select("id", { count: "exact", head: true })
+            .eq("host_id", host.id)
+            .eq("file_type", "intro_video");
+          isFirstUpload = (count ?? 0) <= 1; // <=1 because we just inserted above
+        }
+        (async () => {
+          try {
+            const tpl = isFirstUpload
+              ? hostOnboardingCompleteTemplate({ name: hostName })
+              : hostUploadReceivedTemplate({ name: hostName, fileLabel });
+            await sendEmail({ to: { email: hostEmail, name: hostName || undefined }, ...tpl });
+          } catch (e) { console.warn("[host/files] upload email failed:", e); }
+          try {
+            const adminEmail = Deno.env.get("ADMIN_EMAIL");
+            if (adminEmail) {
+              const heading = isFirstUpload
+                ? "Host onboarding complete"
+                : `Host file uploaded: ${fileLabel}`;
+              const intro = isFirstUpload
+                ? `${hostName || "A host"} completed onboarding by recording their intro video.`
+                : `${hostName || "A host"} uploaded a new ${fileLabel} file for review.`;
+              const tpl = adminHostEventTemplate({
+                heading,
+                intro,
+                rows: [
+                  ["Host", hostName || host.id],
+                  ["Host ID", host.id],
+                  ["File type", fileLabel],
+                  ["File ID", (data as { id: string }).id],
+                ],
+              });
+              await sendEmail({ to: { email: adminEmail }, ...tpl });
+            }
+          } catch (e) { console.warn("[host/files] admin notification failed:", e); }
+        })();
+      }
       return successResponse({ file: data }, 201);
     }
     if (parts.length === 3 && method === "DELETE") {
