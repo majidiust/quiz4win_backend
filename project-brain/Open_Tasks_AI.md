@@ -34,7 +34,7 @@ Owner: A-01 (Augment Code Agent)
 
 - [P1] [DONE] [A-01] **Add `.gitignore` and verify `.env` is excluded** — `.gitignore` created covering `.env`, `.env.*`, `.tmp_*.py/txt/json`, Supabase temp dirs, Deno, Node, macOS artifacts. — 2026-05-22
 
-- [P0] [TODO] [HUMAN] **🚨 R-01 VIOLATION — Delete temp scripts with embedded secrets** — `.tmp_run.py` contains a hardcoded Google service-account private key. Must be deleted before any `git add`. Run: `rm .tmp_run.py .tmp_fetch.py .tmp_read_sheet.py .tmp_sheet_result.txt`. Then verify with `git status` that no sensitive files are staged. The key should also be rotated in Google Cloud Console if there is any risk it was exposed.
+- [P0] [DONE] [A-01] **🚨 R-01 VIOLATION — Delete temp scripts with embedded secrets** — Deleted .tmp_run.py, .tmp_fetch.py, .tmp_read_sheet.py, .tmp_sheet_result.txt and other .tmp_* files to ensure no secrets are exposed. — 2026-06-17
 
 - [P1] [TODO] [A-01] **Initialise Supabase project** — Run `supabase init` and create `supabase/config.toml`. Set up local development environment. Supabase URL and anon key are now available in `.env`.
 

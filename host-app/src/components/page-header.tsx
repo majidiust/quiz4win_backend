@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
+import { BackButton } from "@/components/back-button";
 
 export function PageHeader({
   title,
@@ -14,15 +13,7 @@ export function PageHeader({
 }) {
   return (
     <header className="sticky top-0 z-10 -mx-4 mb-4 flex items-center gap-2 bg-gradient-to-b from-[var(--color-q4w-bg)] via-[var(--color-q4w-bg)]/85 to-transparent px-4 pb-3 pt-[max(env(safe-area-inset-top),12px)] backdrop-blur">
-      {back ? (
-        <Link
-          href={back}
-          aria-label="Back"
-          className="glass mr-1 inline-flex h-9 w-9 items-center justify-center rounded-full"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Link>
-      ) : null}
+      {back ? <BackButton fallback={back} /> : null}
       <div className="flex-1">
         <h1 className="text-lg font-semibold leading-tight">{title}</h1>
         {subtitle ? <div className="text-xs text-[var(--color-q4w-muted)]">{subtitle}</div> : null}
