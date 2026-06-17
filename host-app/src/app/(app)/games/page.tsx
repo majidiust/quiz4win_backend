@@ -43,6 +43,14 @@ export default async function GamesPage({
   ]);
   const games = (listRes.ok ? listRes.data?.games ?? [] : []) as Game[];
   const requests = (reqsRes.ok ? reqsRes.data?.requests ?? [] : []) as HostRequest[];
+  // Surface API failures so an empty UI doesn't masquerade as "no data".
+  // host_not_approved is expected on the apply path — we don't show it as
+  // an error on the read-only games list.
+  const listErr = !listRes.ok && tab !== "requests"
+    ? (listRes.status === 401 ? "Your session expired — please sign in again."
+       : listRes.status === 403 ? null
+       : `Couldn't load games (${listRes.error}).`)
+    : null;
   const requestedByGame = new Map(
     requests.filter((r) => r.status === "pending" || r.status === "approved").map((r) => [r.game_id, r]),
   );
@@ -75,6 +83,12 @@ export default async function GamesPage({
         })}
       </div>
 
+      {listErr ? (
+        <div className="mb-3 rounded-2xl border border-[var(--color-q4w-danger)]/40 bg-[var(--color-q4w-danger)]/10 px-3 py-2 text-xs text-rose-300">
+          {listErr}
+        </div>
+      ) : null}
+
       {tab === "requests" ? (
         <RequestsList requests={requests} />
       ) : (
@@ -90,11 +104,26 @@ function GamesList({
   if (games.length === 0) {
     return (
       <Card>
-        <CardSubtitle>
-          {tab === "available" ? "No upcoming games are open for host requests yet. Check back soon."
-            : tab === "upcoming" ? "You have no upcoming shows assigned to you yet."
-            : "No completed shows in your history."}
-        </CardSubtitle>
+        {tab === "available" ? (
+          <CardSubtitle>
+            No live shows are open for host requests right now. Admins schedule live games — check back soon, or watch your Invitations.
+          </CardSubtitle>
+        ) : tab === "upcoming" ? (
+          <>
+            <CardSubtitle>
+              No shows assigned to you yet. You&apos;ll see games here once an admin
+              approves your request or assigns you directly.
+            </CardSubtitle>
+            <Link
+              href="/games?tab=available"
+              className="mt-3 inline-block text-xs text-[var(--color-q4w-primary)]"
+            >
+              Browse available shows →
+            </Link>
+          </>
+        ) : (
+          <CardSubtitle>No completed shows in your history.</CardSubtitle>
+        )}
       </Card>
     );
   }

@@ -44,24 +44,27 @@ export interface ApprovedHostRow {
   name: string;
   avatar_url: string | null;
   country: string | null;
-  languages: string[];
-  total_shows_hosted: number | null;
+  languages: string[] | null;
+  shows_hosted: number | null;
 }
 export async function listApprovedHosts(
   q?: string, limit = 50,
-): Promise<{ ok: boolean; hosts: ApprovedHostRow[] }> {
+): Promise<{ ok: boolean; hosts: ApprovedHostRow[]; error?: string }> {
   await requireAdmin(MOD);
   const db = createSupabaseAdminClient();
   let query = db.from("show_hosts")
-    .select("id, name, avatar_url, country, languages, total_shows_hosted")
+    .select("id, name, avatar_url, country, languages, shows_hosted")
     .eq("application_status", "approved")
     .eq("status", "active")
-    .order("total_shows_hosted", { ascending: false, nullsFirst: false })
+    .order("shows_hosted", { ascending: false, nullsFirst: false })
     .limit(Math.min(Math.max(limit, 1), 100));
   const term = q?.trim();
   if (term) query = query.ilike("name", `%${term}%`);
   const { data, error } = await query;
-  if (error) return { ok: false, hosts: [] };
+  if (error) {
+    console.error("[hosts] listApprovedHosts failed:", error.message);
+    return { ok: false, hosts: [], error: error.message };
+  }
   return { ok: true, hosts: (data ?? []) as ApprovedHostRow[] };
 }
 

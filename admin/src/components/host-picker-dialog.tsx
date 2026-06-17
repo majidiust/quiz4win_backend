@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { Search, UserCheck, X } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -37,9 +38,16 @@ export function HostPickerDialog({ value, onChange, trigger, buttonFull = true }
     if (!open) return;
     setErr(null);
     start(async () => {
-      const r = await listApprovedHosts(q.trim() || undefined, 50);
-      if (!r.ok) { setErr("Failed to load hosts"); return; }
-      setItems(r.hosts);
+      try {
+        const r = await listApprovedHosts(q.trim() || undefined, 50);
+        if (!r.ok) {
+          setErr(r.error ? `Failed to load hosts: ${r.error}` : "Failed to load hosts");
+          return;
+        }
+        setItems(r.hosts);
+      } catch (e) {
+        setErr((e as Error).message ?? "Failed to load hosts");
+      }
     });
   }, [open, q]);
 
@@ -98,7 +106,16 @@ export function HostPickerDialog({ value, onChange, trigger, buttonFull = true }
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">Loading…</div>
           ) : items.length === 0 ? (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-              {q ? "No hosts match." : "No approved hosts yet."}
+              {q ? (
+                <>No hosts match &quot;{q}&quot;.</>
+              ) : (
+                <>
+                  No approved hosts yet.{" "}
+                  <Link href="/host-applications" className="text-primary underline">
+                    Review applications →
+                  </Link>
+                </>
+              )}
             </div>
           ) : (
             <ul className="divide-y">
@@ -121,7 +138,7 @@ export function HostPickerDialog({ value, onChange, trigger, buttonFull = true }
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium">{h.name}</div>
                         <div className="truncate text-[11px] text-muted-foreground">
-                          {[h.country, (h.languages ?? []).join(", "), h.total_shows_hosted != null ? `${h.total_shows_hosted} shows` : null]
+                          {[h.country, (h.languages ?? []).join(", "), h.shows_hosted != null ? `${h.shows_hosted} shows` : null]
                             .filter(Boolean).join(" · ")}
                         </div>
                       </div>
