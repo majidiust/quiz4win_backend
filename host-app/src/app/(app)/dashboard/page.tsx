@@ -12,7 +12,7 @@ interface Host {
   id: string; name: string; application_status: string; status: string;
   total_earnings?: number | string; shows_hosted?: number;
 }
-interface Game { id: string; title: string; scheduled_at: string | null; status: string }
+interface Game { id: string; title: string; scheduled_at: string | null; status: string; host_assignment_status?: string | null }
 interface Invitation { id: string; status: string; games?: Game | null }
 interface Req { id: string; status: string; game_id: string }
 
@@ -25,8 +25,13 @@ export default async function DashboardPage() {
     api<{ requests: Req[] }>("/host/games/requests"),
   ]);
   const host = me.ok ? me.data?.host : null;
-  const nextGame = upcoming.ok ? upcoming.data?.games?.[0] : null;
+  const upcomingGames = upcoming.ok ? upcoming.data?.games ?? [] : [];
+  const nextGame = upcomingGames[0] ?? null;
+  // Games directly assigned by an admin that the host hasn't accepted/rejected yet.
+  const pendingAssignments = upcomingGames.filter((g) => g.host_assignment_status === "pending");
   const pendingInvites = (invites.ok ? invites.data?.invitations ?? [] : []).filter((i) => i.status === "sent");
+  // Combined "awaiting your response" count: direct-assign pending + sent invitations.
+  const pendingNotifications = pendingAssignments.length + pendingInvites.length;
   const pendingReqs = (reqs.ok ? reqs.data?.requests ?? [] : []).filter((r) => r.status === "pending");
   const availableCount = available.ok ? available.data?.games?.length ?? 0 : 0;
 
@@ -74,7 +79,7 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
-      {host?.application_status === "approved" && availableCount > 0 ? (
+      {host?.application_status === "approved" ? (
         <Link href="/games?tab=available" className="mt-3 block">
           <Card className="border border-[var(--color-q4w-primary)]/30 bg-[var(--color-q4w-primary)]/5">
             <CardHeader>
@@ -89,12 +94,22 @@ export default async function DashboardPage() {
                 <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
               </div>
             </CardHeader>
-            <CardSubtitle>{availableCount === 1 ? "An upcoming show is" : `${availableCount} upcoming shows are`} open for host requests. Tap to apply.</CardSubtitle>
+            <CardSubtitle>
+              {availableCount === 0
+                ? "No shows are open for requests right now. Check back soon."
+                : availableCount === 1
+                  ? "An upcoming show is open for host requests. Tap to apply."
+                  : `${availableCount} upcoming shows are open for host requests. Tap to apply.`}
+            </CardSubtitle>
           </Card>
         </Link>
       ) : null}
 
-      <Link href="/invitations" className="mt-3 block">
+      {/* Invitations: direct-assign pending + sent host_invitations */}
+      <Link
+        href={pendingAssignments.length > 0 ? "/games?tab=upcoming" : "/invitations"}
+        className="mt-3 block"
+      >
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -102,15 +117,30 @@ export default async function DashboardPage() {
               <CardTitle>Invitations</CardTitle>
             </div>
             <div className="flex items-center gap-2">
-              <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
-                {pendingInvites.length} new
-              </span>
+              {pendingNotifications > 0 ? (
+                <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+                  {pendingNotifications} pending
+                </span>
+              ) : (
+                <span className="rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-xs text-[var(--color-q4w-primary)]">
+                  0 new
+                </span>
+              )}
               <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
             </div>
           </CardHeader>
-          {pendingInvites.length === 0
-            ? <CardSubtitle>No pending invitations.</CardSubtitle>
-            : <CardSubtitle>Tap to review and accept.</CardSubtitle>}
+          {pendingNotifications === 0 ? (
+            <CardSubtitle>No pending invitations or assignments.</CardSubtitle>
+          ) : pendingAssignments.length > 0 ? (
+            <CardSubtitle>
+              {pendingAssignments.length === 1
+                ? "You have been assigned to 1 show — tap to accept or reject."
+                : `You have been assigned to ${pendingAssignments.length} shows — tap to accept or reject.`}
+              {pendingInvites.length > 0 ? ` Plus ${pendingInvites.length} invitation${pendingInvites.length > 1 ? "s" : ""}.` : ""}
+            </CardSubtitle>
+          ) : (
+            <CardSubtitle>You have {pendingInvites.length} invitation{pendingInvites.length > 1 ? "s" : ""} to review.</CardSubtitle>
+          )}
         </Card>
       </Link>
 
