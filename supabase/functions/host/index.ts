@@ -525,14 +525,27 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB, h
     const { data: g } = await db.from("games").select("id, mode, status, host_id").eq("id", gameId).maybeSingle();
     if (!g) return errorResponse("game_not_found", 404);
     if (g.mode !== "live" || g.status !== "upcoming" || g.host_id) return errorResponse("game_not_requestable", 409);
+
+    // Check for an existing request row for this (host, game) pair.
+    // UNIQUE(host_id, game_id) means only one row can ever exist.
+    const { data: existing } = await db.from("host_game_requests")
+      .select("id, status").eq("host_id", host.id).eq("game_id", gameId).maybeSingle();
+
+    if (existing) {
+      // Allow re-requesting only when the previous request was cancelled.
+      if (existing.status !== "cancelled") return errorResponse("already_requested", 409);
+      const { data, error } = await db.from("host_game_requests")
+        .update({ status: "pending", host_note: note, admin_note: null, reviewed_by: null, reviewed_at: null, updated_at: nowIso() })
+        .eq("id", existing.id).select("*").single();
+      if (error) return errorResponse(sanitizeError(error), 400);
+      return successResponse({ request: data }, 201);
+    }
+
     const { data, error } = await db.from("host_game_requests").insert({
       host_id: host.id, game_id: gameId, host_note: note, status: "pending",
       created_at: nowIso(), updated_at: nowIso(),
     }).select("*").single();
-    if (error) {
-      if ((error.message ?? "").toLowerCase().includes("unique")) return errorResponse("already_requested", 409);
-      return errorResponse(sanitizeError(error), 400);
-    }
+    if (error) return errorResponse(sanitizeError(error), 400);
     return successResponse({ request: data }, 201);
   }
 
