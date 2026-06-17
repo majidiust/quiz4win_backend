@@ -13,7 +13,7 @@ interface Host {
 }
 
 export default async function StatusPage() {
-  const me = await api<{ host: Host }>("/host/me");
+  const me = await api<{ host: Host; onboarding_complete?: boolean }>("/host/me");
 
   if (!me.ok) {
     if (me.status === 401) redirect("/signin");
@@ -23,21 +23,32 @@ export default async function StatusPage() {
   const host = me.data.host;
   if (!host) redirect("/onboarding/apply");
 
-  // If somehow approved (race condition), let them through.
-  if (host.application_status === "approved" && host.status !== "suspended") {
+  const isSuspended = host.status === "suspended";
+
+  // Approved (and not suspended) → straight into the app.
+  if (host.application_status === "approved" && !isSuspended) {
     redirect("/dashboard");
   }
 
-  const isPending  = host.application_status === "pending";
-  const isRejected = host.application_status === "rejected";
-  const isSuspended = host.status === "suspended";
+  // Suspended / rejected get their own terminal screens.
+  if (!isSuspended && host.application_status === "rejected") {
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-8 px-5 pb-10 pt-[max(env(safe-area-inset-top),32px)]">
+        <RejectedScreen notes={host.rejection_notes} />
+      </main>
+    );
+  }
+
+  // Anything not yet approved (pending or unknown) must FINISH onboarding before
+  // we show the "under review" screen. A host who applied but never recorded
+  // their intro video is sent back to complete it — on every login.
+  if (!isSuspended && !me.data.onboarding_complete) {
+    redirect("/onboarding/intro-video");
+  }
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-8 px-5 pb-10 pt-[max(env(safe-area-inset-top),32px)]">
-      {isPending && !isSuspended && <PendingScreen name={host.name} />}
-      {isRejected && !isSuspended && <RejectedScreen notes={host.rejection_notes} />}
-      {isSuspended && <SuspendedScreen />}
-      {!isPending && !isRejected && !isSuspended && <PendingScreen name={host.name} />}
+      {isSuspended ? <SuspendedScreen /> : <PendingScreen name={host.name} />}
     </main>
   );
 }
@@ -79,7 +90,7 @@ function PendingScreen({ name }: { name: string }) {
           Refresh status
         </a>
         <Link href="/onboarding/intro-video" className="text-center text-xs text-[var(--color-q4w-muted)] underline underline-offset-2">
-          Upload intro video
+          Re-record intro video
         </Link>
         <Link href="/signin" className="text-center text-xs text-[var(--color-q4w-muted)]">Sign out</Link>
       </div>

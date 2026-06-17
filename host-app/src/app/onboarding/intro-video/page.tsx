@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Video, Square, RotateCcw, CheckCircle2, CameraOff } from "lucide-react";
+import { Video, Square, RotateCcw, CheckCircle2, CameraOff, Lightbulb } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,22 @@ const SAMPLE = {
   options: ["Venus", "Mars", "Jupiter", "Saturn"],
   correct: 1,
 };
+
+// Step-by-step script the host follows on camera.
+const STEPS: { title: string; detail: string }[] = [
+  { title: "Introduce yourself", detail: "Smile and say your name plus one line about you — e.g. \u201cHi, I\u2019m Sam and I love trivia nights!\u201d" },
+  { title: "Host the question", detail: "Read the question below and all four options (A\u2013D) aloud, clearly and with energy, like you\u2019re live on air." },
+  { title: "Build suspense", detail: "Pause for a beat, look into the camera, and give the audience a moment to think." },
+  { title: "Reveal the answer", detail: "After 10 seconds the correct option lights up below \u2014 announce it with excitement and wrap up." },
+];
+
+// Quick best-practice tips for a great recording.
+const TIPS: string[] = [
+  "Find a bright, quiet spot \u2014 face a window or light source.",
+  "Hold the phone steady at eye level and look into the lens.",
+  "Speak clearly; keep it under 2 minutes.",
+  "Not happy with a take? Re-record as many times as you like.",
+];
 
 function pickMime(): { type: string; ext: string } {
   const candidates = [
@@ -169,11 +185,6 @@ export default function IntroVideoPage() {
     });
   }
 
-  function skip() {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    router.push("/onboarding/status");
-  }
-
   const mmss = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
   const remaining = Math.max(0, REVEAL_AT - elapsed);
 
@@ -182,7 +193,9 @@ export default function IntroVideoPage() {
       {/* Compact header */}
       <h1 className="text-xl font-semibold">Record your intro</h1>
       <p className="mt-0.5 text-xs text-[var(--color-q4w-muted)]">
-        Up to 2 min. Read the question, then reveal the answer after 10 s.
+        A short clip (up to 2 min) so our team can meet you — this is the final,
+        required step of your application. Follow the steps below, host the sample
+        question, and reveal the answer after 10 seconds.
       </p>
 
       {/* ── Video preview — always visible, compact 16:9 ── */}
@@ -269,6 +282,41 @@ export default function IntroVideoPage() {
         </ul>
       </Card>
 
+      {/* ── Comprehensive guide — steps + tips, shown before recording ── */}
+      {(phase === "idle" || phase === "previewing") ? (
+        <Card className="mt-3 py-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-q4w-muted)]">
+            How to record a great intro
+          </span>
+          <ol className="mt-2 flex flex-col gap-2.5">
+            {STEPS.map((step, i) => (
+              <li key={step.title} className="flex items-start gap-2.5">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-q4w-primary)]/20 text-[11px] font-bold text-[var(--color-q4w-primary)]">
+                  {i + 1}
+                </span>
+                <div>
+                  <div className="text-xs font-medium text-[var(--color-q4w-text)]">{step.title}</div>
+                  <div className="text-[11px] leading-snug text-[var(--color-q4w-muted)]">{step.detail}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-2.5">
+            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-amber-300">
+              <Lightbulb className="h-3.5 w-3.5" /> Tips
+            </div>
+            <ul className="flex flex-col gap-1">
+              {TIPS.map((tip) => (
+                <li key={tip} className="flex items-start gap-1.5 text-[11px] leading-snug text-[var(--color-q4w-muted)]">
+                  <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-[var(--color-q4w-muted)]" />
+                  {tip}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
+      ) : null}
+
       {/* Error banner (non-camera errors) */}
       {error && phase !== "idle" ? (
         <div className="mt-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -301,10 +349,6 @@ export default function IntroVideoPage() {
             </Button>
           </>
         ) : null}
-
-        <Button type="button" variant="ghost" onClick={skip} disabled={pending}>
-          Skip for now
-        </Button>
       </div>
     </main>
   );

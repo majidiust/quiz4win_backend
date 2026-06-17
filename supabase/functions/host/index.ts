@@ -178,7 +178,16 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
   const method = req.method;
   // ── GET/PATCH /host/me ─────────────────────────────────────────────────────
   if (parts[0] === "me" && parts.length === 1) {
-    if (method === "GET") return successResponse({ host });
+    if (method === "GET") {
+      // Onboarding counts as complete only once an intro video exists. The
+      // onboarding gate uses this so a pending host who applied but never
+      // recorded their intro is resumed into the flow on every login rather
+      // than being parked on the "under review" screen.
+      const { count } = await db.from("host_uploaded_files")
+        .select("id", { count: "exact", head: true })
+        .eq("host_id", host.id).eq("file_type", "intro_video");
+      return successResponse({ host, onboarding_complete: (count ?? 0) > 0 });
+    }
     if (method === "PATCH") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
       const patch: Record<string, unknown> = { updated_at: nowIso() };
