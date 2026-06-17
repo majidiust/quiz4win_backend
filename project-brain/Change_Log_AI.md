@@ -618,6 +618,8 @@ echo hello123
 
 [2026-06-17] [A-01] [AUDIT] Session started. Onboarding checklist complete. All required documents read. Ready for task assignments.
 
+[2026-06-17] [A-01] [BUILD] **host-app — Landing page redesign with nudge-marketing conversion copy.** Rewrote `host-app/src/app/page.tsx` from a minimal scaffold into a full high-conversion landing page. Key nudge-marketing elements: (1) live "accepting in your region" pulsing badge (in-group + availability signal), (2) gradient hero headline with gradient CTA button + pink glow shadow (visual salience), (3) social-proof stat strip (€850 avg/show, <1 hr approval, 10 k+ players/game), (4) numbered 3-step "How it works" path (reduces friction / cognitive load), (5) 2×2 benefit grid (Instant pay-out, Massive audience, Build fame, Your schedule — addresses objections), (6) amber scarcity strip ("host slots are capped per region — once capacity is reached, applications close" — FOMO), (7) closing bottom CTA glass card with soft repeat of value proposition. All built on existing design-system primitives (glass, Button gradient, color CSS vars, Lucide icons). Server component — no new dependencies. No backend/DB/R-11 impact. Deploy: `docker compose up -d --build host`.
+
 
 [2026-06-17] [A-01] [FIX] **Resolved R-01 violation.** Deleted 12 temporary scripts and JSON files (starting with `.tmp_`) that contained or potentially contained hardcoded secrets and PII, as identified in `Open_Tasks_AI.md`.
 
