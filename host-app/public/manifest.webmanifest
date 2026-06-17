@@ -4,8 +4,8 @@
   "description": "Quiz4Win Host dashboard — manage your live shows, invitations, and earnings.",
   "start_url": "/dashboard",
   "display": "standalone",
-  "background_color": "#0B0D14",
-  "theme_color": "#0B0D14",
+  "background_color": "#09070E",
+  "theme_color": "#09070E",
   "orientation": "portrait",
   "icons": [
     {

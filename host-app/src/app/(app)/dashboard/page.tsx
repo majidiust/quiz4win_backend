@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle, Sparkles, ClipboardList } from "lucide-react";
+import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle, Sparkles, ClipboardList, MonitorPlay } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardSubtitle } from "@/components/ui/card";
 import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
@@ -29,6 +29,7 @@ export default async function DashboardPage() {
   const nextGame = upcomingGames[0] ?? null;
   // Games directly assigned by an admin that the host hasn't accepted/rejected yet.
   const pendingAssignments = upcomingGames.filter((g) => g.host_assignment_status === "pending");
+  const myShows = upcomingGames.filter((g) => g.host_assignment_status === "accepted");
   const pendingInvites = (invites.ok ? invites.data?.invitations ?? [] : []).filter((i) => i.status === "sent");
   // Combined "awaiting your response" count: direct-assign pending + sent invitations.
   const pendingNotifications = pendingAssignments.length + pendingInvites.length;
@@ -78,6 +79,30 @@ export default async function DashboardPage() {
           </Card>
         </Link>
       </div>
+
+      {host?.application_status === "approved" && myShows.length > 0 ? (
+        <Link href="/games?tab=upcoming" className="mt-3 block">
+          <Card className="border border-emerald-500/30 bg-emerald-500/5">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <MonitorPlay className="h-4 w-4 text-emerald-400" />
+                <CardTitle className="text-emerald-200">My Shows</CardTitle>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                  {myShows.length} confirmed
+                </span>
+                <ChevronRight className="h-4 w-4 text-[var(--color-q4w-muted)]" />
+              </div>
+            </CardHeader>
+            <CardSubtitle>
+              {myShows.length === 1
+                ? "You have 1 confirmed upcoming show. Tap to view details."
+                : `You have ${myShows.length} confirmed upcoming shows. Tap to view them.`}
+            </CardSubtitle>
+          </Card>
+        </Link>
+      ) : null}
 
       {host?.application_status === "approved" ? (
         <Link href="/games?tab=available" className="mt-3 block">
