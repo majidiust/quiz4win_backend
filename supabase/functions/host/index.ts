@@ -145,6 +145,83 @@ Deno.serve(async (req: Request) => {
       return successResponse({ url: r.publicUrl, key }, 201);
     }
 
+    // ── GET /host/onboarding-state ───────────────────────────────────────────
+    // Lightweight state check consumed by the frontend layout to determine the
+    // canonical post-login route. Does NOT require a show_hosts row; returns all
+    // three gate flags so the frontend can enforce the full state machine:
+    //   email_verified → has_application → onboarding_complete → approved.
+    if (parts[0] === "onboarding-state" && parts.length === 1 && req.method === "GET") {
+      const emailVerified = !!user.email_confirmed_at;
+
+      if (!emailVerified) {
+        return successResponse({
+          email_verified: false,
+          has_application: false,
+          onboarding_complete: false,
+          application_status: null,
+          host_status: null,
+          next: "/verify-otp",
+        });
+      }
+
+      const { data: hostRow } = await db
+        .from("show_hosts")
+        .select("id, application_status, status")
+        .eq("auth_user_id", user.id)
+        .maybeSingle();
+
+      if (!hostRow) {
+        return successResponse({
+          email_verified: true,
+          has_application: false,
+          onboarding_complete: false,
+          application_status: null,
+          host_status: null,
+          next: "/onboarding/apply",
+        });
+      }
+
+      const { count } = await db
+        .from("host_uploaded_files")
+        .select("id", { count: "exact", head: true })
+        .eq("host_id", hostRow.id)
+        .eq("file_type", "intro_video");
+
+      const onboardingComplete = (count ?? 0) > 0;
+      const appStatus = hostRow.application_status as string;
+      const hostStatus = hostRow.status as string;
+      const isSuspended = hostStatus === "suspended";
+
+      let next: string;
+      if (!onboardingComplete) {
+        next = "/onboarding/intro-video";
+      } else if (appStatus === "approved" && !isSuspended) {
+        next = "/dashboard";
+      } else {
+        // pending, rejected, or suspended → show status / review screen
+        next = "/onboarding/status";
+      }
+
+      return successResponse({
+        email_verified: true,
+        has_application: true,
+        onboarding_complete: onboardingComplete,
+        application_status: appStatus,
+        host_status: hostStatus,
+        next,
+      });
+    }
+
+    // ── Email verification guard ─────────────────────────────────────────────
+    // All routes below this point require a verified email. GoTrue already
+    // prevents token issuance for unverified users, but this provides an
+    // explicit server-side check (belt-and-suspenders, R-03 spirit).
+    // Routes allowed without verification: apply, avatar-temp, onboarding-state
+    // (handled above).
+    if (!user.email_confirmed_at) {
+      return errorResponse("email_not_verified", 403);
+    }
+
     // From here on every route needs the caller's host row.
     const { data: host } = await db.from("show_hosts").select("*").eq("auth_user_id", user.id).maybeSingle();
     if (!host) return errorResponse("not_a_host", 404);

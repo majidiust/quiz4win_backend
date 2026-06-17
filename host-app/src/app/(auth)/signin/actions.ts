@@ -24,10 +24,13 @@ export async function signinAction(formData: FormData) {
     { email, password },
   );
   if (!r.ok) {
+    // Email not confirmed — send them to the OTP page to finish verification.
+    if (r.error === "email_not_confirmed") {
+      redirect(`/verify-otp?email=${encodeURIComponent(email)}&info=${encodeURIComponent("Please verify your email to continue")}`);
+    }
     const map: Record<string, string> = {
       invalid_credentials: "Invalid credentials",
       account_suspended: "Account suspended — contact support",
-      email_not_confirmed: "Email not confirmed yet",
     };
     const msg = map[r.error] ?? "Invalid credentials";
     redirect(`/signin?error=${encodeURIComponent(msg)}&email=${encodeURIComponent(email)}`);
