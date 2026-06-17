@@ -21,18 +21,27 @@ export async function getUploadToken(): Promise<string | null> {
 const LANG_OPTIONS = ["en", "ar", "fa", "tr", "es", "pt", "fr", "de"];
 
 export async function updateProfileAction(formData: FormData) {
-  const langs = (formData.getAll("languages") as string[]).filter((l) => LANG_OPTIONS.includes(l));
-  const body: Record<string, unknown> = { languages: langs };
+  // Each settings form only carries a subset of fields — only PATCH the keys
+  // actually present so an inner page never wipes the fields it doesn't show.
+  const redirectTo = String(formData.get("redirect") || "/settings");
+  const body: Record<string, unknown> = {};
+  // Languages is a checkbox group: an unchecked group sends nothing, so gate it
+  // behind an explicit marker to tell "none selected" apart from "not on form".
+  if (formData.has("has_languages")) {
+    body.languages = (formData.getAll("languages") as string[]).filter((l) => LANG_OPTIONS.includes(l));
+  }
   for (const k of ["country", "phone", "short_bio", "bio",
     "instagram_url", "telegram_url", "youtube_url", "tiktok_url", "twitter_url", "website_url"]) {
+    if (!formData.has(k)) continue;
     const v = String(formData.get(k) ?? "").trim();
     body[k] = v || null;
   }
   const r = await api("/host/me", { method: "PATCH", body });
   revalidatePath("/settings");
+  revalidatePath(redirectTo);
   revalidatePath("/dashboard");
-  if (!r.ok) redirect(`/settings?error=${encodeURIComponent(r.error)}`);
-  redirect("/settings?info=Saved");
+  if (!r.ok) redirect(`${redirectTo}?error=${encodeURIComponent(r.error)}`);
+  redirect(`${redirectTo}?info=Saved`);
 }
 
 export async function uploadAvatarAction(formData: FormData) {
