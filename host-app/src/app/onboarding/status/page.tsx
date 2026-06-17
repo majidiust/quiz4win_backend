@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { api } from "@/lib/api";
 import { Card, CardSubtitle } from "@/components/ui/card";
+import { signOutAction } from "@/app/(app)/settings/actions";
 
 export const metadata = { title: "Application Status — Quiz4Win Host" };
 
@@ -92,7 +93,9 @@ function PendingScreen({ name }: { name: string }) {
         <Link href="/onboarding/intro-video" className="text-center text-xs text-white/40 underline underline-offset-2 hover:text-white/70">
           Re-record intro video
         </Link>
-        <Link href="/signin" className="text-center text-xs text-white/35 hover:text-white/60">Sign out</Link>
+        <form action={signOutAction}>
+          <button type="submit" className="w-full text-center text-xs text-white/35 hover:text-white/60">Sign out</button>
+        </form>
       </div>
     </div>
   );
@@ -122,7 +125,9 @@ function RejectedScreen({ notes }: { notes?: string | null }) {
         <Link href="/onboarding/apply" className="inline-flex h-12 w-full items-center justify-center rounded-2xl bg-gradient-to-r from-pink-300 via-fuchsia-300 to-teal-300 text-sm font-semibold text-black shadow-[0_10px_40px_-10px_rgba(236,72,153,0.5)] transition hover:opacity-90">
           Submit a new application
         </Link>
-        <Link href="/signin" className="text-center text-xs text-white/35 hover:text-white/60">Sign out</Link>
+        <form action={signOutAction}>
+          <button type="submit" className="w-full text-center text-xs text-white/35 hover:text-white/60">Sign out</button>
+        </form>
       </div>
     </div>
   );
@@ -142,7 +147,9 @@ function SuspendedScreen() {
           Your account has been suspended. Please contact support if you believe this is a mistake.
         </p>
       </div>
-      <Link href="/signin" className="text-center text-xs text-[var(--color-q4w-muted)]">Sign out</Link>
+      <form action={signOutAction}>
+        <button type="submit" className="w-full text-center text-xs text-[var(--color-q4w-muted)] hover:text-white/60">Sign out</button>
+      </form>
     </div>
   );
 }
