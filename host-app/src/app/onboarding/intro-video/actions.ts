@@ -1,8 +1,22 @@
 "use server";
 
 import { api } from "@/lib/api";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export type UploadResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Returns the current user's access token so the browser can upload the intro
+ * video directly to api.quiz4win.com — bypassing the Next.js server-action
+ * 1 MB body limit (unreliable in standalone/Docker). The session cookie is
+ * httpOnly, so the browser-side Supabase client cannot read it; the token must
+ * be fetched from the server, where the cookie is accessible.
+ */
+export async function getUploadToken(): Promise<string | null> {
+  const supabase = await createSupabaseServerClient();
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
 
 /**
  * Uploads the recorded onboarding intro video as an `intro_video` file.

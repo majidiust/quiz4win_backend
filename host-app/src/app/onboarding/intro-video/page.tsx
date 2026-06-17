@@ -6,7 +6,7 @@ import { Video, Square, RotateCcw, CheckCircle2, CameraOff, Lightbulb } from "lu
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getUploadToken } from "./actions";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "https://api.quiz4win.com").replace(/\/$/, "");
 
@@ -180,9 +180,9 @@ export default function IntroVideoPage() {
       // limit that is unreliable in standalone/Docker deployments).
       let token: string | undefined;
       try {
-        const supabase = createSupabaseBrowserClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        token = session?.access_token;
+        // The session cookie is httpOnly, so the browser cannot read the token
+        // directly — fetch it from the server via a server action.
+        token = (await getUploadToken()) ?? undefined;
       } catch { /* proceed without token — backend will 401 */ }
 
       const fd = new FormData();
