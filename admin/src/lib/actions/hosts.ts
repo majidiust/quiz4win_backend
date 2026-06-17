@@ -35,6 +35,99 @@ async function claimGameHost(db: DB, gameId: string, hostId: string): Promise<bo
   return Boolean(data);
 }
 
+// ─── listApprovedHosts ───────────────────────────────────────────────────────
+// Used by the admin-side game create/edit "pick a host" modal. Returns a
+// minimal, RLS-safe projection of approved + active show_hosts. The optional
+// `q` parameter does an ILIKE match on the display name.
+export interface ApprovedHostRow {
+  id: string;
+  name: string;
+  avatar_url: string | null;
+  country: string | null;
+  languages: string[];
+  total_shows_hosted: number | null;
+}
+export async function listApprovedHosts(
+  q?: string, limit = 50,
+): Promise<{ ok: boolean; hosts: ApprovedHostRow[] }> {
+  await requireAdmin(MOD);
+  const db = createSupabaseAdminClient();
+  let query = db.from("show_hosts")
+    .select("id, name, avatar_url, country, languages, total_shows_hosted")
+    .eq("application_status", "approved")
+    .eq("status", "active")
+    .order("total_shows_hosted", { ascending: false, nullsFirst: false })
+    .limit(Math.min(Math.max(limit, 1), 100));
+  const term = q?.trim();
+  if (term) query = query.ilike("name", `%${term}%`);
+  const { data, error } = await query;
+  if (error) return { ok: false, hosts: [] };
+  return { ok: true, hosts: (data ?? []) as ApprovedHostRow[] };
+}
+
+// ─── assignGameHost (used by create/edit-game flows) ─────────────────────────
+// Idempotent: setting host_id to the same value is a no-op. Setting to NULL
+// clears the assignment (DB trigger trg_close_stale_host_offers_on_assign
+// does NOT fire on NOT NULL → NULL; that's by design, those rows stay).
+// INV-17 conflict is enforced at the DB via check_host_schedule_conflict.
+export async function assignGameHost(input: {
+  gameId: string;
+  hostId: string | null;
+}): Promise<ActionResult> {
+  const adm = await requireAdmin(MOD);
+  const Schema = z.object({
+    gameId: z.string().uuid(),
+    hostId: z.string().uuid().nullable(),
+  });
+  const p = Schema.safeParse(input);
+  if (!p.success) return { ok: false, message: "Invalid input" };
+  const { gameId, hostId } = p.data;
+  const db = createSupabaseAdminClient();
+
+  if (hostId) {
+    // Verify the host is approved/active before claiming.
+    const { data: h } = await db.from("show_hosts")
+      .select("id, name, application_status, status")
+      .eq("id", hostId).maybeSingle();
+    if (!h || h.application_status !== "approved" || h.status !== "active") {
+      return { ok: false, message: "Host is not approved or active" };
+    }
+    // INV-17 — overlapping commitment check (excludes self via p_game_id).
+    const { data: conflict } = await db.rpc("check_host_schedule_conflict",
+      { p_host_id: hostId, p_game_id: gameId });
+    if (conflict === true) {
+      return { ok: false, message: "Schedule conflict — host has another show in this window" };
+    }
+    // Take ownership: only set if current host_id is null OR same host.
+    const { data: cur } = await db.from("games").select("host_id").eq("id", gameId).maybeSingle();
+    if (!cur) return { ok: false, message: "Game not found" };
+    if (cur.host_id && cur.host_id !== hostId) {
+      return { ok: false, message: "Game already has a different host — unassign first" };
+    }
+    const { error } = await db.from("games").update({
+      host_id: hostId,
+      host_name: (h as { name: string }).name,
+      updated_at: nowIso(),
+    }).eq("id", gameId);
+    if (error) return { ok: false, message: error.message };
+    await audit(db, adm.id, "game_host_assigned", "game", gameId, { host_id: hostId });
+    await notifyHost(db, hostId, "host_invite",
+      "You've been assigned a show",
+      `An admin has assigned you as the host of an upcoming show.`,
+      { game_id: gameId });
+  } else {
+    const { error } = await db.from("games").update({
+      host_id: null, updated_at: nowIso(),
+    }).eq("id", gameId);
+    if (error) return { ok: false, message: error.message };
+    await audit(db, adm.id, "game_host_unassigned", "game", gameId, {});
+  }
+
+  revalidatePath(`/games/${gameId}`);
+  revalidatePath("/games");
+  return { ok: true, message: hostId ? "Host assigned" : "Host unassigned" };
+}
+
 async function notifyHost(
   db: DB, hostId: string,
   type: "host_application" | "host_invite" | "host_request" | "host_earning" | "host_payment_method" | "host_file" | "host_stream",

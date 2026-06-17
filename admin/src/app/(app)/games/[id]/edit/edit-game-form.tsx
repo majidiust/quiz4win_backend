@@ -16,6 +16,7 @@ import { PageHeader } from "@/components/shell/page-header";
 import { updateGame } from "@/lib/actions/games";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
 import { LanguageMultiSelect } from "@/components/language-multi-select";
+import { HostPickerDialog, type SelectedHost } from "@/components/host-picker-dialog";
 
 export interface EditableGame {
   title?: string | null;
@@ -40,6 +41,7 @@ export interface EditableGame {
   gradient_colors?: string[] | null;
   sponsor?: string | null;
   tags?: string[] | null;
+  host_id?: string | null;
   host_name?: string | null;
   host_title?: string | null;
   rules?: string[] | null;
@@ -89,6 +91,9 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
   const [tagsInput, setTagsInput] = useState((game.tags ?? []).join(", "));
   const [hostName, setHostName] = useState(game.host_name ?? "");
   const [hostTitle, setHostTitle] = useState(game.host_title ?? "");
+  const [assignedHost, setAssignedHost] = useState<SelectedHost | null>(
+    game.host_id ? { id: game.host_id, name: game.host_name ?? "Selected host" } : null,
+  );
   const [rulesText, setRulesText] = useState((game.rules ?? []).join("\n"));
 
   function addGradient() {
@@ -125,7 +130,8 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
         gradient_colors: gradientColors.length ? gradientColors : undefined,
         sponsor: sponsor.trim() || undefined,
         tags: tags.length ? tags : undefined,
-        host_name: hostName.trim() || undefined,
+        host_id: assignedHost?.id ?? null,
+        host_name: (hostName.trim() || assignedHost?.name) || undefined,
         host_title: hostTitle.trim() || undefined,
         rules: rules.length ? rules : undefined,
       });
@@ -334,9 +340,16 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
               <Label>Tags (comma-separated)</Label>
               <Input value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="football, sports" />
             </div>
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label>Assigned host</Label>
+              <HostPickerDialog value={assignedHost} onChange={setAssignedHost} />
+              <p className="text-xs text-muted-foreground">
+                Pick an approved Quiz4Win host. Schedule conflicts (INV-17) are validated on save.
+              </p>
+            </div>
             <div className="space-y-1.5">
-              <Label>Host name</Label>
-              <Input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="e.g. Alex Johnson" />
+              <Label>Display name override</Label>
+              <Input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder={assignedHost?.name ?? "e.g. Alex Johnson"} />
             </div>
             <div className="space-y-1.5">
               <Label>Host title</Label>

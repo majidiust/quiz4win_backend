@@ -18,6 +18,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { LanguageMultiSelect } from "@/components/language-multi-select";
+import { HostPickerDialog, type SelectedHost } from "@/components/host-picker-dialog";
 import { createGame } from "@/lib/actions/games";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
 
@@ -53,6 +54,7 @@ export function CreateGameDialog() {
   // Host fields
   const [hostName, setHostName] = useState("");
   const [hostTitle, setHostTitle] = useState("");
+  const [assignedHost, setAssignedHost] = useState<SelectedHost | null>(null);
 
   function reset() {
     setTitle(""); setMode("timed"); setCategory(""); setDifficulty("Medium");
@@ -60,7 +62,7 @@ export function CreateGameDialog() {
     setEntryFee("0"); setPrizePool("0"); setPrizePoolCurrency("USD"); setIsFeatured(false);
     setMaxPlayers(""); setTimePerQuestion("15"); setAllowedWrong(""); setScheduledAt(""); setDescription("");
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1");
-    setSponsor(""); setTagsInput(""); setHostName(""); setHostTitle("");
+    setSponsor(""); setTagsInput(""); setHostName(""); setHostTitle(""); setAssignedHost(null);
   }
 
   function addGradientColor() {
@@ -94,7 +96,8 @@ export function CreateGameDialog() {
         gradient_colors: gradientColors.length ? gradientColors : undefined,
         sponsor: sponsor.trim() || undefined,
         tags: tags.length ? tags : undefined,
-        host_name: hostName.trim() || undefined,
+        host_id: assignedHost?.id ?? null,
+        host_name: (hostName.trim() || assignedHost?.name) || undefined,
         host_title: hostTitle.trim() || undefined,
       });
       if (res.ok) {
@@ -269,9 +272,16 @@ export function CreateGameDialog() {
                 <Input id="cg-tags" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="football, sports" />
               </div>
               {/* Host info */}
+              <div className="col-span-2 space-y-1.5">
+                <Label>Assigned host</Label>
+                <HostPickerDialog value={assignedHost} onChange={setAssignedHost} />
+                <p className="text-xs text-muted-foreground">
+                  Pick an approved Quiz4Win host. Display name auto-fills from their profile.
+                </p>
+              </div>
               <div className="space-y-1.5">
-                <Label htmlFor="cg-host-name">Host name</Label>
-                <Input id="cg-host-name" value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="e.g. Alex Johnson" />
+                <Label htmlFor="cg-host-name">Display name override</Label>
+                <Input id="cg-host-name" value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder={assignedHost?.name ?? "e.g. Alex Johnson"} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="cg-host-title">Host title</Label>

@@ -126,10 +126,37 @@ const GameSchema = z.object({
   sponsor: z.string().trim().max(200).optional(),
   tags: z.array(z.string().trim().max(50)).optional(),
   // Host fields
+  host_id: z.string().uuid().nullable().optional(),
   host_name: z.string().trim().max(200).optional(),
   host_title: z.string().trim().max(200).optional(),
   rules: z.array(z.string().trim().max(500)).optional(),
 });
+
+// Validates that the requested host_id is approved/active and has no
+// schedule conflict with the proposed game window. Returns the host name
+// for denormalised storage on games.host_name. Pass `null` to skip checks
+// (the caller will write host_id=null and clear host_name).
+async function resolveHostAssignment(
+  db: ReturnType<typeof createSupabaseAdminClient>,
+  hostId: string | null,
+  gameId: string | null,
+): Promise<{ ok: true; name: string | null } | { ok: false; message: string }> {
+  if (!hostId) return { ok: true, name: null };
+  const { data: h } = await db.from("show_hosts")
+    .select("name, application_status, status").eq("id", hostId).maybeSingle();
+  if (!h) return { ok: false, message: "Selected host not found" };
+  if (h.application_status !== "approved" || h.status !== "active") {
+    return { ok: false, message: "Selected host is not approved or active" };
+  }
+  if (gameId) {
+    const { data: conflict } = await db.rpc("check_host_schedule_conflict",
+      { p_host_id: hostId, p_game_id: gameId });
+    if (conflict === true) {
+      return { ok: false, message: "Schedule conflict — host has another show in this window" };
+    }
+  }
+  return { ok: true, name: (h as { name: string }).name };
+}
 
 export async function createGame(input: z.infer<typeof GameSchema>): Promise<ActionResult & { id?: string }> {
   const admin = await requireAdmin(["super_admin", "admin"]);
@@ -137,28 +164,66 @@ export async function createGame(input: z.infer<typeof GameSchema>): Promise<Act
   if (!parsed.success) return { ok: false, message: "Invalid input" };
 
   const db = createSupabaseAdminClient();
+  const { host_id, ...rest } = parsed.data;
+
+  // Pre-validate host status before inserting so we never create an orphaned
+  // game when the admin pointed at a suspended host. The conflict check
+  // requires an existing game row, so it runs after the insert.
+  if (host_id) {
+    const pre = await resolveHostAssignment(db, host_id, null);
+    if (!pre.ok) return { ok: false, message: pre.message };
+    // host_name is denormalised on games for the customer UI; auto-populate
+    // when the admin didn't type one explicitly.
+    if (!rest.host_name) rest.host_name = pre.name ?? undefined;
+  }
+
   const { data, error } = await db
     .from("games")
-    .insert({ ...parsed.data, status: "upcoming", created_at: new Date().toISOString() })
+    .insert({ ...rest, host_id: null, status: "upcoming", created_at: new Date().toISOString() })
     .select("id")
     .single();
-
   if (error) return { ok: false, message: error.message };
+  const newId = data.id as string;
 
-  await db.from("admin_audit_log").insert({ admin_id: admin.id, action: "game_created", target_type: "game", target_id: data.id, created_at: new Date().toISOString() });
+  // Now claim the host_id atomically with the conflict check.
+  if (host_id) {
+    const post = await resolveHostAssignment(db, host_id, newId);
+    if (!post.ok) {
+      return { ok: true, message: `Game created without host — ${post.message}`, id: newId };
+    }
+    await db.from("games").update({ host_id, updated_at: new Date().toISOString() })
+      .eq("id", newId).is("host_id", null);
+  }
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id, action: "game_created", target_type: "game", target_id: newId,
+    details: host_id ? { host_id } : null, created_at: new Date().toISOString(),
+  });
   revalidatePath("/games");
-  return { ok: true, message: "Game created", id: data.id };
+  return { ok: true, message: "Game created", id: newId };
 }
 
 export async function updateGame(gameId: string, input: Partial<z.infer<typeof GameSchema>>): Promise<ActionResult> {
   await requireAdmin(["super_admin", "admin"]);
   const db = createSupabaseAdminClient();
 
-  const { data: g } = await db.from("games").select("status").eq("id", gameId).maybeSingle();
+  const { data: g } = await db.from("games").select("status, host_id").eq("id", gameId).maybeSingle();
   if (!g) return { ok: false, message: "Game not found" };
   if (!["upcoming", "open"].includes(g.status)) return { ok: false, message: "Cannot edit a started or ended game" };
 
-  const { error } = await db.from("games").update({ ...input, updated_at: new Date().toISOString() } as Record<string, unknown>).eq("id", gameId);
+  // host_id transitions need extra validation (INV-17 + host approved check).
+  const patch: Record<string, unknown> = { ...input };
+  if (Object.prototype.hasOwnProperty.call(input, "host_id")) {
+    const next = input.host_id ?? null;
+    if (next !== (g.host_id ?? null)) {
+      const r = await resolveHostAssignment(db, next, gameId);
+      if (!r.ok) return { ok: false, message: r.message };
+      if (next && !input.host_name) patch.host_name = r.name ?? undefined;
+      if (!next) patch.host_name = null;
+    }
+  }
+  patch.updated_at = new Date().toISOString();
+  const { error } = await db.from("games").update(patch).eq("id", gameId);
   if (error) return { ok: false, message: error.message };
 
   revalidatePath(`/games/${gameId}`);
