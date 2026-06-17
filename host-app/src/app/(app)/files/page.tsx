@@ -1,11 +1,11 @@
 import { Card, CardSubtitle, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { formatRelative } from "@/lib/utils";
-import { uploadFileAction, deleteFileAction } from "./actions";
+import { deleteFileAction } from "./actions";
 import { FilePreview } from "./file-preview";
+import { UploadForm } from "./upload-form";
 
 export const metadata = { title: "Verification files — Quiz4Win Host" };
 
@@ -14,15 +14,6 @@ interface UploadedFile {
   file_size_bytes?: number | null; status: string; rejection_reason?: string | null;
   created_at: string;
 }
-
-const TYPES: Array<{ value: string; label: string }> = [
-  { value: "selfie", label: "Selfie holding ID" },
-  { value: "id_document", label: "ID document" },
-  { value: "intro_video", label: "Intro video" },
-  { value: "screenshot", label: "Screenshot" },
-  { value: "avatar", label: "Avatar photo" },
-  { value: "other", label: "Other" },
-];
 
 export default async function FilesPage({
   searchParams,
@@ -44,23 +35,7 @@ export default async function FilesPage({
 
       <Card className="mb-4">
         <CardTitle className="mb-3">Upload a new file</CardTitle>
-        <form action={uploadFileAction} className="flex flex-col gap-3">
-          <label className="block">
-            <div className="mb-1.5 ml-1 text-xs font-medium text-[var(--color-q4w-muted)]">Type</div>
-            <select name="file_type" defaultValue="selfie"
-              className="h-12 w-full rounded-2xl border border-[var(--color-q4w-border)] bg-[var(--color-q4w-glass)] px-4 text-sm">
-              {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
-          </label>
-          <label className="block">
-            <div className="mb-1.5 ml-1 text-xs font-medium text-[var(--color-q4w-muted)]">File</div>
-            <input type="file" name="file" required
-              accept="image/jpeg,image/png,image/webp,image/heic,application/pdf,video/mp4,video/quicktime,video/webm"
-              className="h-12 w-full cursor-pointer rounded-2xl border border-[var(--color-q4w-border)] bg-[var(--color-q4w-glass)] px-3 text-xs file:mr-3 file:h-9 file:rounded-xl file:border-0 file:bg-[var(--color-q4w-primary)] file:px-3 file:text-xs file:text-white" />
-          </label>
-          <Button type="submit">Upload</Button>
-          <CardSubtitle>Max 25 MB. Accepted: JPEG, PNG, WebP, HEIC, PDF, MP4, MOV, WebM.</CardSubtitle>
-        </form>
+        <UploadForm />
       </Card>
 
       <div className="flex flex-col gap-3">
