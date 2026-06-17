@@ -4,7 +4,7 @@ import { ArrowLeft, Trophy, Users, Palette, Image as ImageIcon, User, Pencil } f
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, hostAssignmentLabel } from "@/components/status-badge";
 import { PageHeader } from "@/components/shell/page-header";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
@@ -168,6 +168,12 @@ export default async function GameDetailPage({ params }: { params: Promise<{ id:
                 <div className="space-y-1">
                   <p className="font-medium">{game.host_name ?? <span className="text-muted-foreground">—</span>}</p>
                   <p className="text-xs text-muted-foreground">{game.host_title ?? ""}</p>
+                  {game.host_id ? (
+                    <StatusBadge
+                      value={game.host_assignment_status}
+                      label={hostAssignmentLabel(game.host_assignment_status)}
+                    />
+                  ) : null}
                 </div>
               </div>
             </div>

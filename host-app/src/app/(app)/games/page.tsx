@@ -15,6 +15,7 @@ interface Game {
   scheduled_at: string | null; ended_at?: string | null;
   prize_pool?: number | string | null; host_payout?: number | string | null;
   status: string;
+  host_id?: string | null; host_assignment_status?: string | null;
 }
 interface HostRequest {
   id: string; game_id: string; status: string; host_note: string | null;
@@ -141,6 +142,15 @@ function GamesList({
                     {tab === "available" && req ? (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--color-q4w-primary)]">
                         ✓ {req.status === "approved" ? "Approved" : "Requested"}
+                      </span>
+                    ) : null}
+                    {tab === "upcoming" && g.host_assignment_status === "pending" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                        Pending host confirmation
+                      </span>
+                    ) : tab === "upcoming" && g.host_assignment_status === "accepted" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-q4w-primary)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--color-q4w-primary)]">
+                        ✓ Approved
                       </span>
                     ) : null}
                   </div>

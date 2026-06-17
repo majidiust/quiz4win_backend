@@ -13,6 +13,8 @@ const TONES: Record<string, Tone> = {
   pending: "warning",
   verified: "success",
   rejected: "destructive",
+  accepted: "success",
+  unassigned: "muted",
   // games
   upcoming: "secondary",
   open: "secondary",
@@ -29,12 +31,31 @@ const TONES: Record<string, Tone> = {
   closed: "muted",
 };
 
-export function StatusBadge({ value, className }: { value: string | null | undefined; className?: string }) {
+export function StatusBadge({
+  value,
+  label,
+  className,
+}: {
+  value: string | null | undefined;
+  label?: string;
+  className?: string;
+}) {
   if (!value) return <span className="text-muted-foreground">—</span>;
   const tone = TONES[value.toLowerCase()] ?? "outline";
   return (
     <Badge variant={tone} className={className}>
-      {value.replace(/_/g, " ")}
+      {label ?? value.replace(/_/g, " ")}
     </Badge>
   );
+}
+
+/** Friendly labels for a game's `host_assignment_status`. */
+export function hostAssignmentLabel(status: string | null | undefined): string {
+  switch (status) {
+    case "pending": return "Pending host confirmation";
+    case "accepted": return "Accepted";
+    case "rejected": return "Rejected";
+    case "unassigned": return "Unassigned";
+    default: return status ?? "Unassigned";
+  }
 }

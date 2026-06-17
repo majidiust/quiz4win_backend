@@ -85,6 +85,20 @@ Host  → GET /host/invitations
       → POST /host/invitations/:id/reject
 ```
 
+### 4d. Admin Unassignment (admin removes the host)
+```
+Admin → HostPickerDialog (assignGameHost null) OR edit-game (updateGame host_id=null)
+      → games.host_id = NULL, host_name = NULL, host_assignment_status = 'unassigned'
+      → trg_close_stale_host_offers_on_assign fires (host_id NOT NULL → NULL):
+           that host's host_game_requests row  → status = 'cancelled'
+           that host's host_invitations row     → status = 'expired'
+      → game reappears in /host/games/available with NO stale "Approved" badge
+```
+The DB trigger is the single source of truth, so **every** unassign path (direct
+unassign, edit-form clear, or switch to a different host) resets the prior host's
+offer automatically. This also clears the `approved` request that
+`check_host_schedule_conflict` (INV-17) would otherwise keep counting.
+
 ---
 
 ## 5. `host_assignment_status` State Machine
@@ -180,3 +194,5 @@ otherwise  →  Read-only view
 | `host-app/src/app/(app)/games/actions.ts` | `acceptGameAction`, `rejectGameAction` |
 | `supabase/migrations/20260617000000_host_fee_commission_assignment.sql` | Fee columns, `host_assignment_status`, payout trigger |
 | `supabase/migrations/20260617010000_game_requires_host.sql` | `requires_host` column |
+| `supabase/migrations/20260609000300_host_platform_followup_fixes.sql` | `close_stale_host_offers_on_assign` trigger (assignment direction) |
+| `supabase/migrations/20260617020000_close_host_offers_on_unassign.sql` | Extends trigger to the unassign/replace direction (clears stale "Approved" badge) |

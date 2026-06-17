@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Gamepad2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { StatusBadge } from "@/components/status-badge";
+import { StatusBadge, hostAssignmentLabel } from "@/components/status-badge";
 import { DataTablePagination } from "@/components/data-table-pagination";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -26,7 +26,7 @@ export default async function GamesPage({ searchParams }: { searchParams: Promis
   let q = db
     .from("games")
     .select(
-      "id, title, mode, status, category, entry_fee, prize_pool, max_players, total_participants, viewer_count, scheduled_at, started_at, ended_at",
+      "id, title, mode, status, category, entry_fee, prize_pool, max_players, total_participants, viewer_count, scheduled_at, started_at, ended_at, host_id, host_name, host_assignment_status",
       { count: "exact" },
     )
     .order("scheduled_at", { ascending: false, nullsFirst: false })
@@ -65,6 +65,7 @@ export default async function GamesPage({ searchParams }: { searchParams: Promis
                   <TableHead>Title</TableHead>
                   <TableHead>Mode</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Host</TableHead>
                   <TableHead>Entry / Pool</TableHead>
                   <TableHead className="text-right">Players</TableHead>
                   <TableHead className="text-right">Viewers</TableHead>
@@ -82,6 +83,19 @@ export default async function GamesPage({ searchParams }: { searchParams: Promis
                     </TableCell>
                     <TableCell className="text-sm capitalize">{g.mode}</TableCell>
                     <TableCell><StatusBadge value={g.status} /></TableCell>
+                    <TableCell className="text-sm">
+                      {g.host_id ? (
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{g.host_name ?? "—"}</span>
+                          <StatusBadge
+                            value={g.host_assignment_status}
+                            label={hostAssignmentLabel(g.host_assignment_status)}
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">Unassigned</span>
+                      )}
+                    </TableCell>
                     <TableCell className="font-mono text-xs">
                       {formatMoneyDecimal(g.entry_fee)} <span className="text-muted-foreground">/</span>{" "}
                       <span className="text-success">{formatMoneyDecimal(g.prize_pool)}</span>
