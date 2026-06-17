@@ -29,8 +29,10 @@ async function audit(
 // Conditional UPDATE games SET host_id=... WHERE host_id IS NULL — returns
 // true iff this call won the assignment race.
 async function claimGameHost(db: DB, gameId: string, hostId: string): Promise<boolean> {
+  // Host already opted in by requesting → approval lands them directly in
+  // 'accepted' so they can start hosting without a redundant accept step.
   const { data } = await db.from("games")
-    .update({ host_id: hostId, updated_at: nowIso() })
+    .update({ host_id: hostId, host_assignment_status: "accepted", updated_at: nowIso() })
     .eq("id", gameId).is("host_id", null).select("id").maybeSingle();
   return Boolean(data);
 }
@@ -110,6 +112,8 @@ export async function assignGameHost(input: {
     const { error } = await db.from("games").update({
       host_id: hostId,
       host_name: (h as { name: string }).name,
+      // Direct admin assignment → host must accept/reject before going live.
+      host_assignment_status: "pending",
       updated_at: nowIso(),
     }).eq("id", gameId);
     if (error) return { ok: false, message: error.message };
@@ -120,7 +124,9 @@ export async function assignGameHost(input: {
       { game_id: gameId });
   } else {
     const { error } = await db.from("games").update({
-      host_id: null, updated_at: nowIso(),
+      host_id: null, host_name: null,
+      host_assignment_status: "unassigned",
+      updated_at: nowIso(),
     }).eq("id", gameId);
     if (error) return { ok: false, message: error.message };
     await audit(db, adm.id, "game_host_unassigned", "game", gameId, {});

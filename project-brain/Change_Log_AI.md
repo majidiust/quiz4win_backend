@@ -1,3 +1,7 @@
+[2026-06-17] [A-01] [FIX] **host assignment status consistency — request-approval lands accepted, direct-assign lands pending.** `admin/src/lib/actions/hosts.ts`: (1) `claimGameHost()` (used by `reviewHostRequest` approve) now sets `host_assignment_status='accepted'` — a host who *requested* a game and is approved goes straight to "Start hosting" (no redundant accept step). (2) `assignGameHost()` direct-assign now sets `host_assignment_status='pending'` (host must Accept/Reject) and clear/unassign sets `host_name=null` + `host_assignment_status='unassigned'`. The primary UI paths `createGame`/`updateGame` already set `pending` correctly. NOTE: games assigned **before** this feature were backfilled to `accepted` by `20260617000000` (by design) — to test the accept/reject flow on such a game, unassign then re-assign the host. Admin passes `tsc --noEmit`. Deploy: `docker compose up -d --build --force-recreate admin`.
+
+
+
 [2026-06-17] [A-01] [FIX] **host-app: missing host_id in API response — fixed assigned hosts seeing "Apply" form.** Updated SELECT statements in `supabase/functions/host/index.ts` for `/host/games/upcoming` and `/host/games/history` to include `host_id` and `host_assignment_status`. This allows `host-app/src/app/(app)/games/[id]/page.tsx` to correctly resolve `isAssigned = game.host_id === host.id`, which now properly renders the **Accept assignment / Reject assignment** card and suppresses the redundant application form for already-assigned hosts. Deploy: `docker compose up -d --build --force-recreate api`.
 
 
