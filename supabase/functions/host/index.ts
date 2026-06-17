@@ -198,7 +198,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: hostRow } = await db
         .from("show_hosts")
-        .select("id, application_status, status")
+        .select("id, application_status, status, avatar_url")
         .eq("auth_user_id", user.id)
         .maybeSingle();
 
@@ -223,12 +223,17 @@ Deno.serve(async (req: Request) => {
       const appStatus = hostRow.application_status as string;
       const hostStatus = hostRow.status as string;
       const isSuspended = hostStatus === "suspended";
+      const hasAvatar = !!(hostRow.avatar_url as string | null);
 
       let next: string;
-      if (!onboardingComplete) {
-        next = "/onboarding/intro-video";
-      } else if (appStatus === "approved" && !isSuspended) {
+      // Approved hosts always go straight to the dashboard regardless of avatar.
+      if (appStatus === "approved" && !isSuspended) {
         next = "/dashboard";
+      } else if (!hasAvatar) {
+        // Must set a profile photo before recording the intro video.
+        next = "/onboarding/avatar";
+      } else if (!onboardingComplete) {
+        next = "/onboarding/intro-video";
       } else {
         // pending, rejected, or suspended → show status / review screen
         next = "/onboarding/status";

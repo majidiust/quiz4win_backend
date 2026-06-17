@@ -52,6 +52,6 @@ export async function applyAction(formData: FormData) {
       : r.error;
     redirect(`/onboarding/apply?error=${encodeURIComponent(msg)}`);
   }
-  // Continue onboarding with the intro-video step before landing on the dashboard.
-  redirect("/onboarding/intro-video");
+  // Next mandatory onboarding step: profile photo.
+  redirect("/onboarding/avatar");
 }

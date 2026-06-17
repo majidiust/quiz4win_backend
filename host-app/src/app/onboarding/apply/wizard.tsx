@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
-import { Camera } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { COUNTRIES, COUNTRIES_BY_CODE, flagEmoji } from "@/lib/data/countries";
-import { applyAction, uploadAvatarTempAction } from "./actions";
+import { applyAction } from "./actions";
 import { cn } from "@/lib/utils";
 
 const LANGS = [
@@ -22,10 +21,9 @@ type State = {
   languages: string[]; short_bio: string; bio: string;
   instagram_url: string; telegram_url: string; youtube_url: string;
   tiktok_url: string; twitter_url: string; website_url: string;
-  avatarUrl: string;
 };
 
-const STEPS = ["Basics", "Languages", "About", "Socials", "Photo"] as const;
+const STEPS = ["Basics", "Languages", "About", "Socials", "Review"] as const;
 
 const countryOptions: ComboboxOption[] = COUNTRIES.map((c) => ({
   value: c.code, label: c.name, hint: c.dial, leading: flagEmoji(c.code),
@@ -43,7 +41,6 @@ export default function ApplyWizard({ initialError }: { initialError?: string })
     languages: [], short_bio: "", bio: "",
     instagram_url: "", telegram_url: "", youtube_url: "",
     tiktok_url: "", twitter_url: "", website_url: "",
-    avatarUrl: "",
   });
   const set = <K extends keyof State>(k: K, v: State[K]) => setS((prev) => ({ ...prev, [k]: v }));
 
@@ -112,7 +109,6 @@ export default function ApplyWizard({ initialError }: { initialError?: string })
         <input type="hidden" name="tiktok_url" value={s.tiktok_url} />
         <input type="hidden" name="twitter_url" value={s.twitter_url} />
         <input type="hidden" name="website_url" value={s.website_url} />
-        <input type="hidden" name="avatar_url" value={s.avatarUrl} />
 
         {step === 0 ? (
           <Card className="flex flex-col gap-3">
@@ -197,10 +193,7 @@ export default function ApplyWizard({ initialError }: { initialError?: string })
         ) : null}
 
         {step === 4 ? (
-          <>
-            <AvatarPicker value={s.avatarUrl} onChange={(url) => set("avatarUrl", url)} />
-            <ReviewCard s={s} phone={phoneComposed} />
-          </>
+          <ReviewCard s={s} phone={phoneComposed} />
         ) : null}
 
         <div className="mt-2 flex gap-3">
@@ -258,48 +251,4 @@ function ReviewCard({ s, phone }: { s: State; phone: string }) {
   );
 }
 
-function AvatarPicker({ value, onChange }: { value: string; onChange: (url: string) => void }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [pending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
 
-  function onFile(file: File) {
-    setError(null);
-    const fd = new FormData();
-    fd.set("file", file);
-    startTransition(async () => {
-      const r = await uploadAvatarTempAction(fd);
-      if (r.ok) onChange(r.url);
-      else setError(r.error);
-      if (inputRef.current) inputRef.current.value = "";
-    });
-  }
-
-  return (
-    <Card className="flex flex-col items-center gap-3 text-center">
-      <div className="text-xs font-medium text-[var(--color-q4w-muted)]">Profile picture</div>
-      <div className="relative h-28 w-28 overflow-hidden rounded-full border border-white/10 bg-white/5">
-        {value ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={value} alt="Your profile picture" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center">
-            <Camera className="h-8 w-8 text-[var(--color-q4w-muted)]" />
-          </div>
-        )}
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp,image/heic"
-        className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }}
-      />
-      <Button type="button" variant="secondary" onClick={() => inputRef.current?.click()} disabled={pending}>
-        {pending ? "Uploading…" : value ? "Change photo" : "Upload photo"}
-      </Button>
-      <p className="text-[11px] text-[var(--color-q4w-muted)]">JPG, PNG, WEBP or HEIC. Optional, but recommended.</p>
-      {error ? <p className="text-[11px] text-[var(--color-q4w-danger)]">{error}</p> : null}
-    </Card>
-  );
-}

@@ -34,9 +34,11 @@ interface Props {
   name: string;
   /** Server-side session token passed from the Server Component (httpOnly cookie inaccessible to browser). */
   uploadToken: string | null;
+  /** Optional callback invoked after a new avatar URL is successfully persisted. */
+  onChanged?: (url: string) => void;
 }
 
-export function AvatarPickerSection({ currentUrl, name, uploadToken }: Props) {
+export function AvatarPickerSection({ currentUrl, name, uploadToken, onChanged }: Props) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(currentUrl);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
@@ -80,6 +82,8 @@ export function AvatarPickerSection({ currentUrl, name, uploadToken }: Props) {
       if (!ok) {
         setError("Failed to update avatar — please try again.");
         setPreviewUrl(currentUrl);
+      } else {
+        onChanged?.(url);
       }
     });
   }
@@ -124,8 +128,10 @@ export function AvatarPickerSection({ currentUrl, name, uploadToken }: Props) {
           : "Upload failed — please try again";
         setError(msg);
         setPreviewUrl(currentUrl);
+      } else {
+        // On success: blobUrl stays as preview — it matches the uploaded image.
+        onChanged?.(blobUrl);
       }
-      // On success: blobUrl stays as preview — it matches the uploaded image.
     });
   }
 

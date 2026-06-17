@@ -10,6 +10,7 @@ interface Host {
   name: string;
   application_status: string;
   status: string;
+  avatar_url?: string | null;
   rejection_notes?: string | null;
 }
 
@@ -41,10 +42,11 @@ export default async function StatusPage() {
   }
 
   // Anything not yet approved (pending or unknown) must FINISH onboarding before
-  // we show the "under review" screen. A host who applied but never recorded
-  // their intro video is sent back to complete it — on every login.
-  if (!isSuspended && !me.data.onboarding_complete) {
-    redirect("/onboarding/intro-video");
+  // we show the "under review" screen. Enforce the full gate order:
+  //   1. Avatar set → 2. Intro video recorded.
+  if (!isSuspended) {
+    if (!host.avatar_url) redirect("/onboarding/avatar");
+    if (!me.data.onboarding_complete) redirect("/onboarding/intro-video");
   }
 
   return (
