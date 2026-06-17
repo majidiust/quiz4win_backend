@@ -72,6 +72,12 @@ export interface EditableTemplate {
   glow_color?: string | null;
   gradient_colors?: string[] | null;
   sponsor?: string | null;
+  // Host compensation
+  host_fee?: number | string | null;
+  host_commission_pct?: number | string | null;
+  show_host_fee?: boolean | null;
+  show_host_commission?: boolean | null;
+  requires_host?: boolean | null;
 }
 
 export function EditTemplateForm({ templateId, template }: { templateId: string; template: EditableTemplate }) {
@@ -115,6 +121,12 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
   const [gradientColors, setGradientColors] = useState<string[]>(template.gradient_colors ?? []);
   const [gradientInput, setGradientInput] = useState("#6366f1");
   const [sponsor, setSponsor] = useState(template.sponsor ?? "");
+  // Host compensation
+  const [hostFee, setHostFee] = useState(String(template.host_fee ?? "0"));
+  const [hostCommissionPct, setHostCommissionPct] = useState(String(template.host_commission_pct ?? "0"));
+  const [showHostFee, setShowHostFee] = useState<boolean>(template.show_host_fee ?? true);
+  const [showHostCommission, setShowHostCommission] = useState<boolean>(template.show_host_commission ?? true);
+  const [requiresHost, setRequiresHost] = useState<boolean>(template.requires_host ?? true);
 
   function addGradient() {
     if (gradientInput && !gradientColors.includes(gradientInput)) {
@@ -161,6 +173,11 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
         glow_color: glowColor || undefined,
         gradient_colors: gradientColors.length ? gradientColors : undefined,
         sponsor: sponsor.trim() || undefined,
+        host_fee: parseFloat(hostFee) || 0,
+        host_commission_pct: parseFloat(hostCommissionPct) || 0,
+        show_host_fee: showHostFee,
+        show_host_commission: showHostCommission,
+        requires_host: requiresHost,
       });
       if (res.ok) {
         toast.success(res.message);
@@ -273,6 +290,36 @@ export function EditTemplateForm({ templateId, template }: { templateId: string;
                   <p className="text-xs text-muted-foreground">Show games generated from this template in the hero / featured carousel on the home screen.</p>
                 </div>
                 <Switch id="et-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
+              </div>
+              {/* Host compensation */}
+              <div className="space-y-1.5">
+                <Label htmlFor="et-host-fee">Host fee ($)</Label>
+                <Input id="et-host-fee" type="number" min="0" step="0.01" value={hostFee} onChange={(e) => setHostFee(e.target.value)} placeholder="0.00" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="et-commission">Commission (%)</Label>
+                <Input id="et-commission" type="number" min="0" max="100" step="0.01" value={hostCommissionPct} onChange={(e) => setHostCommissionPct(e.target.value)} placeholder="0" />
+              </div>
+              <div className="md:col-span-2 lg:col-span-4 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="et-show-fee" className="cursor-pointer">Show fee to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the host fee in the host-app.</p>
+                </div>
+                <Switch id="et-show-fee" checked={showHostFee} onCheckedChange={setShowHostFee} />
+              </div>
+              <div className="md:col-span-2 lg:col-span-4 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="et-show-commission" className="cursor-pointer">Show commission to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the commission % in the host-app.</p>
+                </div>
+                <Switch id="et-show-commission" checked={showHostCommission} onCheckedChange={setShowHostCommission} />
+              </div>
+              <div className="md:col-span-2 lg:col-span-4 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="et-requires-host" className="cursor-pointer">Requires a host</Label>
+                  <p className="text-xs text-muted-foreground">When off, generated games are hidden from the host-app available list.</p>
+                </div>
+                <Switch id="et-requires-host" checked={requiresHost} onCheckedChange={setRequiresHost} />
               </div>
             </CardContent>
           </Card>

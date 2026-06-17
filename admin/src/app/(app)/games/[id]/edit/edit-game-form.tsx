@@ -45,6 +45,12 @@ export interface EditableGame {
   host_name?: string | null;
   host_title?: string | null;
   rules?: string[] | null;
+  // Host compensation
+  host_fee?: number | string | null;
+  host_commission_pct?: number | string | null;
+  show_host_fee?: boolean | null;
+  show_host_commission?: boolean | null;
+  requires_host?: boolean | null;
 }
 
 // DB ISO timestamp → <input type="datetime-local"> value.
@@ -95,6 +101,12 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
     game.host_id ? { id: game.host_id, name: game.host_name ?? "Selected host" } : null,
   );
   const [rulesText, setRulesText] = useState((game.rules ?? []).join("\n"));
+  // Host compensation
+  const [hostFee, setHostFee] = useState(String(game.host_fee ?? "0"));
+  const [hostCommissionPct, setHostCommissionPct] = useState(String(game.host_commission_pct ?? "0"));
+  const [showHostFee, setShowHostFee] = useState<boolean>(game.show_host_fee ?? true);
+  const [showHostCommission, setShowHostCommission] = useState<boolean>(game.show_host_commission ?? true);
+  const [requiresHost, setRequiresHost] = useState<boolean>(game.requires_host ?? true);
 
   function addGradient() {
     if (gradientInput && !gradientColors.includes(gradientInput)) {
@@ -134,6 +146,11 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
         host_name: (hostName.trim() || assignedHost?.name) || undefined,
         host_title: hostTitle.trim() || undefined,
         rules: rules.length ? rules : undefined,
+        host_fee: parseFloat(hostFee) || 0,
+        host_commission_pct: parseFloat(hostCommissionPct) || 0,
+        show_host_fee: showHostFee,
+        show_host_commission: showHostCommission,
+        requires_host: requiresHost,
       });
       if (res.ok) {
         toast.success(res.message);
@@ -358,6 +375,42 @@ export function EditGameForm({ gameId, game }: { gameId: string; game: EditableG
             <p className="sm:col-span-2 text-xs text-muted-foreground">
               Icon, thumbnail, and host avatar are uploaded on the game detail page.
             </p>
+          </CardContent>
+        </Card>
+
+        {/* ---- Host compensation ---- */}
+        <Card>
+          <CardHeader><CardTitle className="text-base">Host compensation</CardTitle></CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="eg-host-fee">Host fee ($)</Label>
+              <Input id="eg-host-fee" type="number" min="0" step="0.01" value={hostFee} onChange={(e) => setHostFee(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="eg-commission">Commission (%)</Label>
+              <Input id="eg-commission" type="number" min="0" max="100" step="0.01" value={hostCommissionPct} onChange={(e) => setHostCommissionPct(e.target.value)} placeholder="0" />
+            </div>
+            <div className="flex items-center justify-between rounded-md border border-input px-3 py-2">
+              <div className="space-y-0.5">
+                <Label htmlFor="eg-show-fee" className="cursor-pointer">Show fee to host</Label>
+                <p className="text-xs text-muted-foreground">Display the host fee in the host-app.</p>
+              </div>
+              <Switch id="eg-show-fee" checked={showHostFee} onCheckedChange={setShowHostFee} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border border-input px-3 py-2">
+              <div className="space-y-0.5">
+                <Label htmlFor="eg-show-commission" className="cursor-pointer">Show commission to host</Label>
+                <p className="text-xs text-muted-foreground">Display the commission % in the host-app.</p>
+              </div>
+              <Switch id="eg-show-commission" checked={showHostCommission} onCheckedChange={setShowHostCommission} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border border-input px-3 py-2 sm:col-span-2">
+              <div className="space-y-0.5">
+                <Label htmlFor="eg-requires-host" className="cursor-pointer">Requires a host</Label>
+                <p className="text-xs text-muted-foreground">When off, this game is hidden from the host-app available list.</p>
+              </div>
+              <Switch id="eg-requires-host" checked={requiresHost} onCheckedChange={setRequiresHost} />
+            </div>
           </CardContent>
         </Card>
       </div>

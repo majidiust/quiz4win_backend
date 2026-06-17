@@ -38,6 +38,8 @@ import { validateJWT } from "../_shared/auth.ts";
 import { getAdminClient } from "../_shared/supabase.ts";
 import { uploadObject } from "../_shared/s3.ts";
 import { signAccessToken } from "../_shared/livekit.ts";
+import { sendEmail } from "../_shared/email.ts";
+import { notifyHost } from "../_shared/host_notifications.ts";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 const ALLOWED_FILE_MIME = new Set([
@@ -130,6 +132,20 @@ type Host = Record<string, unknown> & { id: string; application_status: string; 
 // deno-lint-ignore no-explicit-any
 type DB = any;
 
+/**
+ * Strips host_fee / host_commission_pct from a game object when the
+ * corresponding show_* flag is false, then removes the control flags.
+ * This lets the admin hide compensation info from the host-app.
+ */
+function maskFeeFields(g: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...g };
+  if (!out.show_host_fee) out.host_fee = null;
+  if (!out.show_host_commission) out.host_commission_pct = null;
+  delete out.show_host_fee;
+  delete out.show_host_commission;
+  return out;
+}
+
 async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): Promise<Response> {
   const method = req.method;
   // ── GET/PATCH /host/me ─────────────────────────────────────────────────────
@@ -198,27 +214,30 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
   // ── /host/games/available, /upcoming, /history, /requests ─────────────────
   if (parts[0] === "games" && parts[1] === "available" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("games")
-      .select("id, title, mode, category, language, scheduled_at, prize_pool, time_per_question, questions_count, livekit_room_name, status")
-      .is("host_id", null).eq("mode", "live").eq("status", "upcoming")
+      .select("id, title, mode, category, language, scheduled_at, prize_pool, time_per_question, questions_count, livekit_room_name, status, host_fee, host_commission_pct, show_host_fee, show_host_commission")
+      .is("host_id", null).eq("mode", "live").eq("status", "upcoming").eq("requires_host", true)
       .order("scheduled_at", { ascending: true }).limit(100);
     if (error) return errorResponse("failed_to_list_games", 500);
-    return successResponse({ games: data ?? [] });
+    const games = (data ?? []).map(maskFeeFields);
+    return successResponse({ games });
   }
   if (parts[0] === "games" && parts[1] === "upcoming" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("games")
-      .select("id, title, mode, category, language, scheduled_at, prize_pool, status, livekit_room_name")
+      .select("id, title, mode, category, language, scheduled_at, prize_pool, status, livekit_room_name, host_assignment_status, host_fee, host_commission_pct, show_host_fee, show_host_commission")
       .eq("host_id", host.id).in("status", ["upcoming", "open", "live"])
       .order("scheduled_at", { ascending: true });
     if (error) return errorResponse("failed_to_list_games", 500);
-    return successResponse({ games: data ?? [] });
+    const games = (data ?? []).map(maskFeeFields);
+    return successResponse({ games });
   }
   if (parts[0] === "games" && parts[1] === "history" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("games")
-      .select("id, title, mode, category, language, scheduled_at, ended_at, prize_pool, total_participants, total_winners, status")
+      .select("id, title, mode, category, language, scheduled_at, ended_at, prize_pool, total_participants, total_winners, status, host_fee, host_commission_pct, show_host_fee, show_host_commission")
       .eq("host_id", host.id).in("status", ["completed", "cancelled", "ended"])
       .order("ended_at", { ascending: false }).limit(100);
     if (error) return errorResponse("failed_to_list_games", 500);
-    return successResponse({ games: data ?? [] });
+    const games = (data ?? []).map(maskFeeFields);
+    return successResponse({ games });
   }
   if (parts[0] === "games" && parts[1] === "requests" && parts.length === 2 && method === "GET") {
     const { data, error } = await db.from("host_game_requests")
@@ -253,6 +272,82 @@ async function dispatchHost(req: Request, parts: string[], host: Host, db: DB): 
     return successResponse({ request: data }, 201);
   }
 
+  // ── POST /host/games/:id/accept — accept a directly-assigned game ──────────
+  if (parts[0] === "games" && parts[2] === "accept" && parts.length === 3 && method === "POST") {
+    if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
+    const gameId = parts[1];
+    const { data: g } = await db.from("games")
+      .select("id, title, host_id, host_assignment_status, status, scheduled_at")
+      .eq("id", gameId).maybeSingle();
+    if (!g) return errorResponse("game_not_found", 404);
+    if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
+    if (g.host_assignment_status !== "pending") return errorResponse("assignment_not_pending", 409);
+    if (!["upcoming", "open"].includes(g.status)) return errorResponse("game_not_accepting", 409);
+
+    const { error } = await db.from("games")
+      .update({ host_assignment_status: "accepted", updated_at: nowIso() })
+      .eq("id", gameId).eq("host_id", host.id);
+    if (error) return errorResponse(sanitizeError(error), 500);
+
+    // Notify admin via email (best-effort).
+    const adminEmail = Deno.env.get("ADMIN_EMAIL") ?? Deno.env.get("EMAIL_FROM") ?? "";
+    if (adminEmail) {
+      const hostName = String(host.name ?? host.id);
+      sendEmail({
+        to: { email: adminEmail, name: "Quiz4Win Admin" },
+        subject: `Host accepted game assignment: ${g.title}`,
+        html: `<p>Host <strong>${hostName}</strong> has <strong>accepted</strong> the assignment for game <em>${g.title}</em>.</p>`,
+        text: `Host ${hostName} has accepted the assignment for game "${g.title}".`,
+      }).catch((e: Error) => console.warn("[host/accept] admin email failed:", e.message));
+    }
+    // In-app notification to host confirming acceptance.
+    notifyHost(db, {
+      hostId: host.id,
+      type: "host_invite",
+      title: "Assignment accepted",
+      body: `You have accepted the hosting assignment for "${g.title}". See you on stage!`,
+      data: { game_id: gameId, action: "accepted" },
+    });
+    return successResponse({ ok: true, status: "accepted" });
+  }
+
+  // ── POST /host/games/:id/reject — reject a directly-assigned game ──────────
+  if (parts[0] === "games" && parts[2] === "reject" && parts.length === 3 && method === "POST") {
+    if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
+    const gameId = parts[1];
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const note = typeof body.note === "string" ? body.note.slice(0, 500) : null;
+    const { data: g } = await db.from("games")
+      .select("id, title, host_id, host_assignment_status, status")
+      .eq("id", gameId).maybeSingle();
+    if (!g) return errorResponse("game_not_found", 404);
+    if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
+    if (g.host_assignment_status !== "pending") return errorResponse("assignment_not_pending", 409);
+
+    // Return game to unassigned pool.
+    const { error } = await db.from("games")
+      .update({
+        host_id: null, host_name: null,
+        host_assignment_status: "unassigned",
+        updated_at: nowIso(),
+      })
+      .eq("id", gameId).eq("host_id", host.id);
+    if (error) return errorResponse(sanitizeError(error), 500);
+
+    // Notify admin via email (best-effort).
+    const adminEmail = Deno.env.get("ADMIN_EMAIL") ?? Deno.env.get("EMAIL_FROM") ?? "";
+    if (adminEmail) {
+      const hostName = String(host.name ?? host.id);
+      sendEmail({
+        to: { email: adminEmail, name: "Quiz4Win Admin" },
+        subject: `Host rejected game assignment: ${g.title}`,
+        html: `<p>Host <strong>${hostName}</strong> has <strong>rejected</strong> the assignment for game <em>${g.title}</em>${note ? ` — <em>${note}</em>` : ""}. The game is now back in the unassigned pool.</p>`,
+        text: `Host ${hostName} has rejected the assignment for game "${g.title}"${note ? ` — ${note}` : ""}. Game returned to pool.`,
+      }).catch((e: Error) => console.warn("[host/reject] admin email failed:", e.message));
+    }
+    return successResponse({ ok: true, status: "rejected" });
+  }
+
   return await dispatchHostExtra(req, parts, host, db);
 }
 
@@ -285,7 +380,7 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
       // Conditional claim: only succeeds when no other host got there first.
       // The trg_close_stale_host_offers_on_assign trigger cleans up the rest.
       const { data: claimed } = await db.from("games")
-        .update({ host_id: host.id, updated_at: nowIso() })
+        .update({ host_id: host.id, host_assignment_status: "accepted", updated_at: nowIso() })
         .eq("id", inv.game_id).is("host_id", null).select("id").maybeSingle();
       if (!claimed) return errorResponse("game_already_has_host", 409);
       const { error: e1 } = await db.from("host_invitations").update({ status: "accepted", responded_at: nowIso(), updated_at: nowIso() }).eq("id", parts[1]);
@@ -302,9 +397,11 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
   // ── /host/games/:id/stream-session ─────────────────────────────────────────
   if (parts[0] === "games" && parts[2] === "stream-session" && (parts.length === 3 || parts.length === 4)) {
     const gameId = parts[1];
-    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title").eq("id", gameId).maybeSingle();
+    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title, host_assignment_status").eq("id", gameId).maybeSingle();
     if (!g) return errorResponse("game_not_found", 404);
     if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
+    // Host must have accepted the assignment before going live.
+    if (g.host_assignment_status === "pending") return errorResponse("assignment_not_accepted", 403);
 
     if (parts.length === 3 && method === "GET") {
       const { data } = await db.from("host_stream_sessions").select("*").eq("host_id", host.id).eq("game_id", gameId).maybeSingle();

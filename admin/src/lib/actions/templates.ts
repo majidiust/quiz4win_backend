@@ -49,6 +49,13 @@ const TemplateSchema = z.object({
   // Host
   host_name: z.string().trim().max(200).optional(),
   host_title: z.string().trim().max(200).optional(),
+  // Host compensation
+  host_fee: z.number().min(0).default(0),
+  host_commission_pct: z.number().min(0).max(100).default(0),
+  show_host_fee: z.boolean().default(true),
+  show_host_commission: z.boolean().default(true),
+  // Whether generated games need a human host (gates host-app availability).
+  requires_host: z.boolean().default(true),
   // Streaming
   enable_streaming: z.boolean().default(true),
   // AI presenter

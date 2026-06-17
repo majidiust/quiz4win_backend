@@ -30,3 +30,28 @@ export async function cancelRequestAction(formData: FormData) {
     redirect(`/games?tab=requests&error=${encodeURIComponent(r.error)}`);
   }
 }
+
+export async function acceptGameAction(formData: FormData) {
+  const gameId = String(formData.get("game_id") ?? "");
+  if (!gameId) redirect(`/games?error=${encodeURIComponent("Game required")}`);
+  const r = await api(`/host/games/${gameId}/accept`, { method: "POST", body: {} });
+  revalidatePath("/games", "layout");
+  if (!r.ok) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent(r.error)}`);
+  }
+  redirect(`/games/${gameId}?info=${encodeURIComponent("Assignment accepted")}`);
+}
+
+export async function rejectGameAction(formData: FormData) {
+  const gameId = String(formData.get("game_id") ?? "");
+  const note = String(formData.get("note") ?? "");
+  if (!gameId) redirect(`/games?error=${encodeURIComponent("Game required")}`);
+  const r = await api(`/host/games/${gameId}/reject`, {
+    method: "POST", body: { note: note || null },
+  });
+  revalidatePath("/games", "layout");
+  if (!r.ok) {
+    redirect(`/games/${gameId}?error=${encodeURIComponent(r.error)}`);
+  }
+  redirect(`/games?info=${encodeURIComponent("Assignment rejected")}`);
+}

@@ -6,7 +6,7 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/utils";
-import { requestGameAction, cancelRequestAction } from "../actions";
+import { requestGameAction, cancelRequestAction, acceptGameAction, rejectGameAction } from "../actions";
 
 export const metadata = { title: "Game — Quiz4Win Host" };
 
@@ -14,9 +14,12 @@ interface Game {
   id: string; title: string; description?: string | null; mode?: string;
   category?: string | null; language?: string | null; scheduled_at: string | null;
   ended_at?: string | null; status: string; livekit_room_name?: string | null;
-  prize_pool?: number | string | null; host_payout?: number | string | null;
+  prize_pool?: number | string | null;
   host_id?: string | null; time_per_question?: number | null;
   questions_count?: number | null;
+  host_assignment_status?: string | null;
+  host_fee?: number | string | null;
+  host_commission_pct?: number | string | null;
 }
 
 export default async function GameDetailPage({
@@ -53,6 +56,12 @@ export default async function GameDetailPage({
   const isAssigned = !!host && game?.host_id === host.id;
   const isAvailable = !game?.host_id && game?.status === "upcoming";
   const canRequest = host?.application_status === "approved" && isAvailable && !pendingRequest;
+  // Direct assignment awaiting the host's accept/reject decision.
+  const pendingAssignment = isAssigned && game?.host_assignment_status === "pending";
+  const acceptedAssignment = isAssigned && game?.host_assignment_status === "accepted";
+  // maskFeeFields nulls these out when the admin disabled visibility.
+  const showFee = game?.host_fee != null;
+  const showCommission = game?.host_commission_pct != null;
 
   return (
     <>
@@ -88,11 +97,35 @@ export default async function GameDetailPage({
               <Info label="Questions" value={String(game.questions_count ?? "—")} />
               <Info label="Per question" value={game.time_per_question ? `${game.time_per_question}s` : "—"} />
               <Info label="Prize pool" value={game.prize_pool != null ? Number(game.prize_pool).toFixed(2) : "—"} />
-              <Info label="Host payout" value={game.host_payout != null ? Number(game.host_payout).toFixed(2) : "—"} />
+              {showFee ? <Info label="Host fee" value={`$${Number(game.host_fee).toFixed(2)}`} /> : null}
+              {showCommission ? <Info label="Commission" value={`${Number(game.host_commission_pct)}%`} /> : null}
             </div>
+            {(showFee || showCommission) ? (
+              <p className="mt-3 text-[10px] text-[var(--color-q4w-muted)]">
+                Commission is calculated on the total income we collect for this show and is credited to your wallet once the show settles.
+              </p>
+            ) : null}
           </Card>
 
-          {isAssigned && ["upcoming", "open", "live"].includes(game.status) ? (
+          {pendingAssignment ? (
+            <Card className="mb-3 border border-[var(--color-q4w-primary)]/40 bg-[var(--color-q4w-primary)]/5">
+              <CardTitle className="mb-1">You&apos;ve been assigned to host this show</CardTitle>
+              <CardSubtitle className="mb-3">
+                Please review the details above and confirm whether you can host. Rejecting returns the show to the pool.
+              </CardSubtitle>
+              <form action={acceptGameAction} className="mb-3">
+                <input type="hidden" name="game_id" value={id} />
+                <Button type="submit">Accept assignment</Button>
+              </form>
+              <form action={rejectGameAction} className="flex flex-col gap-2">
+                <input type="hidden" name="game_id" value={id} />
+                <Textarea name="note" placeholder="Reason for rejecting (optional)" maxLength={500} />
+                <Button type="submit" variant="secondary">Reject assignment</Button>
+              </form>
+            </Card>
+          ) : null}
+
+          {acceptedAssignment && ["upcoming", "open", "live"].includes(game.status) ? (
             <Link href={`/games/${id}/stream`} className="block">
               <Card className="border border-[var(--color-q4w-primary)]/40 bg-[var(--color-q4w-primary)]/5">
                 <CardHeader>

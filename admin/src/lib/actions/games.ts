@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { uploadObject } from "@/lib/s3";
 import { SUPPORTED_CURRENCIES } from "@/lib/games-constants";
+import { sendEmail } from "@/lib/admin-auth/email";
 
 export interface ActionResult {
   ok: boolean;
@@ -130,7 +131,67 @@ const GameSchema = z.object({
   host_name: z.string().trim().max(200).optional(),
   host_title: z.string().trim().max(200).optional(),
   rules: z.array(z.string().trim().max(500)).optional(),
+  // Host compensation
+  host_fee: z.number().min(0).optional(),
+  host_commission_pct: z.number().min(0).max(100).optional(),
+  show_host_fee: z.boolean().optional(),
+  show_host_commission: z.boolean().optional(),
+  // Whether this game needs a human host (gates host-app availability).
+  requires_host: z.boolean().optional(),
 });
+
+// ── Host assignment notification helper ────────────────────────────────────
+// Sends in-app + email to the host when an admin assigns them to a game.
+// Best-effort: failures are logged but never thrown.
+async function notifyHostAssigned(
+  db: ReturnType<typeof createSupabaseAdminClient>,
+  hostId: string,
+  gameTitle: string,
+  gameId: string,
+): Promise<void> {
+  try {
+    const { data: h } = await db.from("show_hosts")
+      .select("auth_user_id, name").eq("id", hostId).maybeSingle();
+    const authUserId = (h as { auth_user_id?: string | null } | null)?.auth_user_id ?? null;
+    if (authUserId) {
+      // In-app notification
+      await db.from("notifications").insert({
+        user_id: authUserId,
+        type: "host_invite",
+        title: "New show assignment",
+        body: `You have been assigned to host "${gameTitle}". Please accept or reject from your Games page.`,
+        data: { game_id: gameId, action: "assigned" },
+        read: false,
+        sent_via_push: false,
+        created_at: new Date().toISOString(),
+      });
+      // Email
+      const { data: profile } = await db.from("profiles")
+        .select("email, full_name").eq("id", authUserId).maybeSingle();
+      const email = (profile as { email?: string } | null)?.email;
+      if (email) {
+        const name = (profile as { full_name?: string } | null)?.full_name ?? h?.name ?? "Host";
+        const hostUrl = process.env.HOST_APP_URL ?? "https://host.quiz4win.com";
+        await sendEmail({
+          to: email,
+          subject: `You have been assigned to host: ${gameTitle}`,
+          html: `<div style="font-family:Arial,sans-serif;background:#F4F5FB;padding:32px 12px">
+<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;padding:32px">
+<p style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#64748B;font-weight:600">Quiz4Win</p>
+<h2 style="margin:0 0 20px;color:#0F172A">New Show Assignment</h2>
+<p style="margin:0 0 12px">Hi ${name},</p>
+<p style="margin:0 0 12px">You have been assigned to host <strong>${gameTitle}</strong>. Please log in to the host portal and <strong>accept or reject</strong> this assignment at your earliest convenience.</p>
+<a href="${hostUrl}/games" style="display:inline-block;margin:16px 0;padding:12px 24px;background:#5B6BF5;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">View My Games</a>
+<p style="margin:24px 0 0;font-size:12px;color:#94A3B8">— The Quiz4Win Team</p>
+</div></div>`,
+          text: `Hi ${name},\n\nYou have been assigned to host "${gameTitle}". Please visit ${hostUrl}/games to accept or reject.\n\n— The Quiz4Win Team`,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[notifyHostAssigned] failed:", (e as Error).message);
+  }
+}
 
 // Validates that the requested host_id is approved/active and has no
 // schedule conflict with the proposed game window. Returns the host name
@@ -179,11 +240,12 @@ export async function createGame(input: z.infer<typeof GameSchema>): Promise<Act
 
   const { data, error } = await db
     .from("games")
-    .insert({ ...rest, host_id: null, status: "upcoming", created_at: new Date().toISOString() })
-    .select("id")
+    .insert({ ...rest, host_id: null, host_assignment_status: "unassigned", status: "upcoming", created_at: new Date().toISOString() })
+    .select("id, title")
     .single();
   if (error) return { ok: false, message: error.message };
   const newId = data.id as string;
+  const gameTitle = (data as { title?: string }).title ?? "";
 
   // Now claim the host_id atomically with the conflict check.
   if (host_id) {
@@ -191,8 +253,11 @@ export async function createGame(input: z.infer<typeof GameSchema>): Promise<Act
     if (!post.ok) {
       return { ok: true, message: `Game created without host — ${post.message}`, id: newId };
     }
-    await db.from("games").update({ host_id, updated_at: new Date().toISOString() })
+    await db.from("games")
+      .update({ host_id, host_assignment_status: "pending", updated_at: new Date().toISOString() })
       .eq("id", newId).is("host_id", null);
+    // Notify host (best-effort, non-blocking).
+    notifyHostAssigned(db, host_id, gameTitle, newId).catch(() => {});
   }
 
   await db.from("admin_audit_log").insert({
@@ -207,24 +272,33 @@ export async function updateGame(gameId: string, input: Partial<z.infer<typeof G
   await requireAdmin(["super_admin", "admin"]);
   const db = createSupabaseAdminClient();
 
-  const { data: g } = await db.from("games").select("status, host_id").eq("id", gameId).maybeSingle();
+  const { data: g } = await db.from("games").select("status, host_id, title").eq("id", gameId).maybeSingle();
   if (!g) return { ok: false, message: "Game not found" };
   if (!["upcoming", "open"].includes(g.status)) return { ok: false, message: "Cannot edit a started or ended game" };
 
   // host_id transitions need extra validation (INV-17 + host approved check).
   const patch: Record<string, unknown> = { ...input };
+  let newlyAssignedHostId: string | null = null;
   if (Object.prototype.hasOwnProperty.call(input, "host_id")) {
     const next = input.host_id ?? null;
-    if (next !== (g.host_id ?? null)) {
+    const prev = (g.host_id as string | null) ?? null;
+    if (next !== prev) {
       const r = await resolveHostAssignment(db, next, gameId);
       if (!r.ok) return { ok: false, message: r.message };
       if (next && !input.host_name) patch.host_name = r.name ?? undefined;
-      if (!next) patch.host_name = null;
+      if (!next) { patch.host_name = null; patch.host_assignment_status = "unassigned"; }
+      else { patch.host_assignment_status = "pending"; newlyAssignedHostId = next; }
     }
   }
   patch.updated_at = new Date().toISOString();
   const { error } = await db.from("games").update(patch).eq("id", gameId);
   if (error) return { ok: false, message: error.message };
+
+  // Notify newly assigned host (best-effort).
+  if (newlyAssignedHostId) {
+    const title = (g as { title?: string }).title ?? gameId;
+    notifyHostAssigned(db, newlyAssignedHostId, title, gameId).catch(() => {});
+  }
 
   revalidatePath(`/games/${gameId}`);
   revalidatePath("/games");

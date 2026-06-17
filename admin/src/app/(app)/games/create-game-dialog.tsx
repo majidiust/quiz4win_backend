@@ -55,6 +55,12 @@ export function CreateGameDialog() {
   const [hostName, setHostName] = useState("");
   const [hostTitle, setHostTitle] = useState("");
   const [assignedHost, setAssignedHost] = useState<SelectedHost | null>(null);
+  // Host compensation
+  const [hostFee, setHostFee] = useState("0");
+  const [hostCommissionPct, setHostCommissionPct] = useState("0");
+  const [showHostFee, setShowHostFee] = useState(true);
+  const [showHostCommission, setShowHostCommission] = useState(true);
+  const [requiresHost, setRequiresHost] = useState(true);
 
   function reset() {
     setTitle(""); setMode("timed"); setCategory(""); setDifficulty("Medium");
@@ -63,6 +69,8 @@ export function CreateGameDialog() {
     setMaxPlayers(""); setTimePerQuestion("15"); setAllowedWrong(""); setScheduledAt(""); setDescription("");
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1");
     setSponsor(""); setTagsInput(""); setHostName(""); setHostTitle(""); setAssignedHost(null);
+    setHostFee("0"); setHostCommissionPct("0"); setShowHostFee(true); setShowHostCommission(true);
+    setRequiresHost(true);
   }
 
   function addGradientColor() {
@@ -99,6 +107,11 @@ export function CreateGameDialog() {
         host_id: assignedHost?.id ?? null,
         host_name: (hostName.trim() || assignedHost?.name) || undefined,
         host_title: hostTitle.trim() || undefined,
+        host_fee: parseFloat(hostFee) || 0,
+        host_commission_pct: parseFloat(hostCommissionPct) || 0,
+        show_host_fee: showHostFee,
+        show_host_commission: showHostCommission,
+        requires_host: requiresHost,
       });
       if (res.ok) {
         toast.success(res.message);
@@ -286,6 +299,36 @@ export function CreateGameDialog() {
               <div className="space-y-1.5">
                 <Label htmlFor="cg-host-title">Host title</Label>
                 <Input id="cg-host-title" value={hostTitle} onChange={(e) => setHostTitle(e.target.value)} placeholder="e.g. Live Host" />
+              </div>
+              {/* Host compensation */}
+              <div className="space-y-1.5">
+                <Label htmlFor="cg-host-fee">Host fee ($)</Label>
+                <Input id="cg-host-fee" type="number" min="0" step="0.01" value={hostFee} onChange={(e) => setHostFee(e.target.value)} placeholder="0.00" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="cg-commission">Commission (%)</Label>
+                <Input id="cg-commission" type="number" min="0" max="100" step="0.01" value={hostCommissionPct} onChange={(e) => setHostCommissionPct(e.target.value)} placeholder="0" />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="cg-show-fee" className="cursor-pointer">Show fee to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the host fee in the host-app.</p>
+                </div>
+                <Switch id="cg-show-fee" checked={showHostFee} onCheckedChange={setShowHostFee} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="cg-show-commission" className="cursor-pointer">Show commission to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the commission % in the host-app.</p>
+                </div>
+                <Switch id="cg-show-commission" checked={showHostCommission} onCheckedChange={setShowHostCommission} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="cg-requires-host" className="cursor-pointer">Requires a host</Label>
+                  <p className="text-xs text-muted-foreground">When off, this game is hidden from the host-app available list.</p>
+                </div>
+                <Switch id="cg-requires-host" checked={requiresHost} onCheckedChange={setRequiresHost} />
               </div>
               <p className="col-span-2 text-xs text-muted-foreground">
                 Host avatar and game images (icon, thumbnail) can be uploaded from the game detail page after creation.

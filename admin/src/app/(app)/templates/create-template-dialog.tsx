@@ -83,6 +83,12 @@ export function CreateTemplateDialog() {
   const [aiSoundId, setAiSoundId] = useState("");
   const [aiDuration, setAiDuration] = useState("300");
   const [aiLanguage, setAiLanguage] = useState<string>("");
+  // Host compensation
+  const [hostFee, setHostFee] = useState("0");
+  const [hostCommissionPct, setHostCommissionPct] = useState("0");
+  const [showHostFee, setShowHostFee] = useState(true);
+  const [showHostCommission, setShowHostCommission] = useState(true);
+  const [requiresHost, setRequiresHost] = useState(true);
 
   function reset() {
     setName(""); setDescription("");
@@ -94,6 +100,8 @@ export function CreateTemplateDialog() {
     setAccentColor("#6366f1"); setGlowColor("#818cf8"); setGradientColors([]); setGradientInput("#6366f1"); setSponsor("");
     setIsFeatured(false);
     setAiEnabled(false); setAiAvatarId(""); setAiSoundId(""); setAiDuration("300"); setAiLanguage("");
+    setHostFee("0"); setHostCommissionPct("0"); setShowHostFee(true); setShowHostCommission(true);
+    setRequiresHost(true);
   }
 
   function addGradientColor() {
@@ -144,6 +152,11 @@ export function CreateTemplateDialog() {
         ai_sound_id: aiEnabled ? aiSoundId.trim() : undefined,
         ai_duration: aiEnabled ? (parseInt(aiDuration, 10) || undefined) : undefined,
         ai_language: aiEnabled ? ((aiLanguage || language) as "en" | "ar" | "fa" | "tr") : undefined,
+        host_fee: parseFloat(hostFee) || 0,
+        host_commission_pct: parseFloat(hostCommissionPct) || 0,
+        show_host_fee: showHostFee,
+        show_host_commission: showHostCommission,
+        requires_host: requiresHost,
       });
       if (res.ok) {
         toast.success(res.message);
@@ -241,6 +254,36 @@ export function CreateTemplateDialog() {
                   <p className="text-xs text-muted-foreground">Show this game in the hero / featured carousel on the home screen.</p>
                 </div>
                 <Switch id="ct-featured" checked={isFeatured} onCheckedChange={setIsFeatured} />
+              </div>
+              {/* Host compensation */}
+              <div className="space-y-1.5">
+                <Label htmlFor="ct-host-fee">Host fee ($)</Label>
+                <Input id="ct-host-fee" type="number" min="0" step="0.01" value={hostFee} onChange={(e) => setHostFee(e.target.value)} placeholder="0.00" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ct-commission">Commission (%)</Label>
+                <Input id="ct-commission" type="number" min="0" max="100" step="0.01" value={hostCommissionPct} onChange={(e) => setHostCommissionPct(e.target.value)} placeholder="0" />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="ct-show-fee" className="cursor-pointer">Show fee to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the host fee in the host-app.</p>
+                </div>
+                <Switch id="ct-show-fee" checked={showHostFee} onCheckedChange={setShowHostFee} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="ct-show-commission" className="cursor-pointer">Show commission to host</Label>
+                  <p className="text-xs text-muted-foreground">Display the commission % in the host-app.</p>
+                </div>
+                <Switch id="ct-show-commission" checked={showHostCommission} onCheckedChange={setShowHostCommission} />
+              </div>
+              <div className="col-span-2 flex items-center justify-between rounded-md border border-input px-3 py-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="ct-requires-host" className="cursor-pointer">Requires a host</Label>
+                  <p className="text-xs text-muted-foreground">When off, generated games are hidden from the host-app available list.</p>
+                </div>
+                <Switch id="ct-requires-host" checked={requiresHost} onCheckedChange={setRequiresHost} />
               </div>
             </div>
           </TabsContent>
