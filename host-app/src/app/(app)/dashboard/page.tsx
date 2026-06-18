@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle, Sparkles, ClipboardList, MonitorPlay } from "lucide-react";
+import { ChevronRight, Mail, Gamepad2, Wallet, AlertCircle, Sparkles, ClipboardList, MonitorPlay, Radio } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardSubtitle } from "@/components/ui/card";
 import { StatusChip } from "@/components/ui/status-chip";
 import { PageHeader } from "@/components/page-header";
@@ -15,14 +15,19 @@ interface Host {
 interface Game { id: string; title: string; scheduled_at: string | null; status: string; host_assignment_status?: string | null }
 interface Invitation { id: string; status: string; games?: Game | null }
 interface Req { id: string; status: string; game_id: string }
+interface LiveHost {
+  id: string; name: string; avg_rating: number | null;
+  live_shows: { id: string; title: string; mode: string; }[];
+}
 
 export default async function DashboardPage() {
-  const [me, upcoming, available, invites, reqs] = await Promise.all([
+  const [me, upcoming, available, invites, reqs, liveHostsRes] = await Promise.all([
     api<{ host: Host }>("/host/me"),
     api<{ games: Game[] }>("/host/games/upcoming"),
     api<{ games: Game[] }>("/host/games/available"),
     api<{ invitations: Invitation[] }>("/host/invitations"),
     api<{ requests: Req[] }>("/host/games/requests"),
+    api<{ hosts: LiveHost[]; pagination: { total: number } }>("/public-hosts/live?limit=3"),
   ]);
   const host = me.ok ? me.data?.host : null;
   const upcomingGames = upcoming.ok ? upcoming.data?.games ?? [] : [];
@@ -35,6 +40,8 @@ export default async function DashboardPage() {
   const pendingNotifications = pendingAssignments.length + pendingInvites.length;
   const pendingReqs = (reqs.ok ? reqs.data?.requests ?? [] : []).filter((r) => r.status === "pending");
   const availableCount = available.ok ? available.data?.games?.length ?? 0 : 0;
+  const liveHosts = liveHostsRes.ok ? liveHostsRes.data?.hosts ?? [] : [];
+  const liveTotalCount = liveHostsRes.ok ? liveHostsRes.data?.pagination?.total ?? 0 : 0;
 
   return (
     <>
@@ -79,6 +86,38 @@ export default async function DashboardPage() {
           </Card>
         </Link>
       </div>
+
+      {liveHosts.length > 0 ? (
+        <Card className="mt-3">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-red-400" />
+              <CardTitle>Live on the platform</CardTitle>
+            </div>
+            <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-300">
+              {liveTotalCount} live
+            </span>
+          </CardHeader>
+          <div className="flex flex-col gap-2">
+            {liveHosts.map((h) => (
+              <div key={h.id} className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/5 p-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-q4w-primary)]/15 text-xs font-bold text-[var(--color-q4w-primary)]">
+                  {h.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{h.name}</div>
+                  {h.live_shows[0] ? (
+                    <div className="truncate text-[11px] text-[var(--color-q4w-muted)]">
+                      {h.live_shows[0].title}
+                    </div>
+                  ) : null}
+                </div>
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       {host?.application_status === "approved" && myShows.length > 0 ? (
         <Link href="/games?tab=upcoming" className="mt-3 block">

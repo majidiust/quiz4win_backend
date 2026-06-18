@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Zap, Users, Trophy, Clock, Shield, Star, TrendingUp } from "lucide-react";
+import { ChevronRight, Zap, Users, Trophy, Clock, Shield, Star, TrendingUp, Radio } from "lucide-react";
 
 // Stats sourced from quiz4win.com/become-host
 const STATS = [
@@ -36,7 +36,22 @@ const BENEFITS = [
   { icon: Clock, title: "Real revenue share", body: "Earn 1%–5% of participant entries every show, on top of your guaranteed flat fee." },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  // Fetch live/upcoming counts as social proof — fail gracefully on error.
+  const apiBase = (process.env.NEXT_PUBLIC_API_URL ?? "https://api.quiz4win.com").replace(/\/$/, "");
+  let liveCount = 0;
+  let upcomingCount = 0;
+  try {
+    const [liveRes, upcomingRes] = await Promise.allSettled([
+      fetch(`${apiBase}/public-hosts/live?limit=1`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${apiBase}/public-hosts/upcoming?limit=1`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+    ]);
+    if (liveRes.status === "fulfilled" && liveRes.value?.pagination?.total)
+      liveCount = liveRes.value.pagination.total;
+    if (upcomingRes.status === "fulfilled" && upcomingRes.value?.pagination?.total)
+      upcomingCount = upcomingRes.value.pagination.total;
+  } catch { /* silently ignore — static copy still renders */ }
+
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col px-5 pb-16 pt-[max(env(safe-area-inset-top),28px)]">
 
@@ -94,6 +109,28 @@ export default function HomePage() {
           </div>
         ))}
       </div>
+
+      {/* ── Live activity strip ──────────────────────────────────────── */}
+      {(liveCount > 0 || upcomingCount > 0) ? (
+        <div className="mb-8 flex items-center gap-3 rounded-2xl border border-red-400/20 bg-red-400/5 px-4 py-2.5 text-xs">
+          {liveCount > 0 ? (
+            <>
+              <Radio className="h-3 w-3 shrink-0 text-red-400" />
+              <span className="font-medium text-red-300">
+                {liveCount} host{liveCount !== 1 ? "s" : ""} live right now
+              </span>
+            </>
+          ) : null}
+          {liveCount > 0 && upcomingCount > 0 ? (
+            <span className="text-white/20">·</span>
+          ) : null}
+          {upcomingCount > 0 ? (
+            <span className="text-[var(--color-q4w-muted)]">
+              {upcomingCount} show{upcomingCount !== 1 ? "s" : ""} upcoming
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* ── How it works ─────────────────────────────────────────────── */}
       <section className="mb-10">
