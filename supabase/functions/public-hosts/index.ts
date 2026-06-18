@@ -9,10 +9,15 @@
  *
  * Routes:
  *   GET /public-hosts                    — list hosts (paginated, filterable)
+ *   GET /public-hosts/live               — hosts on air right now (+ their live show)
+ *   GET /public-hosts/upcoming           — hosts with future shows (+ those shows)
  *   GET /public-hosts/:id                — host profile + stats
  *   GET /public-hosts/:id/live           — current live show (if any)
  *   GET /public-hosts/:id/upcoming       — upcoming assigned shows (paginated)
  *   GET /public-hosts/:id/history        — past completed shows (paginated)
+ *
+ * Note: `live` and `upcoming` are reserved path keywords — host IDs are UUIDs,
+ * so they can never collide with the `/public-hosts/:id` route.
  *
  * Filters on /public-hosts:
  *   search   — ILIKE against name and short_bio
@@ -58,6 +63,72 @@ Deno.serve(async (req: Request) => {
   const supabase = getPublicClient();
 
   try {
+    // ── GET /public-hosts/live — hosts on air right now ───────────────────
+    // Inner-join games so only hosts WITH a live game are returned. RLS on
+    // both tables (status='active' host, anon-readable games) stays in force.
+    if (hostId === "live" && !sub) {
+      const page  = Math.max(1, parseInt(url.searchParams.get("page")  ?? "1"));
+      const limit = Math.min(50, Math.max(1, parseInt(url.searchParams.get("limit") ?? "20")));
+      const offset = (page - 1) * limit;
+
+      const { data, error, count } = await supabase
+        .from("show_hosts")
+        .select(`${HOST_PUBLIC_FIELDS}, games!inner(${GAME_SUMMARY_FIELDS})`, { count: "exact" })
+        .eq("application_status", "approved")
+        .eq("games.status", "live")
+        .order("avg_rating", { ascending: false, nullsFirst: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        console.error("[public-hosts] live-list query error:", error.message);
+        return errorResponse("internal_server_error", 500);
+      }
+
+      const hosts = (data ?? []).map((row) => {
+        const { games, ...host } = row as Record<string, unknown>;
+        return { ...host, live_shows: (games as unknown[]) ?? [] };
+      });
+
+      return successResponse({
+        hosts,
+        pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) },
+      });
+    }
+
+    // ── GET /public-hosts/upcoming — hosts with future shows ──────────────
+    // Inner-join games filtered to upcoming/open. Embedded shows are sorted
+    // soonest-first in JS so this stays independent of supabase-js version.
+    if (hostId === "upcoming" && !sub) {
+      const page  = Math.max(1, parseInt(url.searchParams.get("page")  ?? "1"));
+      const limit = Math.min(50, Math.max(1, parseInt(url.searchParams.get("limit") ?? "20")));
+      const offset = (page - 1) * limit;
+
+      const { data, error, count } = await supabase
+        .from("show_hosts")
+        .select(`${HOST_PUBLIC_FIELDS}, games!inner(${GAME_SUMMARY_FIELDS})`, { count: "exact" })
+        .eq("application_status", "approved")
+        .in("games.status", ["upcoming", "open"])
+        .order("avg_rating", { ascending: false, nullsFirst: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        console.error("[public-hosts] upcoming-list query error:", error.message);
+        return errorResponse("internal_server_error", 500);
+      }
+
+      const hosts = (data ?? []).map((row) => {
+        const { games, ...host } = row as Record<string, unknown>;
+        const shows = ((games as Record<string, unknown>[]) ?? []).sort((a, b) =>
+          String(a.start_time ?? "").localeCompare(String(b.start_time ?? "")));
+        return { ...host, upcoming_shows: shows, upcoming_shows_count: shows.length };
+      });
+
+      return successResponse({
+        hosts,
+        pagination: { page, limit, total: count ?? 0, total_pages: Math.ceil((count ?? 0) / limit) },
+      });
+    }
+
     // ── GET /public-hosts/:id/live ─────────────────────────────────────────
     if (hostId && sub === "live") {
       // Verify host exists and is visible first.
