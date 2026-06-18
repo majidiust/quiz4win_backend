@@ -1,6 +1,6 @@
 # Quiz4Win Backend — Universal Rules
 
-Last updated: 2026-06-17 (rev 6)
+Last updated: 2026-06-18 (rev 7)
 Owner: A-02 (Project Memory Guardian)
 
 > These rules are **non-negotiable**. No agent may override them. Any violation must be flagged immediately in `Change_Log_AI.md` with the `[RULE]` prefix, and all work on the affected area must halt until resolved.
@@ -290,3 +290,27 @@ A feature that exists in one sub (e.g. admin) but is missing in its mirror sub (
 Before marking any feature complete, the agent MUST (per the Augment completeness workflow) search the codebase for **all** downstream call sites, mirror subs, and tests affected by the change, and update them — or explicitly list any deferred surface as a `[TODO]` task in `Open_Tasks_AI.md` with the reason.
 
 **Action:** Shipping a feature in one sub while leaving a mirror sub, caller, or read path inconsistent is a rule violation. Flag it with `[RULE]` in `Change_Log_AI.md` and complete the missing surfaces (or file the explicit `[TODO]`) before the change is considered done.
+
+---
+
+## R-17 — Rate Limiting on All APIs
+
+Every API endpoint MUST be protected by rate limiting. No route is exempt — public read APIs, authenticated end-user APIs, admin APIs, and gameplay APIs are all covered. The limiter is applied **centrally** in the `_server.ts` dispatcher (`_shared/rate_limit.ts`), so coverage is automatic and there is no per-function wiring to forget.
+
+### R-17.1 — Central, per-IP, per-service limiter
+
+- A Redis-backed fixed-window counter keyed by `service:client-ip` enforces a per-minute budget for each route class.
+- Tiers (requests/minute): `strict` (20) for login / abuse-prone unauthenticated writes; `public` (60) for `public-*` read APIs; `default` (120) for authenticated end-user APIs; `admin` (300) for `admin-*`; `realtime` (600) for live gameplay (`game-session`, `games`).
+- The client IP is read from `X-Forwarded-For` (first hop) then `X-Real-IP`. The IP value is **never logged or returned** (R-01).
+
+### R-17.2 — Standard responses & headers
+
+- On breach, respond `429` with `Retry-After` (seconds) and the `error: "rate_limited"` body.
+- Every routed response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.
+
+### R-17.3 — Fail-open & second layer
+
+- If Redis is unreachable, the limiter **fails open** (allows the request) so an infra hiccup never blocks legitimate traffic.
+- Abuse-sensitive write endpoints (e.g. `public-early-birds`, `public-host-applications`) KEEP their own stricter, longer-window `SECURITY DEFINER` RPC limiters as a second layer of defence.
+
+**Action:** Adding an endpoint that bypasses the central dispatcher (and therefore the limiter), or weakening a tier without a documented reason, is a rule violation. Flag it with `[RULE]` in `Change_Log_AI.md`.

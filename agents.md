@@ -53,6 +53,7 @@ Last updated: 2026-05-22
 | R-14 | No Supabase SDK (`createClient`) in Docker-deployed backend services — all DB access via `dbSelect` / `dbInsert` / `dbUpdate` / `dbRpc` PostgREST helpers |
 | R-15 | All user file uploads go through the S3 helper (`_shared/s3.ts`) — server-side size/MIME validation, server-generated keys, private-by-default visibility |
 | R-16 | Features must be end-to-end complete & backward-compatible — propagate a new feature across all subs (DB, API, all frontends, workers, docs); additive-only, no breaking changes; complete every mirror sub/caller before "done" |
+| R-17 | Rate limiting on all APIs — central per-IP, per-service Redis limiter in `_server.ts` (`_shared/rate_limit.ts`); tiers strict/public/default/admin/realtime; `429` + `Retry-After` + `X-RateLimit-*` headers; fails open on Redis error; IP never logged/returned (R-01) |
 
 
 ---

@@ -21,6 +21,13 @@
  *           internals, only their top-level module.
  */
 
+import {
+  checkRateLimit,
+  getClientIp,
+  rateLimitHeaders,
+  resolveRule,
+} from "./_shared/rate_limit.ts";
+
 type Handler = (req: Request) => Response | Promise<Response>;
 
 const handlers = new Map<string, Handler>();
@@ -292,6 +299,27 @@ async function dispatch(req: Request): Promise<Response> {
     });
   }
 
+  // ── Rate limiting (R-17) ───────────────────────────────────────────────────
+  // Centralised per-IP, per-service limiter — covers every routed endpoint by
+  // default. CORS preflight (OPTIONS) is exempt so it never consumes budget.
+  // Fails open on Redis error (see _shared/rate_limit.ts).
+  let rlHeaders: Record<string, string> = {};
+  if (req.method !== "OPTIONS") {
+    const rl = await checkRateLimit(`${service}:${getClientIp(req)}`, resolveRule(service));
+    rlHeaders = rateLimitHeaders(rl);
+    if (!rl.allowed) {
+      log(429, "rate_limited");
+      return new Response(JSON.stringify({ error: "rate_limited" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(rl.resetSec),
+          ...rlHeaders,
+        },
+      });
+    }
+  }
+
   try {
     const res = await handlers.get(service)!(workingReq);
     // Optionally peek small JSON response bodies for tracing.
@@ -307,13 +335,26 @@ async function dispatch(req: Request): Promise<Response> {
     } else {
       log(res.status);
     }
-    return res;
+    // Re-emit the response with rate-limit headers. Preserves the body stream
+    // (SSE/streaming handlers keep working).
+    return withExtraHeaders(res, rlHeaders);
   } catch (err) {
     console.error(`[api] ${service} threw:`, err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : err);
     log(500, "threw");
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...rlHeaders },
     });
   }
+}
+
+/**
+ * Return a new Response with `extra` headers merged in, preserving the original
+ * status, statusText, and body stream. Used to attach X-RateLimit-* headers to
+ * every routed response without buffering streaming bodies.
+ */
+function withExtraHeaders(res: Response, extra: Record<string, string>): Response {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(extra)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
