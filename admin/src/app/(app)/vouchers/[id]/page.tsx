@@ -23,7 +23,7 @@ export default async function VoucherDetailPage({ params }: { params: Promise<{ 
   const [{ data: voucher, error }, { data: redemptions }] = await Promise.all([
     db.from("vouchers").select("*").eq("id", id).maybeSingle(),
     db.from("voucher_redemptions")
-      .select("id, user_id, redeemed_at, reward_type, reward_amount, note, profiles!user_id(full_name, email)")
+      .select("id, user_id, redeemed_at, reward_applied, reward_type, reward_amount, note, profiles!user_id(full_name, email)")
       .eq("voucher_id", id)
       .order("redeemed_at", { ascending: false })
       .limit(50),
@@ -120,8 +120,8 @@ export default async function VoucherDetailPage({ params }: { params: Promise<{ 
                           </Link>
                         </TableCell>
                         <TableCell className="text-xs capitalize">
-                          {r.reward_type?.replace(/_/g, " ")}
-                          {r.reward_amount ? <span className="ml-1 font-mono">{formatMoneyDecimal(r.reward_amount / 100)}</span> : null}
+                          {r.reward_type ? r.reward_type.replace(/_/g, " ") : r.reward_applied ? "wallet credit" : "—"}
+                          {r.reward_amount ? <span className="ml-1 font-mono">{formatMoneyDecimal(r.reward_amount)}</span> : null}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">{r.note ?? "—"}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">{formatRelative(r.redeemed_at)}</TableCell>

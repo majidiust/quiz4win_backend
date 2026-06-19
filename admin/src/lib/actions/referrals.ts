@@ -51,6 +51,33 @@ export async function createPromoCode(input: z.infer<typeof PromoSchema>): Promi
   return { ok: true, message: "Promo code created" };
 }
 
+export async function setReferralCodeEligibility(code: string, eligibilityDays: number): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin"]);
+  if (!Number.isInteger(eligibilityDays) || eligibilityDays < 0) {
+    return { ok: false, message: "eligibility_days must be a non-negative integer" };
+  }
+
+  const db = createSupabaseAdminClient();
+  const { error } = await db
+    .from("referral_codes")
+    .update({ eligibility_days: eligibilityDays === 0 ? null : eligibilityDays })
+    .eq("code", code);
+
+  if (error) return { ok: false, message: "Failed to update eligibility window" };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id,
+    action: "referral_eligibility_updated",
+    target_type: "referral_code",
+    target_id: code,
+    details: { eligibility_days: eligibilityDays },
+    created_at: new Date().toISOString(),
+  });
+
+  revalidatePath("/referrals");
+  return { ok: true, message: `Eligibility window updated (${eligibilityDays === 0 ? "global default" : `${eligibilityDays} days`})` };
+}
+
 export async function disablePromoCode(code: string): Promise<ActionResult> {
   const admin = await requireAdmin(["super_admin", "admin"]);
   const db = createSupabaseAdminClient();

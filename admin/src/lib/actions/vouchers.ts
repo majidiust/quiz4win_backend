@@ -25,7 +25,7 @@ const VoucherSchema = z.object({
   reward_value: z.coerce.number().min(0).optional(),
   reward_description: z.string().trim().min(1).max(500),
   display_text: z.string().trim().min(1).max(500),
-  usage_type: z.enum(["single_use", "multi_user_single_use", "unlimited"]).default("multi_user_single_use"),
+  usage_type: z.enum(["single_use_single_user", "multi_user_single_use", "multi_user_multi_use", "unlimited"]).default("multi_user_single_use"),
   max_redemptions: z.coerce.number().int().min(1).optional(),
   per_user_limit: z.coerce.number().int().min(1).optional(),
   valid_from: z.string().datetime({ offset: true }).optional(),
@@ -162,20 +162,24 @@ export async function issueVoucher(input: z.infer<typeof IssueSchema>): Promise<
   const { data: existing } = await db.from("voucher_redemptions").select("id").eq("voucher_id", voucherId).eq("user_id", userId).maybeSingle();
   if (existing) return { ok: false, message: "User already has this voucher" };
 
-  const rewardCents = v.reward_value ? Math.round(Number(v.reward_value) * 100) : 0;
+  // reward_value is stored in USD dollars (R-02 / credit_wallet contract)
+  const rewardUsd = v.reward_value ? Number(v.reward_value) : 0;
+  const willApply = v.reward_type === "wallet_credit" && rewardUsd > 0;
 
   await db.from("voucher_redemptions").insert({
     voucher_id: voucherId,
     user_id: userId,
     redeemed_at: new Date().toISOString(),
-    reward_type: v.reward_type,
-    reward_amount: rewardCents,
-    issued_by_admin: admin.id,
+    reward_applied: willApply,
+    reward_value_applied_usd: willApply ? rewardUsd : null,
+    reward_type: v.reward_type ?? null,
+    reward_amount: willApply ? rewardUsd : null,
     note: note ?? null,
   });
 
-  if (v.reward_type === "wallet_credit" && rewardCents > 0) {
-    await db.rpc("credit_wallet", { p_user_id: userId, p_amount_cents: rewardCents, p_reference_id: voucherId, p_type: "voucher" });
+  if (willApply) {
+    // p_amount_cents is a historical misnomer — it takes dollars (see migration 20260619020000)
+    await db.rpc("credit_wallet", { p_user_id: userId, p_amount_cents: rewardUsd, p_reference_id: voucherId, p_type: "voucher" });
   }
 
   if (shouldSendEmail && userProfile.email) {

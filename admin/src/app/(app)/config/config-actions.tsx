@@ -284,25 +284,36 @@ export function MonetizationModeControl({
 export function ReferralBonusControl({
   referrerBonus,
   refereeBonus,
+  eligibilityDays,
 }: {
   referrerBonus: number;
   refereeBonus: number;
+  eligibilityDays: number;
 }) {
   const router = useRouter();
   const [referrer, setReferrer] = useState(String(referrerBonus));
   const [referee, setReferee] = useState(String(refereeBonus));
+  const [eligDays, setEligDays] = useState(String(eligibilityDays));
   const [pending, start] = useTransition();
-  const dirty = Number(referrer) !== referrerBonus || Number(referee) !== refereeBonus;
+  const dirty =
+    Number(referrer) !== referrerBonus ||
+    Number(referee) !== refereeBonus ||
+    parseInt(eligDays, 10) !== eligibilityDays;
 
   function save() {
     const rv = parseFloat(referrer);
     const ee = parseFloat(referee);
+    const ed = parseInt(eligDays, 10);
     if (isNaN(rv) || isNaN(ee) || rv < 0 || ee < 0) {
-      toast.error("Please enter valid non-negative amounts");
+      toast.error("Please enter valid non-negative bonus amounts");
+      return;
+    }
+    if (isNaN(ed) || ed < 0) {
+      toast.error("Eligibility days must be a non-negative integer (0 = unlimited)");
       return;
     }
     start(async () => {
-      const res = await setReferralBonuses({ referrerBonusUsd: rv, refereeBonusUsd: ee });
+      const res = await setReferralBonuses({ referrerBonusUsd: rv, refereeBonusUsd: ee, eligibilityDays: ed });
       if (res.ok) { toast.success(res.message); router.refresh(); }
       else toast.error(res.message);
     });
@@ -312,9 +323,9 @@ export function ReferralBonusControl({
     <div className="rounded-lg border p-4 mb-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm font-medium">Referral Bonuses</p>
+          <p className="text-sm font-medium">Referral Bonuses &amp; Eligibility</p>
           <p className="text-xs text-muted-foreground">
-            Amounts credited when a user joins via referral code. Gated by monetization mode.
+            Bonus amounts and the signup window during which a referee can apply a referral code.
           </p>
         </div>
         {dirty && (
@@ -323,30 +334,21 @@ export function ReferralBonusControl({
           </Button>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div className="space-y-1">
           <Label className="text-xs">Referrer bonus (USD)</Label>
-          <p className="text-xs text-muted-foreground">Credited to the user who shared the code on referee's first paid game</p>
-          <Input
-            type="number"
-            min="0"
-            step="0.01"
-            value={referrer}
-            onChange={(e) => setReferrer(e.target.value)}
-            disabled={pending}
-          />
+          <p className="text-xs text-muted-foreground">Paid to code owner on referee's first paid game</p>
+          <Input type="number" min="0" step="0.01" value={referrer} onChange={(e) => setReferrer(e.target.value)} disabled={pending} />
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Referee bonus (USD)</Label>
-          <p className="text-xs text-muted-foreground">Credited immediately to the invited user at signup</p>
-          <Input
-            type="number"
-            min="0"
-            step="0.01"
-            value={referee}
-            onChange={(e) => setReferee(e.target.value)}
-            disabled={pending}
-          />
+          <p className="text-xs text-muted-foreground">Paid to the invited user when they apply the code</p>
+          <Input type="number" min="0" step="0.01" value={referee} onChange={(e) => setReferee(e.target.value)} disabled={pending} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Eligibility window (days)</Label>
+          <p className="text-xs text-muted-foreground">Days after signup a referee can still apply a code. 0 = unlimited</p>
+          <Input type="number" min="0" step="1" value={eligDays} onChange={(e) => setEligDays(e.target.value)} disabled={pending} />
         </div>
       </div>
     </div>

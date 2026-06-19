@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatDateTime, formatMoneyDecimal, formatNumber } from "@/lib/utils";
-import { CreatePromoDialog, DisablePromoButton } from "./referral-actions";
+import { CreatePromoDialog, DisablePromoButton, SetEligibilityButton } from "./referral-actions";
 
 export const metadata = { title: "Referrals" };
 const PAGE_SIZE = 25;
@@ -26,7 +26,7 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
   let q = db
     .from("referral_codes")
     .select(
-      "code, type, owner_id, use_count, max_uses, bonus_amount, campaign_name, expires_at, created_at",
+      "code, type, owner_id, use_count, max_uses, bonus_amount, campaign_name, expires_at, created_at, eligibility_days",
       { count: "exact" },
     )
     .order("created_at", { ascending: false })
@@ -34,15 +34,17 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
   if (sp.type) q = q.eq("type", sp.type);
 
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const [list, codesC, promoC, usesTotal, uses30dC, bonusPaidC] = await Promise.all([
+  const [list, codesC, promoC, usesTotal, uses30dC, bonusPaidC, globalEligCfg] = await Promise.all([
     q,
     db.from("referral_codes").select("code", { count: "exact", head: true }),
     db.from("referral_codes").select("code", { count: "exact", head: true }).eq("type", "promo"),
     db.from("referral_uses").select("id", { count: "exact", head: true }),
     db.from("referral_uses").select("id", { count: "exact", head: true }).gte("used_at", since),
     db.from("referral_uses").select("id", { count: "exact", head: true }).eq("bonus_paid", true),
+    db.from("app_config").select("value").eq("key", "referral_eligibility_days").maybeSingle(),
   ]);
   const { data, count, error } = list;
+  const globalEligDays = parseInt(globalEligCfg.data?.value ?? "30", 10) || 30;
   if (error) throw error;
   const conversionRate = (usesTotal.count ?? 0) ? (bonusPaidC.count ?? 0) / (usesTotal.count ?? 1) : 0;
 
@@ -72,6 +74,7 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                   <TableHead>Campaign</TableHead>
                   <TableHead className="text-right">Uses</TableHead>
                   <TableHead className="text-right">Bonus</TableHead>
+                  <TableHead>Eligibility</TableHead>
                   <TableHead>Expires</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead></TableHead>
@@ -88,6 +91,9 @@ export default async function ReferralsPage({ searchParams }: { searchParams: Pr
                       {r.max_uses ? <span className="text-muted-foreground">/{formatNumber(r.max_uses)}</span> : null}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">{formatMoneyDecimal(r.bonus_amount)}</TableCell>
+                    <TableCell className="text-xs">
+                      <SetEligibilityButton code={r.code} currentDays={r.eligibility_days ?? null} globalDays={globalEligDays} />
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDateTime(r.expires_at)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{formatDateTime(r.created_at)}</TableCell>
                     <TableCell>

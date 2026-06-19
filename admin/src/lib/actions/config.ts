@@ -148,6 +148,7 @@ const ArticleSchema = z.object({
 const ReferralBonusSchema = z.object({
   referrerBonusUsd: z.number().min(0).max(1000),
   refereeBonusUsd:  z.number().min(0).max(1000),
+  eligibilityDays:  z.number().int().min(0).max(3650),
 });
 
 export async function setReferralBonuses(
@@ -156,14 +157,15 @@ export async function setReferralBonuses(
   const admin = await requireAdmin(["super_admin", "admin"]);
   const parsed = ReferralBonusSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input" };
-  const { referrerBonusUsd, refereeBonusUsd } = parsed.data;
+  const { referrerBonusUsd, refereeBonusUsd, eligibilityDays } = parsed.data;
 
   const db = createSupabaseAdminClient();
   const now = new Date().toISOString();
 
   const rows = [
-    { key: "referral_referrer_bonus_usd", value: referrerBonusUsd.toFixed(2), value_type: "number", updated_by: admin.id, updated_at: now },
-    { key: "referral_referee_bonus_usd",  value: refereeBonusUsd.toFixed(2),  value_type: "number", updated_by: admin.id, updated_at: now },
+    { key: "referral_referrer_bonus_usd",  value: referrerBonusUsd.toFixed(2),   value_type: "number",  updated_by: admin.id, updated_at: now },
+    { key: "referral_referee_bonus_usd",   value: refereeBonusUsd.toFixed(2),    value_type: "number",  updated_by: admin.id, updated_at: now },
+    { key: "referral_eligibility_days",    value: String(eligibilityDays),        value_type: "number",  updated_by: admin.id, updated_at: now },
   ];
 
   const { error } = await db.from("app_config").upsert(rows, { onConflict: "key" });
@@ -173,7 +175,7 @@ export async function setReferralBonuses(
     admin_id: admin.id,
     action: "referral_bonuses_updated",
     target_type: "app_config",
-    details: { referrerBonusUsd, refereeBonusUsd },
+    details: { referrerBonusUsd, refereeBonusUsd, eligibilityDays },
     created_at: now,
   });
 

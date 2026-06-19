@@ -39,9 +39,49 @@ Deno.serve(async (req: Request) => {
         .from("vouchers")
         .select("id, code, status, reward_type, reward_value, valid_from, valid_until, max_redemptions, redemption_count")
         .eq("code", code.toUpperCase())
-        .single();
+        .maybeSingle();
 
-      if (!voucher) return successResponse({ valid: false, reason: "Code not found" });
+      if (!voucher) {
+        // Fall back to referral codes (same top-up entry box).
+        const { data: rc } = await admin
+          .from("referral_codes")
+          .select("code, owner_id, expires_at, max_uses, use_count, eligibility_days")
+          .eq("code", code.toUpperCase())
+          .maybeSingle();
+
+        if (!rc) return successResponse({ valid: false, reason: "Code not found" });
+        if (rc.owner_id === user.id) return successResponse({ valid: false, reason: "Cannot use your own referral code" });
+        if (rc.expires_at && new Date(rc.expires_at) < new Date()) return successResponse({ valid: false, reason: "Code expired" });
+        if (rc.max_uses !== null && rc.use_count >= rc.max_uses) return successResponse({ valid: false, reason: "Code usage limit reached" });
+
+        // Eligibility window: referee must be within N days of their signup.
+        // Fetch profile + global config in parallel.
+        const [profileRes, cfgRes] = await Promise.all([
+          admin.from("profiles").select("created_at").eq("id", user.id).maybeSingle(),
+          admin.from("app_config").select("value").eq("key", "referral_eligibility_days").maybeSingle(),
+        ]);
+        const effectiveDays = rc.eligibility_days !== null && rc.eligibility_days !== undefined
+          ? rc.eligibility_days
+          : (parseInt(cfgRes.data?.value ?? "30", 10) || 30);
+        if (effectiveDays > 0 && profileRes.data?.created_at) {
+          const deadline = new Date(profileRes.data.created_at).getTime() + effectiveDays * 86_400_000;
+          if (Date.now() > deadline) {
+            return successResponse({ valid: false, reason: `Referral eligibility window has closed (${effectiveDays} days from signup)` });
+          }
+        }
+
+        const { data: existingUse } = await admin
+          .from("referral_uses")
+          .select("id")
+          .eq("referred_user_id", user.id)
+          .maybeSingle();
+        if (existingUse) return successResponse({ valid: false, reason: "You have already used a referral code" });
+
+        return successResponse({
+          valid: true,
+          voucher: { code: rc.code, reward_type: "referral_bonus", valid_until: rc.expires_at },
+        });
+      }
       if (voucher.status !== "active") return successResponse({ valid: false, reason: `Voucher is ${voucher.status}` });
       if (voucher.valid_until && new Date(voucher.valid_until) < new Date()) {
         return successResponse({ valid: false, reason: "Voucher expired" });
@@ -79,9 +119,68 @@ Deno.serve(async (req: Request) => {
         .from("vouchers")
         .select("id, code, status, reward_type, reward_value, valid_until, max_redemptions, redemption_count")
         .eq("code", code.toUpperCase())
-        .single();
+        .maybeSingle();
 
-      if (!voucher || voucher.status !== "active") return errorResponse("invalid_voucher", 400);
+      // Not a voucher → fall back to referral codes so a user can apply a
+      // referral code as a post-signup top-up. One referral per user is
+      // enforced by referral_uses.referred_user_id UNIQUE. The referee welcome
+      // bonus is paid immediately (idempotent + monetization-gated inside the
+      // RPC); the referrer bonus still fires on this user's first paid game.
+      if (!voucher) {
+        const { data: rc } = await admin
+          .from("referral_codes")
+          .select("code, owner_id, expires_at, max_uses, use_count, eligibility_days")
+          .eq("code", code.toUpperCase())
+          .maybeSingle();
+
+        if (!rc) return errorResponse("invalid_code", 400);
+        if (rc.owner_id === user.id) return errorResponse("cannot_use_own_code", 400);
+        if (rc.expires_at && new Date(rc.expires_at) < new Date()) return errorResponse("code_expired", 400);
+        if (rc.max_uses !== null && rc.use_count >= rc.max_uses) return errorResponse("code_limit_reached", 400);
+
+        // Eligibility window: referee must be within N days of their signup.
+        const [profileRes2, cfgRes2] = await Promise.all([
+          admin.from("profiles").select("created_at").eq("id", user.id).maybeSingle(),
+          admin.from("app_config").select("value").eq("key", "referral_eligibility_days").maybeSingle(),
+        ]);
+        const effectiveDays2 = rc.eligibility_days !== null && rc.eligibility_days !== undefined
+          ? rc.eligibility_days
+          : (parseInt(cfgRes2.data?.value ?? "30", 10) || 30);
+        if (effectiveDays2 > 0 && profileRes2.data?.created_at) {
+          const deadline2 = new Date(profileRes2.data.created_at).getTime() + effectiveDays2 * 86_400_000;
+          if (Date.now() > deadline2) return errorResponse("referral_window_expired", 400);
+        }
+
+        const { data: useRow, error: useErr } = await admin
+          .from("referral_uses")
+          .insert({ code: rc.code, referred_user_id: user.id, referrer_user_id: rc.owner_id })
+          .select("id")
+          .single();
+
+        if (useErr) {
+          // UNIQUE(referred_user_id) → user already used a referral code.
+          if (useErr.code === "23505" || useErr.message.toLowerCase().includes("duplicate")) {
+            return errorResponse("already_referred", 409);
+          }
+          return errorResponse(sanitizeError(useErr), 500);
+        }
+
+        await admin.rpc("pay_referee_bonus", { p_referral_use_id: useRow.id });
+
+        const { data: paid } = await admin
+          .from("referral_uses")
+          .select("referee_bonus_paid")
+          .eq("id", useRow.id)
+          .maybeSingle();
+
+        return successResponse({
+          message: "Referral code applied successfully",
+          reward_type: "referral_bonus",
+          reward_applied: !!paid?.referee_bonus_paid,
+        });
+      }
+
+      if (voucher.status !== "active") return errorResponse("invalid_voucher", 400);
       if (voucher.valid_until && new Date(voucher.valid_until) < new Date()) return errorResponse("voucher_expired", 400);
       if (voucher.max_redemptions !== null && voucher.redemption_count >= voucher.max_redemptions) {
         return errorResponse("voucher_limit_reached", 400);

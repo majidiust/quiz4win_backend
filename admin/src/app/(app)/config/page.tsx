@@ -23,6 +23,7 @@ const MANAGED_KEYS = new Set([
   "maintenance_message",
   "referral_referrer_bonus_usd",
   "referral_referee_bonus_usd",
+  "referral_eligibility_days",
   "feature_user_vouchers",
 ]);
 
@@ -45,8 +46,9 @@ export default async function AppConfigPage() {
   const monCoinName = valueOf("coin_name") ?? "Coins";
   const monCoinSymbol = valueOf("coin_symbol") ?? "C";
 
-  const referrerBonus = parseFloat(valueOf("referral_referrer_bonus_usd") ?? "10.00") || 10;
-  const refereeBonus  = parseFloat(valueOf("referral_referee_bonus_usd")  ?? "5.00")  || 5;
+  const referrerBonus    = parseFloat(valueOf("referral_referrer_bonus_usd") ?? "10.00") || 10;
+  const refereeBonus     = parseFloat(valueOf("referral_referee_bonus_usd")  ?? "5.00")  || 5;
+  const eligibilityDays  = parseInt(valueOf("referral_eligibility_days") ?? "30", 10) || 30;
 
   // Only keys without a dedicated control are shown in the advanced table.
   const otherRows = (data ?? []).filter((c) => !MANAGED_KEYS.has(c.key));
@@ -65,7 +67,7 @@ export default async function AppConfigPage() {
           rateMicros={monRateMicros}
         />
         <HostApplicationsToggle key={`host-${hostAppsEnabled}`} enabled={hostAppsEnabled} />
-        <ReferralBonusControl key={`ref-${referrerBonus}-${refereeBonus}`} referrerBonus={referrerBonus} refereeBonus={refereeBonus} />
+        <ReferralBonusControl key={`ref-${referrerBonus}-${refereeBonus}-${eligibilityDays}`} referrerBonus={referrerBonus} refereeBonus={refereeBonus} eligibilityDays={eligibilityDays} />
         <MaintenanceModeToggle key={`maint-${maintenanceEnabled}`} enabled={maintenanceEnabled} />
       </section>
 

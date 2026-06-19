@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, XCircle } from "lucide-react";
+import { Plus, XCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createPromoCode, disablePromoCode } from "@/lib/actions/referrals";
+import { createPromoCode, disablePromoCode, setReferralCodeEligibility } from "@/lib/actions/referrals";
 
 /* ------------------------------------------------------------------ */
 /* Create promo code dialog                                             */
@@ -98,6 +98,76 @@ export function CreatePromoDialog() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             <Button loading={pending} onClick={submit}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Set eligibility window (inline per row)                              */
+/* ------------------------------------------------------------------ */
+export function SetEligibilityButton({
+  code,
+  currentDays,
+  globalDays,
+}: {
+  code: string;
+  currentDays: number | null;
+  globalDays: number;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [days, setDays] = useState(String(currentDays ?? 0));
+  const [pending, start] = useTransition();
+
+  function submit() {
+    const d = parseInt(days, 10);
+    if (isNaN(d) || d < 0) { toast.error("Enter a non-negative integer (0 = use global default)"); return; }
+    start(async () => {
+      const res = await setReferralCodeEligibility(code, d);
+      if (res.ok) { toast.success(res.message); setOpen(false); router.refresh(); }
+      else toast.error(res.message);
+    });
+  }
+
+  const label = currentDays === null ? `Global (${globalDays}d)` : currentDays === 0 ? "∞" : `${currentDays}d`;
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        title="Override eligibility window for this code"
+      >
+        <Clock className="size-3" />{label}
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Eligibility window — {code}</DialogTitle>
+            <DialogDescription>
+              How many days after signup the referee can apply this code.
+              Enter <strong>0</strong> to use the global default ({globalDays} days).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="elig-days">Days (0 = global default)</Label>
+            <Input
+              id="elig-days"
+              type="number"
+              min="0"
+              step="1"
+              value={days}
+              onChange={(e) => setDays(e.target.value)}
+              placeholder={`Global default: ${globalDays}`}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button loading={pending} onClick={submit}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
