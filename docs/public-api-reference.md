@@ -4,6 +4,31 @@
 **Authentication:** None required — no `Authorization` header, no API key.
 **CORS:** Open (`Access-Control-Allow-Origin: *`). Preflight (`OPTIONS`) returns `204 No Content`.
 
+## Rate limiting (R-17)
+
+Every request is rate-limited **per client IP** by a central Redis-backed
+fixed-window limiter in the API gateway. Public read endpoints (`GET /public-*`)
+use the **public** tier of **60 requests/minute**; the abuse-prone write
+endpoints `POST /public-host-applications` and `POST /public-early-birds` use
+the stricter **20 requests/minute** tier (and keep their own longer-window RPC
+limiters as a second layer). Every routed response carries `X-RateLimit-Limit`,
+`X-RateLimit-Remaining`, and `X-RateLimit-Reset` (seconds until the window
+resets). When the budget is exhausted the API returns:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+X-RateLimit-Limit: 60
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 42
+Content-Type: application/json
+
+{ "error": "rate_limited" }
+```
+
+CORS preflight (`OPTIONS`) requests are exempt and never consume budget.
+Clients SHOULD honour `Retry-After` and back off rather than retry immediately.
+
 ---
 
 ## Endpoints
@@ -12,14 +37,18 @@
 |--------|------|-------------|
 | `GET` | `/public-games` | List games (filterable, paginated) |
 | `GET` | `/public-games/:id` | Single game detail |
+| `GET` | `/public-games/:id/result` | Final result + prize distribution for a completed game |
 | `GET` | `/public-winners` | Aggregate winner stats per completed game run |
 | `GET` | `/public-leaderboard` | Ranked players by survivor finishes + credits over a window |
 | `GET` | `/public-featured-host` | Host of the closest active featured game (Host Spotlight) |
-| `OPTIONS` | `/public-games` | CORS preflight |
-| `OPTIONS` | `/public-games/:id` | CORS preflight |
-| `OPTIONS` | `/public-winners` | CORS preflight |
-| `OPTIONS` | `/public-leaderboard` | CORS preflight |
-| `OPTIONS` | `/public-featured-host` | CORS preflight |
+| `GET` | `/public-sounds` | Active app sound assets (flat list + grouped by usage) |
+| `POST` | `/public-host-applications` | Submit a host application (public website form) |
+| `POST` | `/public-early-birds` | Mobile early-access sign-up (iOS / Android) |
+| `OPTIONS` | `/public-*` | CORS preflight (returns `204`, exempt from rate limiting) |
+
+> A separate **Hosts API (Mobile)** doc covers the read-only host-directory
+> routes `GET /public-hosts*` used by the Android/iOS apps — see
+> `docs/mobile-hosts-api-reference.md`.
 
 ---
 
@@ -160,6 +189,50 @@ Returns a single game by its UUID.
 |------|---------|-------|
 | `404` | `game_not_found` | No game exists with the given `id` |
 | `500` | `internal_server_error` | Unexpected server error |
+
+---
+
+## GET /public-games/:id/result
+
+Returns the final result and prize distribution for a **completed** game. The
+payload is the `result_summary` JSONB persisted once by `distribute_prizes()`,
+so it is stable across calls and matches the `GAME_RESULT` LiveKit broadcast
+emitted by the orchestrator (see `docs/game-result-api.md` for the `result`
+object schema).
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | UUID | The game's `id` field |
+
+### Success Response — `200 OK`
+
+```json
+{
+  "game_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "ended_at": "2026-06-01T18:42:11Z",
+  "prizes_distributed_at": "2026-06-01T18:42:14Z",
+  "result": { }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `game_id` | UUID string | The game's `id` |
+| `status` | string | Game status (always `completed` when `result` is present) |
+| `ended_at` | ISO 8601 string \| null | When the game ended |
+| `prizes_distributed_at` | ISO 8601 string \| null | When prizes were distributed |
+| `result` | object | The persisted `result_summary` (winners, pool split, etc. — see `docs/game-result-api.md`) |
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `404` | `game_not_found` | No game exists with the given `id` |
+| `409` | `result_pending` | Game is `completed` but prize distribution has not finished yet — poll again |
+| `409` | `game_not_completed` | Game has not finished, so no result exists yet |
 
 ---
 
@@ -412,6 +485,64 @@ Returned when no active featured game exists or the matching game has no `host_i
 
 ---
 
+## GET /public-sounds
+
+Returns every **active** app sound asset so the mobile app can fetch them once
+on startup and cache the correct audio file for each UI event (correct answer,
+countdown, winner, etc.). Sounds are returned both as a flat `sounds` array and
+pre-`grouped` by `usage` for O(1) lookup by event name.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `usage` | string | — | Optional. Restrict to a single usage slot. Allowed: `splash`, `home`, `home_before_start`, `register`, `game_details`, `correct_answer`, `incorrect_answer`, `countdown`, `pregame_music`, `winner`, `loser`, `announcement`, `livestream`. |
+
+### Success Response — `200 OK`
+
+```json
+{
+  "sounds": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Correct Answer Chime",
+      "usage": "correct_answer",
+      "url": "https://cdn.quiz4win.com/sounds/correct.mp3",
+      "mime_type": "audio/mpeg",
+      "duration_seconds": 1.4,
+      "updated_at": "2026-05-20T10:00:00Z"
+    }
+  ],
+  "grouped": {
+    "correct_answer": [
+      { "id": "550e8400-e29b-41d4-a716-446655440000", "name": "Correct Answer Chime", "usage": "correct_answer", "url": "https://cdn.quiz4win.com/sounds/correct.mp3", "mime_type": "audio/mpeg", "duration_seconds": 1.4, "updated_at": "2026-05-20T10:00:00Z" }
+    ]
+  }
+}
+```
+
+### Response Field Reference — `sounds[]`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | UUID string | Sound asset identifier |
+| `name` | string | Human-readable label |
+| `usage` | string | The UI event slot this sound is for (see allowed values above) |
+| `url` | URL string | Public CDN URL of the audio file |
+| `mime_type` | string \| null | e.g. `audio/mpeg` |
+| `duration_seconds` | number \| null | Clip length in seconds |
+| `updated_at` | ISO 8601 string | Last update — use for cache invalidation |
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `400` | `Unknown usage. Valid values: …` | `usage` is not one of the allowed slots |
+| `405` | `Method not allowed` | Method other than `GET` |
+| `500` | `Failed to fetch sounds` | Database query failure |
+
+---
+
 ## What These Endpoints Do NOT Return
 
 - `joined_by_me` — requires an access token; available only on the authenticated `GET /games` endpoint
@@ -442,6 +573,9 @@ curl "https://api.quiz4win.com/public-games?status=upcoming&category=sports&sort
 # Single game detail
 curl "https://api.quiz4win.com/public-games/550e8400-e29b-41d4-a716-446655440000"
 
+# Final result + prize distribution for a completed game
+curl "https://api.quiz4win.com/public-games/550e8400-e29b-41d4-a716-446655440000/result"
+
 # Recent 20 completed game runs (winners summary)
 curl "https://api.quiz4win.com/public-winners"
 
@@ -459,6 +593,12 @@ curl "https://api.quiz4win.com/public-leaderboard?period=all_time&limit=50&langu
 
 # Host Spotlight — closest active featured game's host (homepage card)
 curl "https://api.quiz4win.com/public-featured-host"
+
+# All active app sounds (flat list + grouped by usage)
+curl "https://api.quiz4win.com/public-sounds"
+
+# Only the countdown sound
+curl "https://api.quiz4win.com/public-sounds?usage=countdown"
 
 # Submit a host application
 curl -X POST "https://api.quiz4win.com/public-host-applications" \
