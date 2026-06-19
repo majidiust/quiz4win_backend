@@ -25,12 +25,12 @@ export function SendBroadcastDialog() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [type, setType] = useState<"system" | "promotion">("system");
-  const [segmentStatus, setSegmentStatus] = useState("");
+  const [segmentStatus, setSegmentStatus] = useState("all");
   const [scheduledAt, setScheduledAt] = useState("");
 
   function reset() {
     setTitle(""); setBody(""); setType("system");
-    setSegmentStatus(""); setScheduledAt("");
+    setSegmentStatus("all"); setScheduledAt("");
   }
 
   function submit() {
@@ -43,7 +43,7 @@ export function SendBroadcastDialog() {
         title: title.trim(),
         body: body.trim(),
         type,
-        segment_status: segmentStatus || undefined,
+        segment_status: segmentStatus && segmentStatus !== "all" ? segmentStatus : undefined,
         scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
       });
       if (res.ok) {
@@ -100,7 +100,7 @@ export function SendBroadcastDialog() {
                 <Select value={segmentStatus} onValueChange={setSegmentStatus}>
                   <SelectTrigger><SelectValue placeholder="All users" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">All users</SelectItem>
+                    <SelectItem value="all">All users</SelectItem>
                     <SelectItem value="active">Active only</SelectItem>
                     <SelectItem value="suspended">Suspended</SelectItem>
                   </SelectContent>

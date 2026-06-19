@@ -40,7 +40,7 @@ export function VoucherEditForm({ voucher }: { voucher: VoucherRow }) {
 
   const [name, setName] = useState(voucher.name ?? "");
   const [description, setDescription] = useState(voucher.description ?? "");
-  const [rewardType, setRewardType] = useState(voucher.reward_type ?? "");
+  const [rewardType, setRewardType] = useState(voucher.reward_type ?? "none");
   const [rewardValue, setRewardValue] = useState(voucher.reward_value ? String(voucher.reward_value) : "");
   const [rewardDescription, setRewardDescription] = useState(voucher.reward_description ?? "");
   const [displayText, setDisplayText] = useState(voucher.display_text ?? "");
@@ -62,7 +62,7 @@ export function VoucherEditForm({ voucher }: { voucher: VoucherRow }) {
         id: voucher.id,
         name: name.trim(),
         description: description.trim() || undefined,
-        reward_type: rewardType ? rewardType as "wallet_credit" | "free_entry" | "discount" : undefined,
+        reward_type: rewardType && rewardType !== "none" ? rewardType as "wallet_credit" | "free_entry" | "discount" : undefined,
         reward_value: rewardValue ? parseFloat(rewardValue) : undefined,
         reward_description: rewardDescription.trim(),
         display_text: displayText.trim(),
@@ -91,7 +91,7 @@ export function VoucherEditForm({ voucher }: { voucher: VoucherRow }) {
           <Select value={rewardType} onValueChange={setRewardType}>
             <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="">None</SelectItem>
+              <SelectItem value="none">None</SelectItem>
               {["wallet_credit", "free_entry", "discount"].map((t) => (
                 <SelectItem key={t} value={t} className="capitalize">{t.replace(/_/g, " ")}</SelectItem>
               ))}

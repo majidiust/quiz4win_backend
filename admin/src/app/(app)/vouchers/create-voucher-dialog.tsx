@@ -22,7 +22,7 @@ export function CreateVoucherDialog() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [type, setType] = useState("promo");
-  const [rewardType, setRewardType] = useState("");
+  const [rewardType, setRewardType] = useState("none");
   const [rewardValue, setRewardValue] = useState("");
   const [rewardDescription, setRewardDescription] = useState("");
   const [displayText, setDisplayText] = useState("");
@@ -34,7 +34,7 @@ export function CreateVoucherDialog() {
 
   function reset() {
     setCode(""); setName(""); setDescription(""); setType("promo");
-    setRewardType(""); setRewardValue(""); setRewardDescription("");
+    setRewardType("none"); setRewardValue(""); setRewardDescription("");
     setDisplayText(""); setMaxRedemptions("");
     setValidFrom(""); setValidUntil("");
     setKycRequired(false); setCaseSensitive(false);
@@ -51,7 +51,7 @@ export function CreateVoucherDialog() {
         name: name.trim(),
         description: description.trim() || undefined,
         type: type as "promo" | "referral" | "partner" | "free_entry" | "reward",
-        reward_type: rewardType ? rewardType as "wallet_credit" | "free_entry" | "discount" : undefined,
+        reward_type: rewardType && rewardType !== "none" ? rewardType as "wallet_credit" | "free_entry" | "discount" : undefined,
         reward_value: rewardValue ? parseFloat(rewardValue) : undefined,
         reward_description: rewardDescription.trim(),
         display_text: displayText.trim(),
@@ -113,7 +113,7 @@ export function CreateVoucherDialog() {
                 <Select value={rewardType} onValueChange={setRewardType}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {["wallet_credit", "free_entry", "discount"].map((t) => (
                       <SelectItem key={t} value={t} className="capitalize">{t.replace(/_/g, " ")}</SelectItem>
                     ))}
