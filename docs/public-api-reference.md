@@ -42,6 +42,7 @@ Clients SHOULD honour `Retry-After` and back off rather than retry immediately.
 | `GET` | `/public-leaderboard` | Ranked players by survivor finishes + credits over a window |
 | `GET` | `/public-featured-host` | Host of the closest active featured game (Host Spotlight) |
 | `GET` | `/public-sounds` | Active app sound assets (flat list + grouped by usage) |
+| `GET` | `/public-sounds/:id/stream` | Proxy audio bytes through the API (CDN-bypass fallback) |
 | `POST` | `/public-host-applications` | Submit a host application (public website form) |
 | `POST` | `/public-early-birds` | Mobile early-access sign-up (iOS / Android) |
 | `OPTIONS` | `/public-*` | CORS preflight (returns `204`, exempt from rate limiting) |
@@ -507,7 +508,8 @@ pre-`grouped` by `usage` for O(1) lookup by event name.
       "id": "550e8400-e29b-41d4-a716-446655440000",
       "name": "Correct Answer Chime",
       "usage": "correct_answer",
-      "url": "https://cdn.quiz4win.com/sounds/correct.mp3",
+      "url": "https://fra1.digitaloceanspaces.com/quiz4win/sounds/correct.mp3",
+      "proxy_url": "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream",
       "mime_type": "audio/mpeg",
       "duration_seconds": 1.4,
       "updated_at": "2026-05-20T10:00:00Z"
@@ -515,7 +517,7 @@ pre-`grouped` by `usage` for O(1) lookup by event name.
   ],
   "grouped": {
     "correct_answer": [
-      { "id": "550e8400-e29b-41d4-a716-446655440000", "name": "Correct Answer Chime", "usage": "correct_answer", "url": "https://cdn.quiz4win.com/sounds/correct.mp3", "mime_type": "audio/mpeg", "duration_seconds": 1.4, "updated_at": "2026-05-20T10:00:00Z" }
+      { "id": "550e8400-e29b-41d4-a716-446655440000", "name": "Correct Answer Chime", "usage": "correct_answer", "url": "https://fra1.digitaloceanspaces.com/quiz4win/sounds/correct.mp3", "proxy_url": "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream", "mime_type": "audio/mpeg", "duration_seconds": 1.4, "updated_at": "2026-05-20T10:00:00Z" }
     ]
   }
 }
@@ -528,7 +530,8 @@ pre-`grouped` by `usage` for O(1) lookup by event name.
 | `id` | UUID string | Sound asset identifier |
 | `name` | string | Human-readable label |
 | `usage` | string | The UI event slot this sound is for (see allowed values above) |
-| `url` | URL string | Public CDN URL of the audio file |
+| `url` | URL string | Direct DigitalOcean Spaces CDN URL of the audio file |
+| `proxy_url` | URL string | Server-side proxy URL (`GET /public-sounds/:id/stream`). Use as a fallback when `url` is unreachable on filtered networks. |
 | `mime_type` | string \| null | e.g. `audio/mpeg` |
 | `duration_seconds` | number \| null | Clip length in seconds |
 | `updated_at` | ISO 8601 string | Last update — use for cache invalidation |
@@ -540,6 +543,80 @@ pre-`grouped` by `usage` for O(1) lookup by event name.
 | `400` | `Unknown usage. Valid values: …` | `usage` is not one of the allowed slots |
 | `405` | `Method not allowed` | Method other than `GET` |
 | `500` | `Failed to fetch sounds` | Database query failure |
+
+---
+
+## GET /public-sounds/:id/stream
+
+Streams a single active sound's audio bytes through the API server. Use this as
+a **fallback** when the direct CDN `url` is unreachable on filtered networks (e.g.
+certain ISPs in Iran / Arabic-speaking markets that block DigitalOcean Spaces).
+
+The server presigns a short-lived S3 GET URL internally and forwards the object
+bytes without buffering. The client's `Range` header is forwarded, so seekable
+playback and partial-content requests work correctly.
+
+### Path Parameters
+
+| Parameter | Type | Notes |
+|-----------|------|-------|
+| `id` | UUID | Sound asset ID (from `GET /public-sounds`) |
+
+### Request Headers
+
+| Header | Notes |
+|--------|-------|
+| `Range` | Optional. Standard HTTP range request (e.g. `bytes=0-65535`). Forwarded to S3; enables audio seeking. |
+
+### Success Responses
+
+| HTTP | Description |
+|------|-------------|
+| `200 OK` | Full object body; `Content-Type`, `Content-Length`, `Accept-Ranges: bytes` set. |
+| `206 Partial Content` | Returned when a `Range` header was sent; `Content-Range` propagated from upstream. |
+
+**Response headers:**
+
+| Header | Notes |
+|--------|-------|
+| `Content-Type` | Audio MIME type (e.g. `audio/mpeg`) |
+| `Content-Length` | File size in bytes (when known) |
+| `Accept-Ranges` | Always `bytes` — tells clients that range requests are supported |
+| `Content-Range` | Present on `206` responses (e.g. `bytes 0-65535/204800`) |
+| `Cache-Control` | `public, max-age=86400` (24 h) |
+
+### Error Responses
+
+| HTTP | `error` | Cause |
+|------|---------|-------|
+| `404` | `sound_not_found` | No active sound with that ID |
+| `405` | `Method not allowed` | Method other than `GET` or `HEAD` |
+| `502` | `sound_unavailable` | Upstream S3 fetch failed |
+| `500` | `Failed to fetch sound` | Database lookup failure |
+
+### Client usage pattern
+
+```swift
+// Swift (iOS) — try direct CDN first, fall back to proxy
+func loadSound(sound: AppSound) async throws -> Data {
+    if let data = try? await fetchURL(sound.url) { return data }
+    return try await fetchURL(sound.proxyUrl)   // filtered network fallback
+}
+```
+
+### Example Requests
+
+```bash
+# Stream full audio file
+curl "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream"
+
+# Range request — first 64 KB (audio seeking / progressive load)
+curl -H "Range: bytes=0-65535" \
+  "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream"
+
+# HEAD — get headers without downloading the body
+curl -I "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream"
+```
 
 ---
 
@@ -599,6 +676,9 @@ curl "https://api.quiz4win.com/public-sounds"
 
 # Only the countdown sound
 curl "https://api.quiz4win.com/public-sounds?usage=countdown"
+
+# Stream a sound through the API proxy (CDN-bypass fallback)
+curl "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-446655440000/stream"
 
 # Submit a host application
 curl -X POST "https://api.quiz4win.com/public-host-applications" \

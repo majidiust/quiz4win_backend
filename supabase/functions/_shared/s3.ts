@@ -111,6 +111,23 @@ export async function presignGet(key: string, expiresSec = 600): Promise<string>
   return getSignedUrl(getClient(), cmd, { expiresIn: expiresSec });
 }
 
+/**
+ * Server-side fetch of an object so its bytes can be proxied straight back to a
+ * client whose network filters the direct S3/CDN host. Presigns a short-lived
+ * GET, then `fetch`es it forwarding an optional `Range` header (so audio/video
+ * seeking and partial requests still work). Returns the raw upstream `Response`
+ * — the caller streams `body` through without buffering.
+ */
+export async function fetchObject(
+  key: string,
+  rangeHeader?: string | null,
+): Promise<Response> {
+  const signed = await presignGet(key, 600);
+  const headers: Record<string, string> = {};
+  if (rangeHeader) headers["Range"] = rangeHeader;
+  return fetch(signed, { headers });
+}
+
 /** Delete an object. Used on account-deletion and cleanup paths. */
 export async function deleteObject(key: string): Promise<void> {
   await getClient().send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key }));
