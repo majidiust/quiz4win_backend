@@ -34,26 +34,43 @@ Deno.serve(async (req: Request) => {
     // PostgREST `alias:source` syntax renames them in the response.
     if (!path && req.method === "GET") {
       const cols = "id, email, name:full_name, avatar_url, language, kyc_status, status, wallet_balance, earnings_balance, score_balance, referral_code, created_at, nationality:country";
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(cols)
-        .eq("id", user.id)
-        .maybeSingle();
 
-      if (data) return successResponse({ user: data });
+      // Run profile fetch and host-status check in parallel.
+      // The show_hosts_own_select RLS policy allows an authenticated user to
+      // SELECT their own row (auth_user_id = auth.uid()), so the anon client
+      // (which carries the user's JWT) is sufficient — no admin bypass needed.
+      const [profileRes, hostRes] = await Promise.all([
+        supabase.from("profiles").select(cols).eq("id", user.id).maybeSingle(),
+        supabase
+          .from("show_hosts")
+          .select("id, application_status, status")
+          .eq("auth_user_id", user.id)
+          .maybeSingle(),
+      ]);
+
+      const hostInfo = hostRes.data
+        ? {
+            is_host: true,
+            host_id: hostRes.data.id as string,
+            host_status: hostRes.data.status as string,
+            host_application_status: hostRes.data.application_status as string,
+          }
+        : { is_host: false, host_id: null, host_status: null, host_application_status: null };
+
+      if (profileRes.data) return successResponse({ user: { ...profileRes.data, ...hostInfo } });
 
       // Anon read was denied (RLS) or returned nothing. Re-check with the
       // admin client scoped to the authenticated user's own id (id = user.id).
       // This is not a service_role bypass: we always restrict to the JWT
       // subject and never expose another user's row (R-04 spirit preserved).
-      console.warn(`[profile] GET — user=${user.id} anon empty (rls?):`, error?.message);
+      console.warn(`[profile] GET — user=${user.id} anon empty (rls?):`, profileRes.error?.message);
       const admin = getAdminClient();
       const { data: existing } = await admin
         .from("profiles")
         .select(cols)
         .eq("id", user.id)
         .maybeSingle();
-      if (existing) return successResponse({ user: existing });
+      if (existing) return successResponse({ user: { ...existing, ...hostInfo } });
 
       // Truly missing — backfill (pre-trigger accounts).
       const fallbackName = (user.user_metadata?.full_name as string | undefined) ?? null;
@@ -67,7 +84,7 @@ Deno.serve(async (req: Request) => {
         console.warn(`[profile] GET — user=${user.id} lazy-create failed:`, createErr?.message);
         return errorResponse("profile_not_found", 404);
       }
-      return successResponse({ user: created });
+      return successResponse({ user: { ...created, ...hostInfo } });
     }
 
     // PATCH /profile
