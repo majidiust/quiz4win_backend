@@ -107,11 +107,11 @@ Deno.serve(async (req: Request) => {
       await admin.from("vouchers").update({ redemption_count: voucher.redemption_count + 1 }).eq("id", voucher.id);
 
       // Apply reward (schema stores reward_value as NUMERIC dollars).
+      // credit_wallet p_amount_cents is also in dollars despite its name (R-02 note).
       if (willApply) {
-        const cents = Math.round(Number(voucher.reward_value) * 100);
         await admin.rpc("credit_wallet", {
           p_user_id: user.id,
-          p_amount_cents: cents,
+          p_amount_cents: Number(voucher.reward_value),  // dollars, not cents
           p_reference_id: voucher.id,
           p_type: "voucher",
         });

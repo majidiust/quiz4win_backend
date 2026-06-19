@@ -18,7 +18,7 @@ Owner: A-01 (Augment Code Agent)
 
 - [P0] [TODO] [HUMAN] **Define platform cut percentage** — Specify the percentage of prize pool retained by the platform per game. Required by INV-07 in Domain_Knowledge.md.
 
-- [P0] [TODO] [HUMAN] **Define referral bonus amount** — Specify the credit (in cents) awarded to a referrer when a referred user completes their first paid game. Required by INV-08.
+- [P0] [DONE] [A-01] **Define referral bonus amount** — Implemented dual-sided referral bonuses (referrer + referee), admin-adjustable globally and per-user. Defaults: referrer $10.00, referee $5.00. INV-08 wired. — 2026-06-19
 
 - [P0] [TODO] [HUMAN] **Define regulatory jurisdiction** — Specify the country/state jurisdiction for gambling/gaming compliance. Required before any real-money features can go live. See Domain_Knowledge.md §4.
 
@@ -148,6 +148,8 @@ Owner: A-01 (Augment Code Agent)
 - [P1] [DONE] [A-01] **Extend Admin Panel game styling & asset uploads** — Added color pickers, gradient builder, and S3-backed asset upload (Icon/Thumbnail/Host Avatar) to Create Game dialog and Game Detail page; updated grid layout. — 2026-05-25
 - [P1] [DONE] [A-01] **Fix db-maintainer Postgres version mismatch** — Updated Dockerfile to `postgres:17-alpine` to support `pg_dump` against Supabase Postgres 17. — 2026-05-25
 - [P1] [DONE] [A-01] **API Reference Documentation** — Created `docs/api-reference.md` with complete customer & admin game-related API specs. — 2026-05-25
+
+- [P1] [TODO] [A-01] **CRITICAL: Harden referral bonuses to first-paid-game gate (Option A)** — Currently: referee gets bonus at signup, referrer on referee's first paid game (Option B). Future: gate BOTH bonuses on the referee's first paid game to prevent fake-account farming. Move `pay_referee_bonus` call from `auth/index.ts` (signup) into `pay_referrer_bonus` RPC (first paid game join). Requires: (1) new migration extending `pay_referrer_bonus` to credit both parties atomically; (2) removing the `pay_referee_bonus` call from auth; (3) marking `referee_bonus_paid` FALSE until first paid game. Pair with KYC / device-fingerprint checks for maximum fraud resistance. — Requested 2026-06-19
 
 - [P0] [DONE] [HUMAN] Supabase project credentials added to `.env`. — 2026-05-22
 - [P0] [DONE] [A-02] Bootstrap multi-agent coordination framework — Created agents.md, /project-brain/ (7 files), /agents/ (5 files). — 2026-05-22

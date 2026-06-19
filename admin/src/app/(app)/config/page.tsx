@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatRelative } from "@/lib/utils";
-import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle, MonetizationModeControl } from "./config-actions";
+import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle, MonetizationModeControl, ReferralBonusControl } from "./config-actions";
 
 export const metadata = { title: "App Config" };
 
@@ -21,6 +21,9 @@ const MANAGED_KEYS = new Set([
   "feature_host_applications",
   "maintenance_mode",
   "maintenance_message",
+  "referral_referrer_bonus_usd",
+  "referral_referee_bonus_usd",
+  "feature_user_vouchers",
 ]);
 
 export default async function AppConfigPage() {
@@ -42,6 +45,9 @@ export default async function AppConfigPage() {
   const monCoinName = valueOf("coin_name") ?? "Coins";
   const monCoinSymbol = valueOf("coin_symbol") ?? "C";
 
+  const referrerBonus = parseFloat(valueOf("referral_referrer_bonus_usd") ?? "10.00") || 10;
+  const refereeBonus  = parseFloat(valueOf("referral_referee_bonus_usd")  ?? "5.00")  || 5;
+
   // Only keys without a dedicated control are shown in the advanced table.
   const otherRows = (data ?? []).filter((c) => !MANAGED_KEYS.has(c.key));
 
@@ -59,6 +65,7 @@ export default async function AppConfigPage() {
           rateMicros={monRateMicros}
         />
         <HostApplicationsToggle key={`host-${hostAppsEnabled}`} enabled={hostAppsEnabled} />
+        <ReferralBonusControl key={`ref-${referrerBonus}-${refereeBonus}`} referrerBonus={referrerBonus} refereeBonus={refereeBonus} />
         <MaintenanceModeToggle key={`maint-${maintenanceEnabled}`} enabled={maintenanceEnabled} />
       </section>
 

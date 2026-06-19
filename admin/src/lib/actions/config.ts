@@ -142,6 +142,46 @@ const ArticleSchema = z.object({
   is_published: z.boolean().default(false),
 });
 
+/* ------------------------------------------------------------------ */
+/* Referral bonus amounts                                               */
+/* ------------------------------------------------------------------ */
+const ReferralBonusSchema = z.object({
+  referrerBonusUsd: z.number().min(0).max(1000),
+  refereeBonusUsd:  z.number().min(0).max(1000),
+});
+
+export async function setReferralBonuses(
+  input: z.infer<typeof ReferralBonusSchema>,
+): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin"]);
+  const parsed = ReferralBonusSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input" };
+  const { referrerBonusUsd, refereeBonusUsd } = parsed.data;
+
+  const db = createSupabaseAdminClient();
+  const now = new Date().toISOString();
+
+  const rows = [
+    { key: "referral_referrer_bonus_usd", value: referrerBonusUsd.toFixed(2), value_type: "number", updated_by: admin.id, updated_at: now },
+    { key: "referral_referee_bonus_usd",  value: refereeBonusUsd.toFixed(2),  value_type: "number", updated_by: admin.id, updated_at: now },
+  ];
+
+  const { error } = await db.from("app_config").upsert(rows, { onConflict: "key" });
+  if (error) return { ok: false, message: "Failed to update referral bonuses" };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id,
+    action: "referral_bonuses_updated",
+    target_type: "app_config",
+    details: { referrerBonusUsd, refereeBonusUsd },
+    created_at: now,
+  });
+
+  revalidatePath("/config");
+  return { ok: true, message: "Referral bonuses updated" };
+}
+
+/* ------------------------------------------------------------------ */
 export async function createHelpArticle(input: z.infer<typeof ArticleSchema>): Promise<ActionResult> {
   const admin = await requireAdmin(["super_admin", "admin"]);
   const parsed = ArticleSchema.safeParse(input);

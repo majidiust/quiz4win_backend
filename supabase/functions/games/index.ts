@@ -281,6 +281,18 @@ Deno.serve(async (req: Request) => {
         p_entry_fee_cents: game.entry_fee ?? 0,
       });
       if (joinErr) return errorResponse(sanitizeError(joinErr), 400);
+
+      // INV-08: fire referrer bonus on the referee's first paid game join.
+      // Non-blocking — a failure here must never fail the join response.
+      if (Number(game.entry_fee ?? 0) > 0) {
+        admin.rpc("pay_referrer_bonus", {
+          p_referred_user_id: user.id,
+          p_game_id: gameId,
+        }).catch((err: Error) =>
+          console.warn(`[games] pay_referrer_bonus failed user=${user.id}:`, err.message)
+        );
+      }
+
       return successResponse({ message: "Joined game successfully" }, 201);
     }
 

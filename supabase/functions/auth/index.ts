@@ -104,6 +104,39 @@ Deno.serve(async (req: Request) => {
         if (profileErr && !profileErr.message.toLowerCase().includes("duplicate")) {
           console.warn(`[auth] profile insert failed for ${email}: ${profileErr.message}`);
         }
+
+        // Wire referral: create referral_uses row (trigger auto-increments
+        // use_count), then pay the referee their welcome bonus immediately
+        // (INV-08, Option B — referrer bonus fires on first paid game join).
+        if (referral_code && data.user.id) {
+          try {
+            const { data: rc } = await admin
+              .from("referral_codes")
+              .select("owner_id")
+              .eq("code", referral_code.toUpperCase())
+              .single();
+
+            if (rc?.owner_id && rc.owner_id !== data.user.id) {
+              // UNIQUE on referred_user_id — idempotent on retry.
+              const { data: useRow } = await admin
+                .from("referral_uses")
+                .insert({
+                  code: referral_code.toUpperCase(),
+                  referred_user_id: data.user.id,
+                  referrer_user_id: rc.owner_id,
+                })
+                .select("id")
+                .single();
+
+              if (useRow?.id) {
+                await admin.rpc("pay_referee_bonus", { p_referral_use_id: useRow.id });
+              }
+            }
+          } catch (refErr) {
+            // Non-fatal: referral bonus failure must never block signup.
+            console.warn(`[auth] referral wiring failed user=${data.user.id}:`, (refErr as Error).message);
+          }
+        }
       }
 
       // Send the branded confirmation email — non-blocking so a Brevo hiccup

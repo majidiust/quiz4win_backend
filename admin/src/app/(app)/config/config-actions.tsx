@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { updateConfigKey, toggleMaintenanceMode, toggleHostApplications, setMonetizationMode } from "@/lib/actions/config";
+import { updateConfigKey, toggleMaintenanceMode, toggleHostApplications, setMonetizationMode, setReferralBonuses } from "@/lib/actions/config";
 
 // Platform withdrawal minimum in USD (mirrors MIN_WITHDRAWAL in the
 // withdrawals Edge Function). Used only to preview the coin-equivalent.
@@ -279,6 +279,80 @@ export function MonetizationModeControl({
 }
 
 /* ------------------------------------------------------------------ */
+/* Referral bonus amounts                                               */
+/* ------------------------------------------------------------------ */
+export function ReferralBonusControl({
+  referrerBonus,
+  refereeBonus,
+}: {
+  referrerBonus: number;
+  refereeBonus: number;
+}) {
+  const router = useRouter();
+  const [referrer, setReferrer] = useState(String(referrerBonus));
+  const [referee, setReferee] = useState(String(refereeBonus));
+  const [pending, start] = useTransition();
+  const dirty = Number(referrer) !== referrerBonus || Number(referee) !== refereeBonus;
+
+  function save() {
+    const rv = parseFloat(referrer);
+    const ee = parseFloat(referee);
+    if (isNaN(rv) || isNaN(ee) || rv < 0 || ee < 0) {
+      toast.error("Please enter valid non-negative amounts");
+      return;
+    }
+    start(async () => {
+      const res = await setReferralBonuses({ referrerBonusUsd: rv, refereeBonusUsd: ee });
+      if (res.ok) { toast.success(res.message); router.refresh(); }
+      else toast.error(res.message);
+    });
+  }
+
+  return (
+    <div className="rounded-lg border p-4 mb-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium">Referral Bonuses</p>
+          <p className="text-xs text-muted-foreground">
+            Amounts credited when a user joins via referral code. Gated by monetization mode.
+          </p>
+        </div>
+        {dirty && (
+          <Button size="sm" onClick={save} disabled={pending}>
+            {pending ? "Saving…" : "Save"}
+          </Button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <Label className="text-xs">Referrer bonus (USD)</Label>
+          <p className="text-xs text-muted-foreground">Credited to the user who shared the code on referee's first paid game</p>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={referrer}
+            onChange={(e) => setReferrer(e.target.value)}
+            disabled={pending}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Referee bonus (USD)</Label>
+          <p className="text-xs text-muted-foreground">Credited immediately to the invited user at signup</p>
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            value={referee}
+            onChange={(e) => setReferee(e.target.value)}
+            disabled={pending}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* Maintenance mode toggle                                              */
 /* ------------------------------------------------------------------ */
 export function MaintenanceModeToggle({ enabled }: { enabled: boolean }) {
