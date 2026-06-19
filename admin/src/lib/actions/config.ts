@@ -34,6 +34,31 @@ export async function updateConfigKey(key: string, value: string): Promise<Actio
 }
 
 /* ------------------------------------------------------------------ */
+/* Host applications toggle                                             */
+/* ------------------------------------------------------------------ */
+export async function toggleHostApplications(enabled: boolean): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin"]);
+  const db = createSupabaseAdminClient();
+  const now = new Date().toISOString();
+
+  const { error } = await db.from("app_config").upsert(
+    { key: "feature_host_applications", value: String(enabled), value_type: "boolean", updated_by: admin.id, updated_at: now },
+    { onConflict: "key" },
+  );
+  if (error) return { ok: false, message: "Failed to update host applications setting" };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id,
+    action: enabled ? "host_applications_enabled" : "host_applications_disabled",
+    target_type: "app_config",
+    created_at: now,
+  });
+
+  revalidatePath("/config");
+  return { ok: true, message: `Host applications ${enabled ? "enabled" : "disabled"}` };
+}
+
+/* ------------------------------------------------------------------ */
 /* Maintenance mode toggle                                              */
 /* ------------------------------------------------------------------ */
 export async function toggleMaintenanceMode(enabled: boolean, message?: string): Promise<ActionResult> {

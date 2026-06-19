@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { updateConfigKey, toggleMaintenanceMode } from "@/lib/actions/config";
+import { updateConfigKey, toggleMaintenanceMode, toggleHostApplications } from "@/lib/actions/config";
 
 /* ------------------------------------------------------------------ */
 /* Inline editable config row                                           */
@@ -69,6 +69,48 @@ export function ConfigValueCell({ configKey, value }: { configKey: string; value
       <Button size="icon" variant="ghost" className="size-7" onClick={cancel}>
         <X className="size-3.5 text-destructive" />
       </Button>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Host applications toggle                                             */
+/* ------------------------------------------------------------------ */
+export function HostApplicationsToggle({ enabled }: { enabled: boolean }) {
+  const router = useRouter();
+  const [checked, setChecked] = useState(enabled);
+  const [pending, start] = useTransition();
+
+  function toggle(val: boolean) {
+    setChecked(val);
+    start(async () => {
+      const res = await toggleHostApplications(val);
+      if (res.ok) {
+        toast.success(res.message);
+        router.refresh();
+      } else {
+        toast.error(res.message);
+        setChecked(!val); // rollback
+      }
+    });
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border p-4 mb-2">
+      <div className="flex-1">
+        <p className="text-sm font-medium">Host Applications</p>
+        <p className="text-xs text-muted-foreground">
+          When disabled, users cannot apply to become hosts. The mobile app reads this flag from{" "}
+          <span className="font-mono">GET /config/app</span> and hides the &ldquo;Become a Host&rdquo; entry point.
+        </p>
+      </div>
+      <Switch
+        id="host-applications-toggle"
+        checked={checked}
+        onCheckedChange={toggle}
+        disabled={pending}
+      />
+      <Label htmlFor="host-applications-toggle" className="sr-only">Toggle host applications</Label>
     </div>
   );
 }

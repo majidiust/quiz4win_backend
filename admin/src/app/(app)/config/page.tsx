@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatRelative } from "@/lib/utils";
-import { ConfigValueCell, MaintenanceModeToggle } from "./config-actions";
+import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle } from "./config-actions";
 
 export const metadata = { title: "App Config" };
 
@@ -22,10 +22,14 @@ export default async function AppConfigPage() {
   const maintenanceRow = data?.find((c) => c.key === "maintenance_mode");
   const maintenanceEnabled = maintenanceRow?.value === "true";
 
+  const hostAppsRow = data?.find((c) => c.key === "feature_host_applications");
+  const hostAppsEnabled = hostAppsRow?.value !== "false"; // default open when row missing
+
   return (
     <>
       <PageHeader title="App Config" description="Runtime configuration keys consumed by the mobile clients." />
 
+      <HostApplicationsToggle enabled={hostAppsEnabled} />
       <MaintenanceModeToggle enabled={maintenanceEnabled} />
 
       <Card className="overflow-hidden">
