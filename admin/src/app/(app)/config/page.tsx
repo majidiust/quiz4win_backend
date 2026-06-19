@@ -1,5 +1,5 @@
 import { Settings2 } from "lucide-react";
-import { Card } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -10,6 +10,19 @@ import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle, Monetiz
 
 export const metadata = { title: "App Config" };
 
+// Keys that have a dedicated control above. They are hidden from the raw
+// key/value table so each setting has exactly one editor — editing them as
+// free text would bypass validation and cause conflicting state.
+const MANAGED_KEYS = new Set([
+  "monetization_mode",
+  "coin_usd_rate_micros",
+  "coin_name",
+  "coin_symbol",
+  "feature_host_applications",
+  "maintenance_mode",
+  "maintenance_message",
+]);
+
 export default async function AppConfigPage() {
   await requireAdmin(["super_admin", "admin"]);
   const db = createSupabaseAdminClient();
@@ -19,32 +32,45 @@ export default async function AppConfigPage() {
     .order("key", { ascending: true });
   if (error) throw error;
 
-  const maintenanceRow = data?.find((c) => c.key === "maintenance_mode");
-  const maintenanceEnabled = maintenanceRow?.value === "true";
+  const valueOf = (key: string) => data?.find((c) => c.key === key)?.value;
 
-  const hostAppsRow = data?.find((c) => c.key === "feature_host_applications");
-  const hostAppsEnabled = hostAppsRow?.value !== "false"; // default open when row missing
+  const maintenanceEnabled = valueOf("maintenance_mode") === "true";
+  const hostAppsEnabled = valueOf("feature_host_applications") !== "false"; // default open when row missing
 
-  const monMode = (data?.find((c) => c.key === "monetization_mode")?.value ?? "usd") as "none" | "coin" | "usd";
-  const monRateMicros = parseInt(data?.find((c) => c.key === "coin_usd_rate_micros")?.value ?? "10000", 10) || 10000;
-  const monCoinName = data?.find((c) => c.key === "coin_name")?.value ?? "Coins";
-  const monCoinSymbol = data?.find((c) => c.key === "coin_symbol")?.value ?? "C";
+  const monMode = (valueOf("monetization_mode") ?? "usd") as "none" | "coin" | "usd";
+  const monRateMicros = parseInt(valueOf("coin_usd_rate_micros") ?? "10000", 10) || 10000;
+  const monCoinName = valueOf("coin_name") ?? "Coins";
+  const monCoinSymbol = valueOf("coin_symbol") ?? "C";
+
+  // Only keys without a dedicated control are shown in the advanced table.
+  const otherRows = (data ?? []).filter((c) => !MANAGED_KEYS.has(c.key));
 
   return (
     <>
-      <PageHeader title="App Config" description="Runtime configuration keys consumed by the mobile clients." />
+      <PageHeader title="App Config" description="Runtime configuration consumed by the mobile clients." />
 
-      <MonetizationModeControl
-        mode={monMode}
-        coinName={monCoinName}
-        coinSymbol={monCoinSymbol}
-        rateMicros={monRateMicros}
-      />
-      <HostApplicationsToggle enabled={hostAppsEnabled} />
-      <MaintenanceModeToggle enabled={maintenanceEnabled} />
+      <section className="space-y-2 mb-8">
+        <h2 className="text-sm font-semibold text-muted-foreground">Feature controls</h2>
+        <MonetizationModeControl
+          key={`mon-${monMode}-${monRateMicros}-${monCoinName}-${monCoinSymbol}`}
+          mode={monMode}
+          coinName={monCoinName}
+          coinSymbol={monCoinSymbol}
+          rateMicros={monRateMicros}
+        />
+        <HostApplicationsToggle key={`host-${hostAppsEnabled}`} enabled={hostAppsEnabled} />
+        <MaintenanceModeToggle key={`maint-${maintenanceEnabled}`} enabled={maintenanceEnabled} />
+      </section>
 
       <Card className="overflow-hidden">
-        {data && data.length > 0 ? (
+        <CardHeader className="border-b py-4">
+          <CardTitle className="text-sm">Other configuration keys</CardTitle>
+          <CardDescription className="text-xs">
+            Advanced runtime keys. The settings above (monetization, host applications, maintenance) are
+            managed by their dedicated controls and are intentionally hidden here to prevent conflicting edits.
+          </CardDescription>
+        </CardHeader>
+        {otherRows.length > 0 ? (
           <Table>
             <TableHeader>
               <TableRow>
@@ -55,7 +81,7 @@ export default async function AppConfigPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.map((c) => (
+              {otherRows.map((c) => (
                 <TableRow key={c.key}>
                   <TableCell className="font-mono text-xs">{c.key}</TableCell>
                   <TableCell>
@@ -68,7 +94,7 @@ export default async function AppConfigPage() {
             </TableBody>
           </Table>
         ) : (
-          <EmptyState icon={Settings2} title="No configuration keys defined" />
+          <EmptyState icon={Settings2} title="No other configuration keys" />
         )}
       </Card>
     </>
