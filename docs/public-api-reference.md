@@ -620,6 +620,65 @@ curl -I "https://api.quiz4win.com/public-sounds/550e8400-e29b-41d4-a716-44665544
 
 ---
 
+## GET /config/app
+
+Returns runtime configuration flags that mobile clients should read on startup to gate features and adapt their UI.
+
+**Authentication:** none required.
+**Rate limit:** public tier — 60 req/min per IP.
+
+### Success Response — `200 OK`
+
+```json
+{
+  "config": {
+    "maintenance_mode": false,
+    "feature_live_shows": true,
+    "feature_crypto_topup": false,
+    "feature_referrals": true,
+    "feature_vouchers": true,
+    "feature_host_applications": true,
+    "monetization_mode": "usd",
+    "livekit_server_url": "wss://quiz4win-xxx.livekit.cloud"
+  }
+}
+```
+
+When `monetization_mode` is `"coin"`, a nested `coin` object is included:
+
+```json
+{
+  "config": {
+    "monetization_mode": "coin",
+    "coin": {
+      "name": "Coins",
+      "symbol": "C",
+      "usd_rate_micros": 10000,
+      "usd_rate": "0.010000"
+    }
+  }
+}
+```
+
+### Monetization
+
+| Mode | Meaning |
+|------|---------|
+| `"usd"` | Default — real-money mode. Withdrawals work normally. |
+| `"coin"` | Virtual-currency mode. All cash-out amounts are entered/displayed in coins and converted to USD internally using the FX rate. The `coin` object provides name, symbol, and exchange rate. |
+| `"none"` | Withdrawals disabled. `POST /withdrawals/request` returns `403 monetization_disabled`. Designed for App Store / Google Play review compliance. |
+
+**Coin FX rate:** `usd_rate_micros` is micro-USD per 1 coin (integer). `usd_rate` is the same value as a decimal string for display convenience. Example: `usd_rate_micros = 10000` means 1 coin = $0.01 → 100 coins = $1.00.
+
+### Error Responses
+
+| Status | `error` | Meaning |
+|--------|---------|---------|
+| `429` | `rate_limited` | Too many requests |
+| `500` | `internal_error` | Unexpected server error |
+
+---
+
 ## What These Endpoints Do NOT Return
 
 - `joined_by_me` — requires an access token; available only on the authenticated `GET /games` endpoint

@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/empty-state";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { formatRelative } from "@/lib/utils";
-import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle } from "./config-actions";
+import { ConfigValueCell, MaintenanceModeToggle, HostApplicationsToggle, MonetizationModeControl } from "./config-actions";
 
 export const metadata = { title: "App Config" };
 
@@ -25,10 +25,21 @@ export default async function AppConfigPage() {
   const hostAppsRow = data?.find((c) => c.key === "feature_host_applications");
   const hostAppsEnabled = hostAppsRow?.value !== "false"; // default open when row missing
 
+  const monMode = (data?.find((c) => c.key === "monetization_mode")?.value ?? "usd") as "none" | "coin" | "usd";
+  const monRateMicros = parseInt(data?.find((c) => c.key === "coin_usd_rate_micros")?.value ?? "10000", 10) || 10000;
+  const monCoinName = data?.find((c) => c.key === "coin_name")?.value ?? "Coins";
+  const monCoinSymbol = data?.find((c) => c.key === "coin_symbol")?.value ?? "C";
+
   return (
     <>
       <PageHeader title="App Config" description="Runtime configuration keys consumed by the mobile clients." />
 
+      <MonetizationModeControl
+        mode={monMode}
+        coinName={monCoinName}
+        coinSymbol={monCoinSymbol}
+        rateMicros={monRateMicros}
+      />
       <HostApplicationsToggle enabled={hostAppsEnabled} />
       <MaintenanceModeToggle enabled={maintenanceEnabled} />
 

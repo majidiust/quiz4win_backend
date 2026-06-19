@@ -30,6 +30,7 @@ import { validateJWT } from "../_shared/auth.ts";
 import { getAnonClient, getAdminClient } from "../_shared/supabase.ts";
 import { sendEmail, withdrawalOtpTemplate } from "../_shared/email.ts";
 import { generateNumericCode, sha256Hex } from "../_shared/totp.ts";
+import { readMonetization, coinsToUsd } from "../_shared/monetization.ts";
 
 const MIN_WITHDRAWAL = 10;    // €10.00 minimum
 const MAX_WITHDRAWAL = 10_000; // €10,000 maximum
@@ -126,10 +127,31 @@ Deno.serve(async (req: Request) => {
                       : typeof amount === "string" ? parseFloat(amount as string)
                       : NaN;
 
-      if (!amountNum || isNaN(amountNum) || amountNum < MIN_WITHDRAWAL) {
+      if (!amountNum || isNaN(amountNum) || amountNum <= 0) {
+        return errorResponse("invalid_amount", 400);
+      }
+
+      // ── Monetization gate (Option A presentation layer) ─────────────────────
+      // `none` blocks all cash-out (App Store / Play review-safe). `coin` treats
+      // the entered amount as coins and converts to canonical USD at the locked
+      // admin rate. `usd` is 1:1. All thresholds/KYC below run on canonical USD.
+      const admin = getAdminClient();
+      const mon = await readMonetization(admin);
+      if (mon.mode === "none") return errorResponse("monetization_disabled", 403);
+
+      let coinAmount: number | null = null;
+      let appliedRateMicros: number | null = null;
+      let usdAmount = amountNum;
+      if (mon.mode === "coin") {
+        coinAmount = amountNum;
+        appliedRateMicros = mon.rateMicros;
+        usdAmount = coinsToUsd(amountNum, mon.rateMicros);
+      }
+
+      if (usdAmount < MIN_WITHDRAWAL) {
         return errorResponse(`minimum_withdrawal_${MIN_WITHDRAWAL}`, 400);
       }
-      if (amountNum > MAX_WITHDRAWAL) {
+      if (usdAmount > MAX_WITHDRAWAL) {
         return errorResponse(`maximum_withdrawal_${MAX_WITHDRAWAL}`, 400);
       }
       if (!method || !account_details || typeof account_details !== "object") {
@@ -155,7 +177,6 @@ Deno.serve(async (req: Request) => {
       }
 
       // Fetch earnings balance + KYC status + display name in one query.
-      const admin = getAdminClient();
       const { data: profile } = await admin
         .from("profiles")
         .select("kyc_status, earnings_balance, full_name")
@@ -165,13 +186,13 @@ Deno.serve(async (req: Request) => {
       if (!profile) return errorResponse("profile_not_found", 404);
       if (!user.email) return errorResponse("account_missing_email", 400);
 
-      // INV-05 (updated): KYC required only for amounts > KYC_THRESHOLD EUR.
-      if (amountNum > KYC_THRESHOLD && profile.kyc_status !== "verified") {
+      // INV-05 (updated): KYC required only for amounts > KYC_THRESHOLD (canonical USD).
+      if (usdAmount > KYC_THRESHOLD && profile.kyc_status !== "verified") {
         return errorResponse("kyc_required", 403);
       }
 
       const earningsDollars = Number(profile.earnings_balance ?? 0);
-      if (amountNum > earningsDollars) {
+      if (usdAmount > earningsDollars) {
         return errorResponse("insufficient_earnings", 400);
       }
 
@@ -182,12 +203,15 @@ Deno.serve(async (req: Request) => {
         .from("withdrawals")
         .insert({
           user_id:                 user.id,
-          amount:                  amountNum,   // NUMERIC(12,2) dollars
+          amount:                  usdAmount,   // canonical USD (NUMERIC(12,2))
           method,
           account_details,
           crypto_coin:             cryptoCoin,
           crypto_network:          cryptoNetwork,
           crypto_address:          cryptoAddress,
+          monetization_mode:       mon.mode,
+          coin_amount:             coinAmount,
+          coin_usd_rate_micros:    appliedRateMicros,
           status:                  "awaiting_confirmation",
           confirmation_code_hash:  otp.hash,
           confirmation_expires_at: otp.expiresAt,
@@ -203,7 +227,7 @@ Deno.serve(async (req: Request) => {
         email:  user.email,
         name:   (profile.full_name as string | null) ?? "",
         code:   otp.code,
-        amount: amountNum,
+        amount: usdAmount,
         method: String(method),
       });
 
@@ -212,7 +236,8 @@ Deno.serve(async (req: Request) => {
         requires_confirmation:   true,
         confirmation_expires_at: otp.expiresAt,
         earnings_balance:        earningsDollars,
-        kyc_bypassed:            amountNum <= KYC_THRESHOLD,
+        kyc_bypassed:            usdAmount <= KYC_THRESHOLD,
+        monetization_mode:       mon.mode,
       }, 201);
     }
 

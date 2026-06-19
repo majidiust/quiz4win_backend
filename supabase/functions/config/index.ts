@@ -20,6 +20,10 @@ const PUBLIC_CONFIG_KEYS = [
   "feature_referrals",
   "feature_vouchers",
   "feature_host_applications",
+  "monetization_mode",
+  "coin_usd_rate_micros",
+  "coin_name",
+  "coin_symbol",
   "max_game_entry_fee",
   "min_withdrawal_amount",
   "supported_currencies",
@@ -53,6 +57,7 @@ Deno.serve(async (req: Request) => {
           feature_referrals: true,
           feature_vouchers: true,
           feature_host_applications: true,
+          monetization_mode: "usd",
           supported_currencies: ["USD", "EUR", "GBP"],
           supported_locales: ["en", "ar", "fr"],
           livekit_server_url: Deno.env.get("LIVEKIT_SERVER_URL") ?? null,
@@ -74,6 +79,27 @@ Deno.serve(async (req: Request) => {
       // WebSocket endpoint the mobile client needs; not a secret (R-01).
       const livekitUrl = Deno.env.get("LIVEKIT_SERVER_URL");
       if (livekitUrl) config["livekit_server_url"] = livekitUrl;
+
+      // Monetization presentation layer (Option A). Always expose the mode;
+      // nest coin metadata only in `coin` mode so `none`/`usd` clients get a
+      // clean payload. The stored ledger is unaffected — this is display/policy
+      // only. The FX rate is integer micro-USD per coin (R-02).
+      const monMode = typeof config.monetization_mode === "string" ? config.monetization_mode : "usd";
+      const coinName = typeof config.coin_name === "string" ? config.coin_name : "Coins";
+      const coinSymbol = typeof config.coin_symbol === "string" ? String(config.coin_symbol) : "C";
+      const rateMicros = Number(config.coin_usd_rate_micros ?? 0) || 0;
+      delete config.coin_name;
+      delete config.coin_symbol;
+      delete config.coin_usd_rate_micros;
+      config.monetization_mode = monMode;
+      if (monMode === "coin") {
+        config.coin = {
+          name: coinName,
+          symbol: coinSymbol,
+          usd_rate_micros: rateMicros,
+          usd_rate: (rateMicros / 1_000_000).toFixed(6),
+        };
+      }
 
       return successResponse({ config });
     }

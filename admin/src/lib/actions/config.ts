@@ -59,6 +59,52 @@ export async function toggleHostApplications(enabled: boolean): Promise<ActionRe
 }
 
 /* ------------------------------------------------------------------ */
+/* Monetization mode                                                    */
+/* ------------------------------------------------------------------ */
+const MonetizationSchema = z.object({
+  mode: z.enum(["none", "coin", "usd"]),
+  coinName: z.string().trim().max(40).optional(),
+  coinSymbol: z.string().trim().max(10).optional(),
+  rateMicros: z.number().int().positive().optional(), // micro-USD per coin (R-02)
+});
+
+export async function setMonetizationMode(
+  input: z.infer<typeof MonetizationSchema>,
+): Promise<ActionResult> {
+  const admin = await requireAdmin(["super_admin", "admin"]);
+  const parsed = MonetizationSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input" };
+  const { mode, coinName, coinSymbol, rateMicros } = parsed.data;
+
+  const db = createSupabaseAdminClient();
+  const now = new Date().toISOString();
+
+  const rows: { key: string; value: string; value_type: string; updated_by: string; updated_at: string }[] = [
+    { key: "monetization_mode", value: mode, value_type: "string", updated_by: admin.id, updated_at: now },
+  ];
+  if (coinName !== undefined)
+    rows.push({ key: "coin_name", value: coinName, value_type: "string", updated_by: admin.id, updated_at: now });
+  if (coinSymbol !== undefined)
+    rows.push({ key: "coin_symbol", value: coinSymbol, value_type: "string", updated_by: admin.id, updated_at: now });
+  if (rateMicros !== undefined)
+    rows.push({ key: "coin_usd_rate_micros", value: String(rateMicros), value_type: "number", updated_by: admin.id, updated_at: now });
+
+  const { error } = await db.from("app_config").upsert(rows, { onConflict: "key" });
+  if (error) return { ok: false, message: "Failed to update monetization mode" };
+
+  await db.from("admin_audit_log").insert({
+    admin_id: admin.id,
+    action: "monetization_mode_changed",
+    target_type: "app_config",
+    details: { mode, coinName, coinSymbol, rateMicros },
+    created_at: now,
+  });
+
+  revalidatePath("/config");
+  return { ok: true, message: `Monetization mode set to "${mode}"` };
+}
+
+/* ------------------------------------------------------------------ */
 /* Maintenance mode toggle                                              */
 /* ------------------------------------------------------------------ */
 export async function toggleMaintenanceMode(enabled: boolean, message?: string): Promise<ActionResult> {
