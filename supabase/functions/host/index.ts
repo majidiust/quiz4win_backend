@@ -86,15 +86,10 @@ Deno.serve(async (req: Request) => {
   try {
     // ── POST /host/apply ─────────────────────────────────────────────────────
     if (parts[0] === "apply" && parts.length === 1 && req.method === "POST") {
-      // Check the admin-controlled feature flag before accepting any application.
-      const { data: flagRow } = await db
-        .from("app_config")
-        .select("value")
-        .eq("key", "feature_host_applications")
-        .maybeSingle();
-      // Default open when row is missing; only close when explicitly "false".
-      if (flagRow?.value === "false") return errorResponse("feature_disabled", 403);
-
+      // NOTE: `feature_host_applications` is a presentation-only flag exposed via
+      // GET /config/app so the mobile apps can show/hide the "become a host"
+      // button. It deliberately does NOT gate this endpoint — the application
+      // flow stays available to anyone who reaches it (e.g. the host web app).
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
       const name = typeof body.name === "string" ? body.name.trim() : "";
       if (!name || name.length < 2 || name.length > 120) return errorResponse("name_invalid", 400);
@@ -176,14 +171,8 @@ Deno.serve(async (req: Request) => {
     // keys by auth user id and returns the public URL for /host/apply to persist.
     // R-15: server-side size/MIME validation, S3 helper, public-read for avatars.
     if (parts[0] === "avatar-temp" && parts.length === 1 && req.method === "POST") {
-      // Block the first onboarding step when host applications are closed so the
-      // user does not waste time completing the wizard only to be rejected at /apply.
-      const { data: flagRow } = await db
-        .from("app_config")
-        .select("value")
-        .eq("key", "feature_host_applications")
-        .maybeSingle();
-      if (flagRow?.value === "false") return errorResponse("feature_disabled", 403);
+      // `feature_host_applications` is presentation-only (see /host/apply note);
+      // it does not gate the onboarding avatar upload.
       const form = await req.formData().catch(() => null);
       if (!form) return errorResponse("invalid_form", 400);
       const file = form.get("file");
