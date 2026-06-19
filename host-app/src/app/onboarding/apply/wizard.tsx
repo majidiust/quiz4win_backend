@@ -94,7 +94,13 @@ export default function ApplyWizard({ initialError }: { initialError?: string })
         </div>
       ) : null}
 
-      <form action={applyAction} className="mt-5 flex flex-col gap-4">
+      {/* onSubmit guard: block implicit form submission (e.g. Enter key in inputs)
+          at every step except the final Review step where the submit button lives. */}
+      <form
+        action={applyAction}
+        onSubmit={(e) => { if (step < STEPS.length - 1) e.preventDefault(); }}
+        className="mt-5 flex flex-col gap-4"
+      >
         {/* Hidden fields persist values from every step across the whole form */}
         <input type="hidden" name="name" value={s.name} />
         {/* Send the country NAME (admin-readable). ISO code is internal-only. */}

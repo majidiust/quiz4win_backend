@@ -45,6 +45,9 @@ export async function applyAction(formData: FormData) {
   };
   const r = await api("/host/apply", { method: "POST", body });
   if (!r.ok) {
+    // Feature flag off → redirect to a dedicated "closed" state so the page
+    // can render a proper informational UI instead of re-showing the wizard.
+    if (r.error === "feature_disabled") redirect("/onboarding/apply?closed=1");
     const msg = r.error === "name_taken" ? "Display name already taken"
       : r.error === "already_a_host" ? "You are already an approved host"
       : r.error === "application_pending" ? "Your application is already pending"
