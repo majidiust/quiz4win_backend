@@ -49,25 +49,51 @@ function fmtMoney(v: number | null | undefined): string {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-/** Animated waiting card shown before GAME_STARTED arrives. */
-function WaitingCard({ onUnlock }: { onUnlock: () => void }) {
+/** Animated waiting card shown before GAME_STARTED arrives. When the game's
+ *  scheduled start time is known, it shows a live countdown to that moment. */
+function WaitingCard({ scheduledAt, onUnlock }: { scheduledAt: string | null; onUnlock: () => void }) {
   const [showUnlock, setShowUnlock] = useState(false);
+  const scheduledMs = scheduledAt ? new Date(scheduledAt).getTime() : null;
+  const [secsLeft, setSecsLeft] = useState<number | null>(
+    scheduledMs != null ? Math.max(0, Math.round((scheduledMs - Date.now()) / 1000)) : null,
+  );
+
   useEffect(() => {
     const t = setTimeout(() => setShowUnlock(true), 7000);
     return () => clearTimeout(t);
   }, []);
+
+  // Tick the scheduled-start countdown once per second.
+  useEffect(() => {
+    if (scheduledMs == null) { setSecsLeft(null); return; }
+    const tick = () => setSecsLeft(Math.max(0, Math.round((scheduledMs - Date.now()) / 1000)));
+    tick();
+    const iv = setInterval(tick, 1000);
+    return () => clearInterval(iv);
+  }, [scheduledMs]);
+
+  const showCountdown = secsLeft != null && secsLeft > 0;
+
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl bg-black/30 px-4 py-8 text-center gap-3">
       <div className="relative flex h-10 w-10 items-center justify-center">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/30" />
         <Clock className="relative h-6 w-6 text-amber-400" />
       </div>
-      <div>
-        <p className="text-sm font-medium">Waiting for game to start</p>
-        <p className="mt-1 text-xs text-[var(--color-q4w-muted)]">
-          Controls unlock automatically when the orchestrator signals game start.
-        </p>
-      </div>
+      {showCountdown ? (
+        <div>
+          <p className="text-[10px] uppercase tracking-widest text-[var(--color-q4w-muted)]">Game starts in</p>
+          <p className="text-5xl font-bold tabular-nums tracking-tight text-amber-300">{fmtCountdown(secsLeft!)}</p>
+          <p className="mt-1 text-xs text-[var(--color-q4w-muted)]">Controls unlock automatically at game start.</p>
+        </div>
+      ) : (
+        <div>
+          <p className="text-sm font-medium">Waiting for game to start</p>
+          <p className="mt-1 text-xs text-[var(--color-q4w-muted)]">
+            Controls unlock automatically when the orchestrator signals game start.
+          </p>
+        </div>
+      )}
       {showUnlock && (
         <button
           type="button"
@@ -200,12 +226,13 @@ function QuestionCard({
  *   waiting → (GAME_STARTED) → countdown / idle → prepared → active → closed → … → ended
  */
 export function GameControlPanel({
-  gameId, room, prizePool: initialPrize, questionsCount,
+  gameId, room, prizePool: initialPrize, questionsCount, scheduledAt = null,
 }: {
   gameId: string;
   room: Room | null;
   prizePool: number | null;
   questionsCount: number | null;
+  scheduledAt?: string | null;
 }) {
   const [phase, setPhase]     = useState<Phase>("waiting");
   const [current, setCurrent] = useState<CurrentQ | null>(null);
@@ -377,7 +404,7 @@ export function GameControlPanel({
       {/* Phase-specific content — max-height caps height so action bar stays visible */}
       <div className="mt-3 max-h-[38vh] overflow-y-auto">
         {phase === "waiting" ? (
-          <WaitingCard onUnlock={() => setPhase("idle")} />
+          <WaitingCard scheduledAt={scheduledAt} onUnlock={() => setPhase("idle")} />
         ) : phase === "countdown" && countdown != null ? (
           <CountdownCard seconds={countdown} />
         ) : current ? (

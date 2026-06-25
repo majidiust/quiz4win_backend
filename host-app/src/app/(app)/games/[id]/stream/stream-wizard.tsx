@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Mic, Wifi, CheckCircle2, AlertTriangle, Radio, Sparkles } from "lucide-react";
+import { Camera, Mic, Wifi, CheckCircle2, AlertTriangle, Radio, Sparkles, Maximize2, Minimize2 } from "lucide-react";
 import { Card, CardSubtitle, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/ui/status-chip";
@@ -14,8 +14,8 @@ import MediaPipeAR from "@/components/ar-preview";
 interface Session { id: string; status: string; camera_ok: boolean; mic_ok: boolean; connection_ok: boolean }
 
 export function StreamWizard({
-  gameId, initialSession, arBackgrounds, runMode, prizePool, questionsCount,
-}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[]; runMode?: string | null; prizePool?: number | null; questionsCount?: number | null }) {
+  gameId, initialSession, arBackgrounds, runMode, prizePool, questionsCount, scheduledAt,
+}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[]; runMode?: string | null; prizePool?: number | null; questionsCount?: number | null; scheduledAt?: string | null }) {
   const [session, setSession] = useState<Session | null>(initialSession);
   const [camOk, setCamOk]   = useState(initialSession?.camera_ok ?? false);
   const [micOk, setMicOk]   = useState(initialSession?.mic_ok ?? false);
@@ -37,6 +37,9 @@ export function StreamWizard({
     voiceMonitorOn, toggleVoiceMonitor, stopVoiceMonitor,
   } = useARState();
   const [arModalOpen, setArModalOpen] = useState(false);
+  // When live, the self-view defaults to a compact thumbnail; the host can
+  // expand it to a full-width preview and collapse it back.
+  const [selfViewBig, setSelfViewBig] = useState(false);
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -182,14 +185,14 @@ export function StreamWizard({
         thumbnail so the game controls sit at the top, no scrolling needed.
       */}
       <Card className="mb-3">
-        <div className={cn(isLive ? "flex items-center gap-3" : "flex flex-col")}>
+        <div className={cn(isLive && !selfViewBig ? "flex items-center gap-3" : "flex flex-col")}>
           {/* Persistent self-view — keyed so React preserves MediaPipeAR */}
           <div
             key="self-view"
             ref={arContainerRef}
             className={cn(
               "relative shrink-0 overflow-hidden bg-black/40 order-2",
-              isLive ? "h-14 w-24 rounded-xl" : "mt-3 aspect-video w-full rounded-2xl",
+              isLive && !selfViewBig ? "h-14 w-24 rounded-xl" : "mt-3 aspect-video w-full rounded-2xl",
             )}
           >
             {/* Raw camera preview — hidden when AR is active (AR canvas overlays it) */}
@@ -219,6 +222,15 @@ export function StreamWizard({
                   {arEnabled ? "AR video publishing from your browser" : "Publishing camera & mic"}
                 </p>
               </div>
+              {/* Expand / collapse the self-view preview */}
+              <button
+                type="button"
+                onClick={() => setSelfViewBig((v) => !v)}
+                aria-label={selfViewBig ? "Shrink preview" : "Enlarge preview"}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 text-[var(--color-q4w-muted)] transition-colors hover:bg-white/20 hover:text-white"
+              >
+                {selfViewBig ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
               {/* AR access — always one tap away while live */}
               <button
                 type="button"
@@ -269,7 +281,7 @@ export function StreamWizard({
       {isLive ? (
         /* === LIVE GAME ROOM — controls front and center === */
         isPresenter ? (
-          <GameControlPanel gameId={gameId} room={room} prizePool={prizePool ?? null} questionsCount={questionsCount ?? null} />
+          <GameControlPanel gameId={gameId} room={room} prizePool={prizePool ?? null} questionsCount={questionsCount ?? null} scheduledAt={scheduledAt ?? null} />
         ) : token ? (
           <Card>
             <CardSubtitle>

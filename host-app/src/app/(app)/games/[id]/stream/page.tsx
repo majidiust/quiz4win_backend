@@ -39,6 +39,7 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
         runMode={game.run_mode}
         prizePool={game.prize_pool ?? null}
         questionsCount={game.questions_count ?? null}
+        scheduledAt={game.scheduled_at ?? null}
       />
     </>
   );
