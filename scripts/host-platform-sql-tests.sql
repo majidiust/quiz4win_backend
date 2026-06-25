@@ -132,6 +132,70 @@ BEGIN
 END $$;
 ROLLBACK;
 
+-- ─── Test 5: completed game's approved request does NOT block next slot ─────
+-- Regression for the recurring-host bug (20260625140000): a finished game must
+-- never count as an active commitment in check_host_schedule_conflict.
+BEGIN;
+DO $$
+DECLARE
+    v_host   UUID := gen_random_uuid();
+    v_game_a UUID := gen_random_uuid();  -- already finished
+    v_game_b UUID := gen_random_uuid();  -- the next slot, 20 min later
+    v_conflict BOOLEAN;
+BEGIN
+    INSERT INTO public.show_hosts (id, name, application_status, status, auth_user_id)
+    VALUES (v_host, 'sql-test-host-' || v_host::text, 'approved', 'active', NULL);
+
+    -- Game A finished; Game B is 20 minutes later (inside the 90-min window).
+    INSERT INTO public.games (id, title, mode, status, host_id, scheduled_at, created_at, updated_at)
+    VALUES (v_game_a, 'Finished Game A', 'live', 'completed', v_host, NOW() - INTERVAL '20 minutes', NOW(), NOW()),
+           (v_game_b, 'Next Game B',     'live', 'upcoming',  NULL,   NOW(),                         NOW(), NOW());
+
+    -- A's request stayed 'approved' (the pre-fix stale state we now ignore).
+    INSERT INTO public.host_game_requests (host_id, game_id, status, created_at, updated_at)
+    VALUES (v_host, v_game_a, 'approved', NOW(), NOW());
+
+    SELECT public.check_host_schedule_conflict(v_host, v_game_b) INTO v_conflict;
+    ASSERT v_conflict = FALSE,
+        format('completed game must not block: expected FALSE, got %L', v_conflict);
+    RAISE NOTICE '✓ Test 5 PASS — completed game''s approved request does not block';
+END $$;
+ROLLBACK;
+
+-- ─── Test 6: ending a game frees the host (completion trigger) ──────────────
+BEGIN;
+DO $$
+DECLARE
+    v_host   UUID := gen_random_uuid();
+    v_game   UUID := gen_random_uuid();
+    v_req_status    TEXT;
+    v_assign_status TEXT;
+BEGIN
+    INSERT INTO public.show_hosts (id, name, application_status, status, auth_user_id)
+    VALUES (v_host, 'sql-test-host-' || v_host::text, 'approved', 'active', NULL);
+
+    INSERT INTO public.games (id, title, mode, status, host_id, host_assignment_status, scheduled_at, created_at, updated_at)
+    VALUES (v_game, 'Live Game', 'live', 'live', v_host, 'accepted', NOW(), NOW(), NOW());
+
+    INSERT INTO public.host_game_requests (host_id, game_id, status, created_at, updated_at)
+    VALUES (v_host, v_game, 'approved', NOW(), NOW());
+
+    -- End the game → trigger should move the request + assignment to terminal.
+    UPDATE public.games SET status = 'completed' WHERE id = v_game;
+
+    SELECT status INTO v_req_status
+      FROM public.host_game_requests WHERE game_id = v_game AND host_id = v_host;
+    SELECT host_assignment_status INTO v_assign_status
+      FROM public.games WHERE id = v_game;
+
+    ASSERT v_req_status = 'completed',
+        format('request after game end: expected completed, got %L', v_req_status);
+    ASSERT v_assign_status = 'completed',
+        format('host_assignment_status after game end: expected completed, got %L', v_assign_status);
+    RAISE NOTICE '✓ Test 6 PASS — game completion frees the host assignment';
+END $$;
+ROLLBACK;
+
 \echo ''
 \echo '────────────────────────────────────────────────────────────────'
 \echo '  host-platform-sql-tests.sql complete — all assertions passed.'

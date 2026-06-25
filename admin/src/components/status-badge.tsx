@@ -55,6 +55,7 @@ export function hostAssignmentLabel(status: string | null | undefined): string {
     case "pending": return "Pending host confirmation";
     case "accepted": return "Accepted";
     case "rejected": return "Rejected";
+    case "completed": return "Completed";
     case "unassigned": return "Unassigned";
     default: return status ?? "Unassigned";
   }

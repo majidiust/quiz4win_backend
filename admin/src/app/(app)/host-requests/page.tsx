@@ -17,10 +17,11 @@ import { RequestActions } from "@/app/(app)/hosts/[id]/host-actions";
 
 export const metadata = { title: "Host requests — Quiz4Win Admin" };
 
-type Status = "pending" | "approved" | "rejected" | "cancelled" | "all";
+type Status = "pending" | "approved" | "rejected" | "cancelled" | "completed" | "all";
 const TABS: { value: Status; label: string }[] = [
   { value: "pending",   label: "Pending"   },
   { value: "approved",  label: "Approved"  },
+  { value: "completed", label: "Completed" },
   { value: "rejected",  label: "Rejected"  },
   { value: "cancelled", label: "Cancelled" },
   { value: "all",       label: "All"       },

@@ -104,7 +104,7 @@ offer automatically. This also clears the `approved` request that
 ## 5. `host_assignment_status` State Machine
 
 ```
-unassigned ──(admin assigns)──► pending ──(host accepts)──► accepted ──► [go live]
+unassigned ──(admin assigns)──► pending ──(host accepts)──► accepted ──► [go live] ──(game ends)──► completed
                                    │
                                    └──(host rejects)──► unassigned
 ```
@@ -115,6 +115,7 @@ unassigned ──(admin assigns)──► pending ──(host accepts)──► 
 | `pending` | Admin directly assigns | **Accept / Reject** |
 | `accepted` | Host accepts, or request approved, or invitation accepted | **Start Hosting** |
 | `rejected` | Host rejects (status immediately clears to `unassigned`) | — |
+| `completed` | `trg_complete_host_assignment_on_game_end` when the game reaches a terminal status (`completed`/`cancelled`) | — (host freed for new assignments) |
 
 > **Note:** Games assigned before this feature shipped were backfilled to `'accepted'` by migration `20260617000000`. To test the accept/reject flow on such a game, unassign then re-assign the host.
 
@@ -178,7 +179,11 @@ otherwise  →  Read-only view
 
 ## 9. Schedule Conflict Check (INV-17)
 
-`check_host_schedule_conflict(p_host_id, p_game_id)` — a `SECURITY DEFINER` PostgreSQL function — returns `true` if the host already has an accepted/pending assignment whose live window overlaps the target game's window (`scheduled_at + 90 min` default). Called before every assignment operation.
+`check_host_schedule_conflict(p_host_id, p_game_id)` — a `SECURITY DEFINER` PostgreSQL function — returns `true` if the host already has an **active** assignment whose live window overlaps the target game's window (`scheduled_at + 90 min` default). Called before every assignment operation.
+
+"Active" means the other commitment's game is still `upcoming`/`open`/`live`. All three branches (assigned `games.host_id`, accepted `host_invitations`, approved `host_game_requests`) filter `g.status IN ('upcoming','open','live')`, so **completed or cancelled games never block a new assignment**.
+
+When a game reaches a terminal status the assigned host is freed automatically by the `complete_host_assignment_on_game_end` trigger (`BEFORE UPDATE OF status ON public.games`): it transitions the host's non-terminal `host_game_requests`/`host_invitations` to `completed` (or `cancelled` if the game was cancelled) and sets `games.host_assignment_status = 'completed'`. This is what makes the host eligible to request/accept the next slot immediately after a show ends — no cache or scheduled cleanup is involved.
 
 ---
 

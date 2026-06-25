@@ -184,6 +184,10 @@ Two assignment events trigger the check:
 
 The check runs server-side in the Edge Function using a `SECURITY DEFINER` SQL helper (`check_host_schedule_conflict(host_id, game_id)`). Frontend hints are advisory only.
 
+**Only ACTIVE commitments count.** A commitment blocks a new assignment *only while its game is still `upcoming`/`open`/`live`*. The helper filters `g.status IN ('upcoming','open','live')` in **all three** branches (assigned games, accepted invitations, approved requests). A `completed` or `cancelled` game has no future live window and MUST NEVER block a future assignment.
+
+**Assignment lifecycle is terminal-aware.** When a game enters a terminal status, the assigned host is freed automatically: the `complete_host_assignment_on_game_end` trigger (`BEFORE UPDATE OF status ON games`) moves the host's own non-terminal `host_game_requests`/`host_invitations` to `completed` (game completed) or `cancelled` (game cancelled) and sets `games.host_assignment_status = 'completed'`. Assignment terminal states: `host_game_requests ∈ {…,'completed'}`, `host_invitations ∈ {…,'completed'}`, `host_assignment_status ∈ {…,'completed'}`. No cache or background job — availability is recalculated on the same DB write that ends the game.
+
 ### INV-18 — Host Application & Status Gates
 
 Two flags on `show_hosts` gate every host action:
