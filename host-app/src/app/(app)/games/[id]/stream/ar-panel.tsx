@@ -103,12 +103,18 @@ export async function buildVoiceChain(
   return { stream: dest.stream, ctx, osc };
 }
 
-// ── Video effect static list ────────────────────────────────────────────────
+// ── Video effect static lists ───────────────────────────────────────────────
+// Background and face filters are independent slots that composite together,
+// so each has its own "Off" entry and selection state.
 
-const VIDEO_EFFECTS: AREffect[] = [
-  { id: "none",           name: "Off",         type: "none",           icon: "🚫", category: "none" },
+const BACKGROUND_EFFECTS: AREffect[] = [
+  { id: "bg-none",        name: "Off",         type: "none",           icon: "🚫", category: "none" },
   { id: "blur",           name: "Blur BG",     type: "blur",           icon: "🌫️", category: "backgrounds" },
   { id: "silhouette",     name: "Stealth",     type: "silhouette",     icon: "🖤", category: "backgrounds" },
+];
+
+const FACE_EFFECTS: AREffect[] = [
+  { id: "face-none",      name: "Off",         type: "none",           icon: "🚫", category: "none" },
   { id: "face-blur",      name: "Face Blur",   type: "face-blur",      icon: "🫥", category: "face" },
   { id: "beauty",         name: "Beauty",      type: "beauty",         icon: "✨", category: "face" },
   { id: "face-mask-cat",  name: "Cat",         type: "face-mask-cat",  icon: "🐱", category: "face" },
@@ -119,16 +125,51 @@ const VIDEO_EFFECTS: AREffect[] = [
 
 interface ARPanelProps {
   presets: ARBackground[];
-  onEffectChange: (effect: AREffect | null) => void;
-  selectedEffect: AREffect | null;
+  backgroundEffect: AREffect | null;
+  onBackgroundChange: (effect: AREffect | null) => void;
+  faceEffect: AREffect | null;
+  onFaceChange: (effect: AREffect | null) => void;
   selectedVoiceEffect: VoiceEffect;
   onVoiceEffectChange: (v: VoiceEffect) => void;
 }
 
+/** A wrap of selectable effect tiles for one slot (background or face). */
+function EffectGrid({
+  effects, selected, onSelect,
+}: { effects: AREffect[]; selected: AREffect | null; onSelect: (effect: AREffect | null) => void }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {effects.map((effect) => (
+        <button
+          key={effect.id}
+          type="button"
+          onClick={() => onSelect(effect.type === "none" ? null : effect)}
+          className={cn(
+            "flex flex-col items-center gap-1 rounded-xl border px-3 py-2 text-xs transition-colors",
+            selected?.id === effect.id || (effect.type === "none" && !selected)
+              ? "border-purple-500 bg-purple-500/20 text-purple-300"
+              : "border-white/10 bg-white/5 text-[var(--color-q4w-muted)] hover:border-white/20 hover:text-white",
+          )}
+        >
+          {effect.type === "preset-bg" && effect.presetImage ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={effect.presetImage} alt={effect.name} className="h-10 w-16 rounded object-cover" />
+          ) : (
+            <span className="text-xl">{effect.icon}</span>
+          )}
+          <span className="max-w-[4rem] truncate">{effect.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function ARPanel({
   presets,
-  onEffectChange,
-  selectedEffect,
+  backgroundEffect,
+  onBackgroundChange,
+  faceEffect,
+  onFaceChange,
   selectedVoiceEffect,
   onVoiceEffectChange,
 }: ARPanelProps) {
@@ -140,38 +181,24 @@ export function ARPanel({
     presetImage: p.url,
     category: "backgrounds" as const,
   }));
-  const allVideoEffects = [...VIDEO_EFFECTS, ...presetEffects];
+  const backgroundEffects = [...BACKGROUND_EFFECTS, ...presetEffects];
 
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3 space-y-3">
-      {/* ── Video effects ── */}
+      {/* ── Background ── */}
       <div>
         <p className="mb-2 text-xs font-semibold text-[var(--color-q4w-muted)] uppercase tracking-wider">
-          🎥 Video Effects
+          🖼️ Background
         </p>
-        <div className="flex flex-wrap gap-2">
-          {allVideoEffects.map((effect) => (
-            <button
-              key={effect.id}
-              type="button"
-              onClick={() => onEffectChange(effect.type === "none" ? null : effect)}
-              className={cn(
-                "flex flex-col items-center gap-1 rounded-xl border px-3 py-2 text-xs transition-colors",
-                selectedEffect?.id === effect.id || (effect.type === "none" && !selectedEffect)
-                  ? "border-purple-500 bg-purple-500/20 text-purple-300"
-                  : "border-white/10 bg-white/5 text-[var(--color-q4w-muted)] hover:border-white/20 hover:text-white",
-              )}
-            >
-              {effect.type === "preset-bg" && effect.presetImage ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={effect.presetImage} alt={effect.name} className="h-10 w-16 rounded object-cover" />
-              ) : (
-                <span className="text-xl">{effect.icon}</span>
-              )}
-              <span className="max-w-[4rem] truncate">{effect.name}</span>
-            </button>
-          ))}
-        </div>
+        <EffectGrid effects={backgroundEffects} selected={backgroundEffect} onSelect={onBackgroundChange} />
+      </div>
+
+      {/* ── Face filter — composites on top of the background ── */}
+      <div>
+        <p className="mb-2 text-xs font-semibold text-[var(--color-q4w-muted)] uppercase tracking-wider">
+          😎 Face Filter
+        </p>
+        <EffectGrid effects={FACE_EFFECTS} selected={faceEffect} onSelect={onFaceChange} />
       </div>
 
       {/* ── Voice effects ── */}
@@ -304,7 +331,9 @@ export function ARToggleButton({ arEnabled, onToggle, disabled }: ARToggleButton
 
 export function useARState() {
   const [arEnabled, setArEnabled] = useState(false);
-  const [selectedEffect, setSelectedEffect] = useState<AREffect | null>(null);
+  // Background and face filters are independent — they composite together.
+  const [backgroundEffect, setBackgroundEffect] = useState<AREffect | null>(null);
+  const [faceEffect, setFaceEffect] = useState<AREffect | null>(null);
   const [arStream, setArStream] = useState<MediaStream | null>(null);
 
   // Voice effect state
@@ -336,13 +365,14 @@ export function useARState() {
 
   function toggleAR() {
     setArEnabled((v) => {
-      if (v) { setSelectedEffect(null); setArStream(null); }
+      if (v) { setBackgroundEffect(null); setFaceEffect(null); setArStream(null); }
       return !v;
     });
   }
 
   return {
-    arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR,
+    arEnabled, backgroundEffect, setBackgroundEffect, faceEffect, setFaceEffect,
+    arStream, setArStream, toggleAR,
     selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
   };
 }

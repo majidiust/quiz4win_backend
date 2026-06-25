@@ -34,7 +34,10 @@ export interface SegmentationSettings {
 
 interface MediaPipeARProps {
   enabled?: boolean;
-  selectedEffect?: AREffect | null;
+  /** Background-class effect (blur / silhouette / preset image). Applied first. */
+  backgroundEffect?: AREffect | null;
+  /** Face-class effect (face-blur / beauty / cat / star). Composited on top. */
+  faceEffect?: AREffect | null;
   customBackgroundUrl?: string;
   containerRef: React.RefObject<HTMLDivElement | null>;
   onReady?: () => void;
@@ -45,7 +48,8 @@ interface MediaPipeARProps {
 
 export default function MediaPipeAR({
   enabled = false,
-  selectedEffect = null,
+  backgroundEffect = null,
+  faceEffect = null,
   customBackgroundUrl,
   containerRef,
   onReady,
@@ -129,16 +133,16 @@ export default function MediaPipeAR({
 
   // Load background image
   useEffect(() => {
-    if (!selectedEffect || !isInitialized) return;
+    if (!backgroundEffect || !isInitialized) return;
     let imageUrl: string | null = null;
-    if (selectedEffect.type === 'background' && customBackgroundUrl) imageUrl = customBackgroundUrl;
-    else if (selectedEffect.type === 'preset-bg' && selectedEffect.presetImage) imageUrl = selectedEffect.presetImage;
+    if (backgroundEffect.type === 'background' && customBackgroundUrl) imageUrl = customBackgroundUrl;
+    else if (backgroundEffect.type === 'preset-bg' && backgroundEffect.presetImage) imageUrl = backgroundEffect.presetImage;
     if (imageUrl) {
       const img = new Image(); img.crossOrigin = 'anonymous';
       img.onload = () => { backgroundImageRef.current = img; };
       img.src = imageUrl;
     } else { backgroundImageRef.current = null; }
-  }, [selectedEffect, customBackgroundUrl, isInitialized]);
+  }, [backgroundEffect, customBackgroundUrl, isInitialized]);
 
   // Rendering loop
   useEffect(() => {
@@ -196,8 +200,10 @@ export default function MediaPipeAR({
         canvas.width = video.videoWidth || 1280; canvas.height = video.videoHeight || 720;
       }
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const effect = selectedEffect;
-      try {
+      // Routes by effect.type, so a background-class effect only runs the
+      // segmentation branches and a face-class effect only the landmark
+      // branch. Calling it for each slot composites both in a single frame.
+      const applyEffect = (effect: AREffect | null) => {
         if (!effect || effect.type === 'none') { /* passthrough */ }
         else if (effect.type === 'blur' || effect.type === 'background' || effect.type === 'preset-bg') {
           const res = segmenter.segmentForVideo(video, performance.now());
@@ -361,12 +367,16 @@ export default function MediaPipeAR({
             }
           }
         }
+      };
+      try {
+        applyEffect(backgroundEffect); // composite background first
+        applyEffect(faceEffect);       // then draw face overlay on top
       } catch { ctx.drawImage(video, 0, 0, canvas.width, canvas.height); }
       animationFrameRef.current = requestAnimationFrame(renderFrame);
     };
     renderFrame();
     return () => { if (animationFrameRef.current) { cancelAnimationFrame(animationFrameRef.current); animationFrameRef.current = null; } };
-  }, [enabled, isInitialized, selectedEffect]);
+  }, [enabled, isInitialized, backgroundEffect, faceEffect]);
 
   // Show/hide canvas
   useEffect(() => {

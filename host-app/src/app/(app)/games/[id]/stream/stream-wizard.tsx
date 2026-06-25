@@ -31,7 +31,8 @@ export function StreamWizard({
 
   // AR + voice state
   const {
-    arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR,
+    arEnabled, backgroundEffect, setBackgroundEffect, faceEffect, setFaceEffect,
+    arStream, setArStream, toggleAR,
     selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
   } = useARState();
   const [arModalOpen, setArModalOpen] = useState(false);
@@ -194,7 +195,8 @@ export function StreamWizard({
             {/* AR component renders its canvas inside arContainerRef */}
             <MediaPipeAR
               enabled={arEnabled}
-              selectedEffect={selectedEffect}
+              backgroundEffect={backgroundEffect}
+              faceEffect={faceEffect}
               containerRef={arContainerRef}
               onStreamReady={setArStream}
             />
@@ -247,8 +249,10 @@ export function StreamWizard({
             {arEnabled && (
               <ARPanel
                 presets={arBackgrounds}
-                selectedEffect={selectedEffect}
-                onEffectChange={setSelectedEffect}
+                backgroundEffect={backgroundEffect}
+                onBackgroundChange={setBackgroundEffect}
+                faceEffect={faceEffect}
+                onFaceChange={setFaceEffect}
                 selectedVoiceEffect={selectedVoiceEffect}
                 onVoiceEffectChange={setSelectedVoiceEffect}
               />
@@ -295,8 +299,10 @@ export function StreamWizard({
         arEnabled={arEnabled}
         onToggle={toggleAR}
         presets={arBackgrounds}
-        selectedEffect={selectedEffect}
-        onEffectChange={setSelectedEffect}
+        backgroundEffect={backgroundEffect}
+        onBackgroundChange={setBackgroundEffect}
+        faceEffect={faceEffect}
+        onFaceChange={setFaceEffect}
         selectedVoiceEffect={selectedVoiceEffect}
         onVoiceEffectChange={setSelectedVoiceEffect}
       />
