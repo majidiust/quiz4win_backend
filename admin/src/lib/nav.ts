@@ -27,6 +27,7 @@ import {
   BrainCircuit,
   Music2,
   ListChecks,
+  ImageIcon,
 } from "lucide-react";
 import type { AdminRole } from "./auth";
 
@@ -72,6 +73,7 @@ export const navSections: NavSection[] = [
       { title: "LiveKit Rooms", href: "/livekit", icon: Video, roles: ["super_admin", "admin"] },
       { title: "Questions", href: "/questions", icon: BookOpen, roles: ["super_admin", "admin", "moderator"] },
       { title: "Sounds", href: "/sounds", icon: Music2, roles: ["super_admin", "admin"] },
+      { title: "AR Backgrounds", href: "/ar-backgrounds", icon: ImageIcon, roles: ["super_admin", "admin"] },
     ],
   },
   {

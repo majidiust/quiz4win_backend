@@ -19,6 +19,9 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
     redirect(`/games/${id}?error=${encodeURIComponent(r.error)}`);
   }
   const { session, game } = r.data!;
+  const { getARBackgrounds } = await import("./actions");
+  const arBackgrounds = await getARBackgrounds();
+
   return (
     <>
       <PageHeader title="Stream readiness" subtitle={game.title} back={`/games/${id}`} />
@@ -32,6 +35,7 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
         gameId={id}
         initialSession={session}
         livekitRoom={game.livekit_room_name ?? `game-${id}`}
+        arBackgrounds={arBackgrounds}
       />
     </>
   );

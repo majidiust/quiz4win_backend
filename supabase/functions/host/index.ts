@@ -36,6 +36,7 @@
  *   GET    /host/withdrawals                      — own withdrawal history
  *   POST   /host/withdrawals                      — request a payout (≥ $10)
  *   GET    /host/withdrawals/:id                  — detail view
+ *   GET    /host/ar-backgrounds                   — active preset backgrounds for AR streaming
  */
 
 import { handleCors } from "../_shared/cors.ts";
@@ -745,7 +746,8 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
           created_at: nowIso(), updated_at: nowIso(),
         });
       }
-      return successResponse({ token, room_name: room, identity: `host-${host.id}` });
+      const livekitUrl = Deno.env.get("LIVEKIT_SERVER_URL") ?? "";
+      return successResponse({ token, room_name: room, identity: `host-${host.id}`, livekit_url: livekitUrl });
     }
     if (parts.length === 4 && parts[3] === "end" && method === "POST") {
       const body = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -925,6 +927,18 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
 
       return successResponse({ withdrawal }, 201);
     }
+  }
+
+  // ── /host/ar-backgrounds ───────────────────────────────────────────────────
+  // Returns active background presets for the AR streaming panel.
+  if (parts[0] === "ar-backgrounds" && parts.length === 1 && method === "GET") {
+    const { data, error } = await db.from("ar_backgrounds")
+      .select("id, name, url, sort_order")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: false });
+    if (error) return errorResponse("failed_to_fetch_backgrounds", 500);
+    return successResponse({ backgrounds: data ?? [] });
   }
 
   return errorResponse("not_found", 404);

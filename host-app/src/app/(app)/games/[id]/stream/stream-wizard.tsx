@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/ui/status-chip";
 import { cn } from "@/lib/utils";
 import { patchSession, goLive, endStream } from "./actions";
+import { ARToggleButton, ARPanel, useARState, type ARBackground } from "./ar-panel";
+import MediaPipeAR from "@/components/ar-preview";
 
 interface Session { id: string; status: string; camera_ok: boolean; mic_ok: boolean; connection_ok: boolean }
 
 export function StreamWizard({
-  gameId, initialSession,
-}: { gameId: string; initialSession: Session | null; livekitRoom: string }) {
+  gameId, initialSession, arBackgrounds,
+}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[] }) {
   const [session, setSession] = useState<Session | null>(initialSession);
   const [camOk, setCamOk]   = useState(initialSession?.camera_ok ?? false);
   const [micOk, setMicOk]   = useState(initialSession?.mic_ok ?? false);
@@ -20,10 +22,18 @@ export function StreamWizard({
   const [busy, setBusy]     = useState<string | null>(null);
   const [error, setError]   = useState<string | null>(null);
   const [token, setToken]   = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef  = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const arContainerRef = useRef<HTMLDivElement | null>(null);
+  const livekitRoomRef = useRef<import("livekit-client").Room | null>(null);
 
-  useEffect(() => () => { streamRef.current?.getTracks().forEach((t) => t.stop()); }, []);
+  // AR state
+  const { arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR } = useARState();
+
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    livekitRoomRef.current?.disconnect();
+  }, []);
 
   const persist = useCallback(async (patch: Parameters<typeof patchSession>[1]) => {
     const r = await patchSession(gameId, patch);
@@ -82,15 +92,55 @@ export function StreamWizard({
   async function startLive() {
     setBusy("live"); setError(null);
     const r = await goLive(gameId);
-    if (r.ok && r.data) {
-      setToken((r.data as { token: string }).token);
-      setSession({ ...(session as Session), status: "live" });
-    } else setError((r as { error: string }).error || "Failed to go live");
+    if (!r.ok) { setError((r as { error: string }).error || "Failed to go live"); setBusy(null); return; }
+
+    const { token: lkToken, room_name, livekit_url } = r.data as { token: string; room_name: string; livekit_url: string };
+    setToken(lkToken);
+    setSession({ ...(session as Session), status: "live" });
+
+    // Browser-based LiveKit publishing
+    if (livekit_url && lkToken) {
+      try {
+        const { Room, RoomEvent } = await import("livekit-client");
+        const room = new Room();
+        livekitRoomRef.current = room;
+
+        // Determine video source: AR canvas stream or raw camera
+        const videoSource = arEnabled && arStream ? arStream.getVideoTracks()[0] : streamRef.current?.getVideoTracks()[0];
+        // Always get a fresh mic audio track
+        let audioTrack: MediaStreamTrack | undefined;
+        try {
+          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioTrack = micStream.getAudioTracks()[0];
+        } catch { /* mic optional */ }
+
+        await room.connect(livekit_url, lkToken);
+
+        if (videoSource) {
+          const { LocalVideoTrack } = await import("livekit-client");
+          const lvt = new LocalVideoTrack(videoSource);
+          await room.localParticipant.publishTrack(lvt);
+        }
+        if (audioTrack) {
+          const { LocalAudioTrack } = await import("livekit-client");
+          const lat = new LocalAudioTrack(audioTrack);
+          await room.localParticipant.publishTrack(lat);
+        }
+
+        room.on(RoomEvent.Disconnected, () => { livekitRoomRef.current = null; });
+      } catch (err) {
+        console.error("[stream-wizard] LiveKit publish error:", err instanceof Error ? err.message : err);
+        // Non-fatal: token is still shown so OBS fallback works
+      }
+    }
+
     setBusy(null);
   }
 
   async function stopLive() {
     setBusy("end");
+    livekitRoomRef.current?.disconnect();
+    livekitRoomRef.current = null;
     await endStream(gameId, {});
     setSession({ ...(session as Session), status: "ended" });
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -113,10 +163,34 @@ export function StreamWizard({
           <CardTitle>Session</CardTitle>
           <StatusChip status={session?.status ?? "created"} />
         </div>
-        <div className="mt-3 aspect-video w-full overflow-hidden rounded-2xl bg-black/40">
+
+        {/* Camera / AR preview */}
+        <div ref={arContainerRef} className="relative mt-3 aspect-video w-full overflow-hidden rounded-2xl bg-black/40">
+          {/* Raw camera preview — hidden when AR is active (AR canvas overlays it) */}
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
+          <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", arEnabled && "invisible")} />
+          {/* AR component renders its canvas inside arContainerRef */}
+          <MediaPipeAR
+            enabled={arEnabled}
+            selectedEffect={selectedEffect}
+            containerRef={arContainerRef}
+            onStreamReady={setArStream}
+          />
         </div>
+
+        {/* AR toggle */}
+        <div className="mt-3 flex justify-end">
+          <ARToggleButton arEnabled={arEnabled} onToggle={toggleAR} disabled={!camOk} />
+        </div>
+
+        {/* AR effects panel — shown only when AR is on */}
+        {arEnabled && (
+          <ARPanel
+            presets={arBackgrounds}
+            selectedEffect={selectedEffect}
+            onEffectChange={setSelectedEffect}
+          />
+        )}
       </Card>
 
       <Check icon={Camera} label="Camera"          ok={camOk} busy={busy === "cam"} onClick={testCamera} />
@@ -135,7 +209,13 @@ export function StreamWizard({
           </Button>
         )}
         {token ? (
-          <Card><CardSubtitle>LiveKit token issued. Use it to join the room from your streaming client.</CardSubtitle></Card>
+          <Card>
+            <CardSubtitle>
+              {arEnabled
+                ? "You are live with AR effects. The processed video is being published directly from your browser."
+                : "You are live. Use the LiveKit token to join from an external streaming client (e.g. OBS) if needed."}
+            </CardSubtitle>
+          </Card>
         ) : null}
       </div>
     </>

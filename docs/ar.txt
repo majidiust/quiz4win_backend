@@ -1,0 +1,880 @@
+'use client';
+
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { FilesetResolver, ImageSegmenter, FaceLandmarker } from '@mediapipe/tasks-vision';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+declare global {
+  interface Window {
+    _mpDebugLogged?: boolean;
+  }
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export interface AREffect {
+  id: string;
+  name: string;
+  type: 'background' | 'filter' | 'blur' | 'beauty' | 'preset-bg' | 'silhouette' | 'silhouette-bg' | 'none';
+  icon: string;
+  effectFile?: string; // Kept for compatibility, not used with MediaPipe
+  presetImage?: string; // For preset-bg with static image
+  category?: 'backgrounds' | 'filters' | 'beauty' | 'none';
+}
+
+export interface SegmentationSettings {
+  threshold: number;        // Mask threshold (0-255), default 127
+  edgeSmoothing: number;    // Edge smoothing kernel size (1, 3, 5), default 3
+  alphaThreshold: number;   // Alpha blending threshold (0.0-1.0), default 0.1
+}
+
+interface MediaPipeARProps {
+  enabled?: boolean;
+  selectedEffect?: AREffect | null;
+  customBackgroundUrl?: string;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onReady?: () => void;
+  onStreamReady?: (stream: MediaStream) => void;
+  videoDeviceId?: string;
+  segmentationSettings?: SegmentationSettings;
+}
+
+// Default background images (same as BanubaAR)
+export const DEFAULT_BACKGROUNDS = [
+  { id: 'office', name: 'Office', url: '/backgrounds/office.jpg', icon: '🏢' },
+  { id: 'beach', name: 'Beach', url: '/backgrounds/beach.jpg', icon: '🏖️' },
+  { id: 'city', name: 'City', url: '/backgrounds/city.jpg', icon: '🌆' },
+  { id: 'nature', name: 'Nature', url: '/backgrounds/nature.jpg', icon: '🌳' },
+  { id: 'space', name: 'Space', url: '/backgrounds/space.jpg', icon: '🌌' },
+];
+
+// Available AR effects - backgrounds only
+export const AR_EFFECTS: AREffect[] = [
+  // No Effect
+  { id: 'none', name: 'No Effect', type: 'none', icon: '🚫', category: 'none' },
+
+  // Background effects
+  { id: 'blur', name: 'Blur', type: 'blur', icon: '🌫️', category: 'backgrounds' },
+  { id: 'silhouette', name: 'Silhouette', type: 'silhouette', icon: '🖤', category: 'backgrounds' },
+  { id: 'silhouette-bg', name: 'Silhouette + BG', type: 'silhouette-bg', icon: '🎭', category: 'backgrounds' },
+  { id: 'background', name: 'Custom BG', type: 'background', icon: '🖼️', category: 'backgrounds' },
+  { id: 'preset-bg-1', name: 'BG 1', type: 'preset-bg', icon: '1️⃣', presetImage: '/background-1.jpeg', category: 'backgrounds' },
+  { id: 'preset-bg-2', name: 'BG 2', type: 'preset-bg', icon: '2️⃣', presetImage: '/background-2.jpeg', category: 'backgrounds' },
+  { id: 'preset-bg-3', name: 'BG 3', type: 'preset-bg', icon: '3️⃣', presetImage: '/background-3.jpeg', category: 'backgrounds' },
+  { id: 'preset-bg-4', name: 'BG 4', type: 'preset-bg', icon: '4️⃣', presetImage: '/background-4.jpeg', category: 'backgrounds' },
+  { id: 'preset-bg-5', name: 'BG 5', type: 'preset-bg', icon: '5️⃣', presetImage: '/background-5.jpeg', category: 'backgrounds' },
+  { id: 'cafe-bg', name: 'Café', type: 'preset-bg', icon: '☕', category: 'backgrounds' },
+];
+
+export default function MediaPipeAR({
+  enabled = false,
+  selectedEffect = null,
+  customBackgroundUrl,
+  containerRef,
+  onReady,
+  onStreamReady,
+  videoDeviceId,
+  segmentationSettings = { threshold: 127, edgeSmoothing: 3, alphaThreshold: 0.1 },
+}: MediaPipeARProps) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // MediaPipe refs
+  const imageSegmenterRef = useRef<ImageSegmenter | null>(null);
+  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  
+  // Video and canvas refs
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  // Background image refs
+  const backgroundImageRef = useRef<HTMLImageElement | null>(null);
+  const backgroundVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Segmentation settings ref for real-time updates
+  const segmentationSettingsRef = useRef<SegmentationSettings>(segmentationSettings);
+
+  // Initialize MediaPipe
+  const initializeMediaPipe = useCallback(async () => {
+    if (isInitialized || !containerRef.current || typeof window === 'undefined') return;
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log('[MediaPipe] Initializing...');
+      
+      // Initialize FilesetResolver
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+      );
+
+      // Create Image Segmenter for background effects
+      console.log('[MediaPipe] Creating Image Segmenter...');
+      const segmenter = await ImageSegmenter.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        outputCategoryMask: true,
+        outputConfidenceMasks: true,
+      });
+      imageSegmenterRef.current = segmenter;
+      console.log('[MediaPipe] Image Segmenter created');
+
+      // Create Face Landmarker for face AR effects
+      console.log('[MediaPipe] Creating Face Landmarker...');
+      const landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+      });
+      faceLandmarkerRef.current = landmarker;
+      console.log('[MediaPipe] Face Landmarker created');
+
+      // Set up video element
+      const video = document.createElement('video');
+      video.autoplay = true;
+      video.playsInline = true;
+      video.muted = true;
+      videoRef.current = video;
+
+      // Get camera stream
+      console.log('[MediaPipe] Requesting camera access...');
+      const constraints: MediaStreamConstraints = {
+        video: videoDeviceId ? { deviceId: videoDeviceId } : true,
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+      console.log('[MediaPipe] Camera stream started');
+
+      // Create canvas for rendering
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:10;';
+      canvasRef.current = canvas;
+      containerRef.current.appendChild(canvas);
+      console.log('[MediaPipe] Canvas created');
+
+      // Capture stream from canvas
+      const outputStream = canvas.captureStream(30);
+      streamRef.current = outputStream;
+      console.log('[MediaPipe] Output stream created');
+
+      setIsInitialized(true);
+      setIsLoading(false);
+      console.log('[MediaPipe] Initialization complete');
+
+      onReady?.();
+
+      // Notify stream ready
+      setTimeout(() => {
+        if (streamRef.current) {
+          console.log('[MediaPipe] Notifying stream ready');
+          onStreamReady?.(streamRef.current);
+        }
+      }, 500);
+
+    } catch (err) {
+      console.error('[MediaPipe] Failed to initialize:', err);
+      setError(err instanceof Error ? err.message : 'Failed to initialize AR');
+      setIsLoading(false);
+    }
+  }, [containerRef, onReady, onStreamReady, videoDeviceId, isInitialized]);
+
+  // Update segmentation settings ref when props change
+  useEffect(() => {
+    segmentationSettingsRef.current = segmentationSettings;
+  }, [segmentationSettings]);
+
+  // Initialize when enabled, cleanup when disabled
+  useEffect(() => {
+    if (enabled && !isInitialized && !isLoading) {
+      initializeMediaPipe();
+    } else if (!enabled && isInitialized) {
+      // Cleanup when disabled
+      console.log('[MediaPipe] Disabled, cleaning up...');
+
+      // Stop animation frame
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+
+      // Stop video stream
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => {
+          track.stop();
+          console.log('[MediaPipe] Stopped camera track');
+        });
+        videoRef.current.srcObject = null;
+      }
+
+      // Stop output stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+
+      // Remove canvas
+      if (canvasRef.current?.parentNode) {
+        canvasRef.current.parentNode.removeChild(canvasRef.current);
+        canvasRef.current = null;
+      }
+
+      // Clean up MediaPipe resources
+      if (imageSegmenterRef.current) {
+        imageSegmenterRef.current.close();
+        imageSegmenterRef.current = null;
+      }
+      if (faceLandmarkerRef.current) {
+        faceLandmarkerRef.current.close();
+        faceLandmarkerRef.current = null;
+      }
+
+      setIsInitialized(false);
+      console.log('[MediaPipe] Cleanup complete');
+    }
+  }, [enabled, isInitialized, isLoading, initializeMediaPipe]);
+
+  // Load background image when needed
+  useEffect(() => {
+    if (!selectedEffect || !isInitialized) return;
+
+    const loadBackgroundImage = async () => {
+      let imageUrl: string | null = null;
+
+      if (selectedEffect.type === 'background' && customBackgroundUrl) {
+        imageUrl = customBackgroundUrl;
+      } else if (selectedEffect.type === 'preset-bg' && selectedEffect.presetImage) {
+        imageUrl = selectedEffect.presetImage;
+      }
+
+      if (imageUrl) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          backgroundImageRef.current = img;
+          console.log('[MediaPipe] Background image loaded:', imageUrl);
+        };
+        img.onerror = (err) => {
+          console.error('[MediaPipe] Failed to load background image:', err);
+        };
+        img.src = imageUrl;
+      } else {
+        backgroundImageRef.current = null;
+      }
+    };
+
+    loadBackgroundImage();
+  }, [selectedEffect, customBackgroundUrl, isInitialized]);
+
+  // Rendering loop
+  useEffect(() => {
+    if (!enabled || !isInitialized) {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      return;
+    }
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const segmenter = imageSegmenterRef.current;
+    const landmarker = faceLandmarkerRef.current;
+
+    if (!video || !canvas || !segmenter) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let lastVideoTime = -1;
+
+    const renderFrame = async () => {
+      if (!enabled || !video || !canvas) return;
+
+      const currentTime = video.currentTime;
+      if (currentTime === lastVideoTime) {
+        animationFrameRef.current = requestAnimationFrame(renderFrame);
+        return;
+      }
+      lastVideoTime = currentTime;
+
+      // Set canvas size to match video
+      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+      }
+
+      try {
+        // Process based on effect type
+        if (!selectedEffect || selectedEffect.type === 'none') {
+          // No effect - just draw video
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } else if (selectedEffect.type === 'blur' || selectedEffect.type === 'background' || selectedEffect.type === 'preset-bg') {
+          // Background effects - use segmentation
+          await renderBackgroundEffect(ctx, video, canvas, segmenter);
+        } else if (selectedEffect.type === 'silhouette') {
+          // Silhouette effect - black out the person
+          await renderSilhouetteEffect(ctx, video, canvas, segmenter);
+        } else if (selectedEffect.type === 'silhouette-bg') {
+          // Silhouette + Background - black silhouette with custom/blurred background
+          await renderSilhouetteWithBackgroundEffect(ctx, video, canvas, segmenter);
+        } else if (selectedEffect.type === 'beauty' || selectedEffect.type === 'filter') {
+          // Face effects - use face landmarks
+          await renderFaceEffect(ctx, video, canvas, landmarker);
+        }
+      } catch (err) {
+        console.error('[MediaPipe] Render error:', err);
+        // Fallback: draw video
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+
+      animationFrameRef.current = requestAnimationFrame(renderFrame);
+    };
+
+    // Helper function to render background effects
+    const renderBackgroundEffect = async (
+      ctx: CanvasRenderingContext2D,
+      video: HTMLVideoElement,
+      canvas: HTMLCanvasElement,
+      segmenter: ImageSegmenter
+    ) => {
+      // Segment the image
+      const segmentResult = segmenter.segmentForVideo(video, performance.now());
+
+      if (!segmentResult) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      // Debug: Log what we got from MediaPipe (only once)
+      if (!window._mpDebugLogged) {
+        console.log('[MediaPipe Debug] segmentResult:', {
+          hasConfidenceMasks: !!segmentResult.confidenceMasks,
+          confidenceMasksLength: segmentResult.confidenceMasks?.length,
+          hasCategoryMask: !!segmentResult.categoryMask,
+        });
+        window._mpDebugLogged = true;
+      }
+
+      // Try to use category mask (simpler and more reliable)
+      let maskData: Uint8Array;
+      let maskWidth: number;
+      let maskHeight: number;
+
+      if (segmentResult.categoryMask) {
+        // Use category mask - more reliable
+        const categoryMask = segmentResult.categoryMask;
+        maskData = categoryMask.getAsUint8Array();
+        maskWidth = categoryMask.width;
+        maskHeight = categoryMask.height;
+      } else {
+        // No mask available, just draw video
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      // Draw video frame
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get image data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      // Create background
+      let backgroundCanvas: HTMLCanvasElement | null = null;
+      let backgroundCtx: CanvasRenderingContext2D | null = null;
+
+      if (selectedEffect?.type === 'blur') {
+        // Apply blur to background
+        backgroundCanvas = document.createElement('canvas');
+        backgroundCanvas.width = canvas.width;
+        backgroundCanvas.height = canvas.height;
+        backgroundCtx = backgroundCanvas.getContext('2d');
+        if (backgroundCtx) {
+          backgroundCtx.filter = 'blur(20px)';
+          backgroundCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+      } else if ((selectedEffect?.type === 'background' || selectedEffect?.type === 'preset-bg') && backgroundImageRef.current) {
+        // Use custom background image
+        backgroundCanvas = document.createElement('canvas');
+        backgroundCanvas.width = canvas.width;
+        backgroundCanvas.height = canvas.height;
+        backgroundCtx = backgroundCanvas.getContext('2d');
+        if (backgroundCtx) {
+          backgroundCtx.drawImage(backgroundImageRef.current, 0, 0, canvas.width, canvas.height);
+        }
+      }
+
+      if (backgroundCanvas && backgroundCtx) {
+        const bgImageData = backgroundCtx.getImageData(0, 0, canvas.width, canvas.height);
+        const bgPixels = bgImageData.data;
+
+        // Apply edge smoothing based on settings (use ref for real-time updates)
+        const currentSettings = segmentationSettingsRef.current;
+        const kernelSize = currentSettings.edgeSmoothing;
+        const halfKernel = Math.floor(kernelSize / 2);
+        const smoothedMask = new Uint8Array(maskData.length);
+
+        if (kernelSize > 1) {
+          // Apply smoothing with configurable kernel size
+          for (let i = 0; i < maskData.length; i++) {
+            const x = i % maskWidth;
+            const y = Math.floor(i / maskWidth);
+
+            let sum = 0;
+            let count = 0;
+            for (let dy = -halfKernel; dy <= halfKernel; dy++) {
+              for (let dx = -halfKernel; dx <= halfKernel; dx++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx >= 0 && nx < maskWidth && ny >= 0 && ny < maskHeight) {
+                  const idx = ny * maskWidth + nx;
+                  sum += maskData[idx];
+                  count++;
+                }
+              }
+            }
+            smoothedMask[i] = Math.round(sum / count);
+          }
+        } else {
+          // No smoothing
+          smoothedMask.set(maskData);
+        }
+
+        // Composite foreground and background using smoothed mask
+        // Iterate over canvas pixels to avoid gaps/lines
+        for (let y = 0; y < canvas.height; y++) {
+          for (let x = 0; x < canvas.width; x++) {
+            // Map canvas coordinates to mask coordinates
+            const maskX = Math.floor((x / canvas.width) * maskWidth);
+            const maskY = Math.floor((y / canvas.height) * maskHeight);
+            const maskIndex = maskY * maskWidth + maskX;
+
+            const canvasIndex = (y * canvas.width + x) * 4;
+
+            if (maskIndex >= 0 && maskIndex < smoothedMask.length && canvasIndex >= 0 && canvasIndex < pixels.length - 3) {
+              // Category mask: 0 = person, 255 = background (in Uint8Array)
+              const maskValue = smoothedMask[maskIndex];
+
+              // Use configurable threshold for background detection (use ref for real-time updates)
+              if (maskValue > currentSettings.threshold) {
+                // Calculate alpha based on mask value
+                const alpha = (maskValue - currentSettings.threshold) / (255 - currentSettings.threshold);
+
+                // Apply alpha threshold
+                if (alpha > currentSettings.alphaThreshold) {
+                  pixels[canvasIndex] = Math.round(pixels[canvasIndex] * (1 - alpha) + bgPixels[canvasIndex] * alpha);
+                  pixels[canvasIndex + 1] = Math.round(pixels[canvasIndex + 1] * (1 - alpha) + bgPixels[canvasIndex + 1] * alpha);
+                  pixels[canvasIndex + 2] = Math.round(pixels[canvasIndex + 2] * (1 - alpha) + bgPixels[canvasIndex + 2] * alpha);
+                }
+              }
+            }
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+      }
+    };
+
+    // Helper function to render silhouette effect
+    const renderSilhouetteEffect = async (
+      ctx: CanvasRenderingContext2D,
+      video: HTMLVideoElement,
+      canvas: HTMLCanvasElement,
+      segmenter: ImageSegmenter
+    ) => {
+      // Segment the image
+      const segmentResult = segmenter.segmentForVideo(video, performance.now());
+
+      if (!segmentResult || !segmentResult.categoryMask) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      // Draw the original video first
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get the mask data
+      const categoryMask = segmentResult.categoryMask;
+      const maskData = categoryMask.getAsUint8Array();
+      const maskWidth = categoryMask.width;
+      const maskHeight = categoryMask.height;
+
+      // Get image data to modify
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      // Apply edge smoothing based on settings (use ref for real-time updates)
+      const currentSettings = segmentationSettingsRef.current;
+      const kernelSize = currentSettings.edgeSmoothing;
+      const halfKernel = Math.floor(kernelSize / 2);
+      const smoothedMask = new Uint8Array(maskData.length);
+
+      if (kernelSize > 1) {
+        // Apply smoothing with configurable kernel size
+        for (let i = 0; i < maskData.length; i++) {
+          const x = i % maskWidth;
+          const y = Math.floor(i / maskWidth);
+
+          let sum = 0;
+          let count = 0;
+          for (let dy = -halfKernel; dy <= halfKernel; dy++) {
+            for (let dx = -halfKernel; dx <= halfKernel; dx++) {
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx >= 0 && nx < maskWidth && ny >= 0 && ny < maskHeight) {
+                const idx = ny * maskWidth + nx;
+                sum += maskData[idx];
+                count++;
+              }
+            }
+          }
+          smoothedMask[i] = Math.round(sum / count);
+        }
+      } else {
+        // No smoothing
+        smoothedMask.set(maskData);
+      }
+
+      // Black out the person (inverse of background replacement)
+      // Iterate over canvas pixels to avoid gaps/lines
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          // Map canvas coordinates to mask coordinates
+          const maskX = Math.floor((x / canvas.width) * maskWidth);
+          const maskY = Math.floor((y / canvas.height) * maskHeight);
+          const maskIndex = maskY * maskWidth + maskX;
+
+          const canvasIndex = (y * canvas.width + x) * 4;
+
+          if (maskIndex >= 0 && maskIndex < smoothedMask.length && canvasIndex >= 0 && canvasIndex < pixels.length - 3) {
+            const maskValue = smoothedMask[maskIndex];
+
+            // If this is a person pixel (maskValue <= threshold), black it out
+            if (maskValue <= currentSettings.threshold) {
+              // Calculate alpha for smooth edges
+              const alpha = 1.0 - (maskValue / currentSettings.threshold);
+
+              if (alpha > currentSettings.alphaThreshold) {
+                // Blend to black
+                pixels[canvasIndex] = Math.round(pixels[canvasIndex] * (1 - alpha));
+                pixels[canvasIndex + 1] = Math.round(pixels[canvasIndex + 1] * (1 - alpha));
+                pixels[canvasIndex + 2] = Math.round(pixels[canvasIndex + 2] * (1 - alpha));
+              }
+            }
+          }
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    };
+
+    // Helper function to render silhouette with background replacement
+    const renderSilhouetteWithBackgroundEffect = async (
+      ctx: CanvasRenderingContext2D,
+      video: HTMLVideoElement,
+      canvas: HTMLCanvasElement,
+      segmenter: ImageSegmenter
+    ) => {
+      // Segment the image
+      const segmentResult = segmenter.segmentForVideo(video, performance.now());
+
+      if (!segmentResult || !segmentResult.categoryMask) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      // Get the mask data
+      const categoryMask = segmentResult.categoryMask;
+      const maskData = categoryMask.getAsUint8Array();
+      const maskWidth = categoryMask.width;
+      const maskHeight = categoryMask.height;
+
+      // Draw the original video first
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get image data to modify
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+
+      // Prepare background (blur or custom image)
+      const backgroundCanvas = document.createElement('canvas');
+      backgroundCanvas.width = canvas.width;
+      backgroundCanvas.height = canvas.height;
+      const backgroundCtx = backgroundCanvas.getContext('2d');
+
+      if (backgroundCtx) {
+        if (selectedEffect?.type === 'silhouette-bg') {
+          // Use blur or custom background based on customBackgroundUrl
+          if (customBackgroundUrl) {
+            // Custom background
+            if (backgroundImageRef.current) {
+              backgroundCtx.drawImage(backgroundImageRef.current, 0, 0, canvas.width, canvas.height);
+            } else {
+              // Fallback to blur if image not loaded
+              backgroundCtx.filter = 'blur(20px)';
+              backgroundCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              backgroundCtx.filter = 'none';
+            }
+          } else {
+            // Default to blur
+            backgroundCtx.filter = 'blur(20px)';
+            backgroundCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            backgroundCtx.filter = 'none';
+          }
+        }
+      }
+
+      if (backgroundCanvas && backgroundCtx) {
+        const bgImageData = backgroundCtx.getImageData(0, 0, canvas.width, canvas.height);
+        const bgPixels = bgImageData.data;
+
+        // Apply edge smoothing based on settings (use ref for real-time updates)
+        const currentSettings = segmentationSettingsRef.current;
+        const kernelSize = currentSettings.edgeSmoothing;
+        const halfKernel = Math.floor(kernelSize / 2);
+        const smoothedMask = new Uint8Array(maskData.length);
+
+        if (kernelSize > 1) {
+          // Apply smoothing with configurable kernel size
+          for (let i = 0; i < maskData.length; i++) {
+            const x = i % maskWidth;
+            const y = Math.floor(i / maskWidth);
+
+            let sum = 0;
+            let count = 0;
+            for (let dy = -halfKernel; dy <= halfKernel; dy++) {
+              for (let dx = -halfKernel; dx <= halfKernel; dx++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx >= 0 && nx < maskWidth && ny >= 0 && ny < maskHeight) {
+                  const idx = ny * maskWidth + nx;
+                  sum += maskData[idx];
+                  count++;
+                }
+              }
+            }
+            smoothedMask[i] = Math.round(sum / count);
+          }
+        } else {
+          // No smoothing
+          smoothedMask.set(maskData);
+        }
+
+        // Process each canvas pixel: replace background AND black out person
+        // Iterate over canvas pixels to avoid gaps/lines
+        for (let y = 0; y < canvas.height; y++) {
+          for (let x = 0; x < canvas.width; x++) {
+            // Map canvas coordinates to mask coordinates
+            const maskX = Math.floor((x / canvas.width) * maskWidth);
+            const maskY = Math.floor((y / canvas.height) * maskHeight);
+            const maskIndex = maskY * maskWidth + maskX;
+
+            const canvasIndex = (y * canvas.width + x) * 4;
+
+            if (maskIndex >= 0 && maskIndex < smoothedMask.length && canvasIndex >= 0 && canvasIndex < pixels.length - 3) {
+              const maskValue = smoothedMask[maskIndex];
+
+              // If this is a person pixel (maskValue <= threshold), black it out
+              if (maskValue <= currentSettings.threshold) {
+                // Calculate alpha for smooth edges
+                const alpha = 1.0 - (maskValue / currentSettings.threshold);
+
+                if (alpha > currentSettings.alphaThreshold) {
+                  // Blend to black (silhouette)
+                  pixels[canvasIndex] = Math.round(pixels[canvasIndex] * (1 - alpha));
+                  pixels[canvasIndex + 1] = Math.round(pixels[canvasIndex + 1] * (1 - alpha));
+                  pixels[canvasIndex + 2] = Math.round(pixels[canvasIndex + 2] * (1 - alpha));
+                }
+              } else {
+                // This is background - replace it
+                const alpha = (maskValue - currentSettings.threshold) / (255 - currentSettings.threshold);
+
+                if (alpha > currentSettings.alphaThreshold) {
+                  pixels[canvasIndex] = Math.round(pixels[canvasIndex] * (1 - alpha) + bgPixels[canvasIndex] * alpha);
+                  pixels[canvasIndex + 1] = Math.round(pixels[canvasIndex + 1] * (1 - alpha) + bgPixels[canvasIndex + 1] * alpha);
+                  pixels[canvasIndex + 2] = Math.round(pixels[canvasIndex + 2] * (1 - alpha) + bgPixels[canvasIndex + 2] * alpha);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+    };
+
+    // Helper function to render face effects
+    const renderFaceEffect = async (
+      ctx: CanvasRenderingContext2D,
+      video: HTMLVideoElement,
+      canvas: HTMLCanvasElement,
+      landmarker: FaceLandmarker | null
+    ) => {
+      // Draw video first
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      if (!landmarker) return;
+
+      // Detect face landmarks
+      const faceResult = landmarker.detectForVideo(video, performance.now());
+
+      if (!faceResult || !faceResult.faceLandmarks || faceResult.faceLandmarks.length === 0) {
+        return;
+      }
+
+      const landmarks = faceResult.faceLandmarks[0];
+
+      // Apply effect based on type
+      if (selectedEffect?.type === 'beauty') {
+        // Apply beauty effect (skin smoothing simulation)
+        applyBeautyEffect(ctx, canvas);
+      } else if (selectedEffect?.type === 'filter') {
+        // Apply filter overlays based on landmarks
+        applyFilterEffect(ctx, canvas, landmarks);
+      }
+    };
+
+    // Beauty effect (simple skin smoothing)
+    const applyBeautyEffect = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      // Simple brightness/contrast adjustment for beauty effect
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = Math.min(255, data[i] * 1.1);     // R
+        data[i + 1] = Math.min(255, data[i + 1] * 1.1); // G
+        data[i + 2] = Math.min(255, data[i + 2] * 1.1); // B
+      }
+      ctx.putImageData(imageData, 0, 0);
+    };
+
+    // Filter effect (draw overlays based on face landmarks)
+    const applyFilterEffect = (
+      ctx: CanvasRenderingContext2D,
+      canvas: HTMLCanvasElement,
+      landmarks: any
+    ) => {
+      // Example: Draw simple overlay based on effect type
+      if (selectedEffect?.id === 'glasses') {
+        // Draw glasses overlay using eye landmarks
+        // This is a placeholder - in production you'd use actual overlay images
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.lineWidth = 3;
+        // Draw simple glasses frame (simplified)
+        const leftEye = landmarks[33]; // Left eye landmark
+        const rightEye = landmarks[263]; // Right eye landmark
+        if (leftEye && rightEye) {
+          const eyeDistance = Math.sqrt(
+            Math.pow((rightEye.x - leftEye.x) * canvas.width, 2) +
+            Math.pow((rightEye.y - leftEye.y) * canvas.height, 2)
+          );
+          const glassesWidth = eyeDistance * 0.4;
+
+          ctx.beginPath();
+          ctx.arc(leftEye.x * canvas.width, leftEye.y * canvas.height, glassesWidth, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(rightEye.x * canvas.width, rightEye.y * canvas.height, glassesWidth, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      // Add more filter effects here based on selectedEffect.id
+    };
+
+    renderFrame();
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [enabled, isInitialized, selectedEffect]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Stop animation frame
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      // Stop video stream
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+      }
+
+      // Stop output stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      // Remove canvas
+      if (canvasRef.current?.parentNode) {
+        canvasRef.current.parentNode.removeChild(canvasRef.current);
+      }
+
+      // Clean up MediaPipe resources
+      if (imageSegmenterRef.current) {
+        imageSegmenterRef.current.close();
+        imageSegmenterRef.current = null;
+      }
+
+      if (faceLandmarkerRef.current) {
+        faceLandmarkerRef.current.close();
+        faceLandmarkerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Handle enable/disable
+  useEffect(() => {
+    const canvas = canvasRef.current;
+
+    if (enabled && isInitialized && canvas) {
+      // Show canvas
+      if (containerRef.current && !containerRef.current.contains(canvas)) {
+        containerRef.current.appendChild(canvas);
+      }
+      console.log('[MediaPipe] Enabled');
+    } else if (!enabled && canvas) {
+      // Hide canvas
+      if (canvas.parentNode) {
+        canvas.parentNode.removeChild(canvas);
+      }
+      console.log('[MediaPipe] Disabled');
+    }
+  }, [enabled, isInitialized, containerRef]);
+
+  return (
+    <>
+      {isLoading && enabled && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 pointer-events-none">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-4 border-purple-500 border-t-transparent mx-auto mb-2"></div>
+            <p className="text-white text-sm">Loading AR...</p>
+          </div>
+        </div>
+      )}
+      {error && enabled && (
+        <div className="absolute top-2 left-2 right-2 bg-red-600/90 text-white px-3 py-2 rounded-lg text-sm z-30">
+          ⚠️ {error}
+        </div>
+      )}
+    </>
+  );
+}
