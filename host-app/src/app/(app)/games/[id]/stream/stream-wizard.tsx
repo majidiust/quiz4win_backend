@@ -8,13 +8,14 @@ import { StatusChip } from "@/components/ui/status-chip";
 import { cn } from "@/lib/utils";
 import { patchSession, goLive, endStream } from "./actions";
 import { ARToggleButton, ARPanel, useARState, type ARBackground } from "./ar-panel";
+import { GameControlPanel } from "./game-control-panel";
 import MediaPipeAR from "@/components/ar-preview";
 
 interface Session { id: string; status: string; camera_ok: boolean; mic_ok: boolean; connection_ok: boolean }
 
 export function StreamWizard({
-  gameId, initialSession, arBackgrounds,
-}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[] }) {
+  gameId, initialSession, arBackgrounds, runMode,
+}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[]; runMode?: string | null }) {
   const [session, setSession] = useState<Session | null>(initialSession);
   const [camOk, setCamOk]   = useState(initialSession?.camera_ok ?? false);
   const [micOk, setMicOk]   = useState(initialSession?.mic_ok ?? false);
@@ -22,6 +23,7 @@ export function StreamWizard({
   const [busy, setBusy]     = useState<string | null>(null);
   const [error, setError]   = useState<string | null>(null);
   const [token, setToken]   = useState<string | null>(null);
+  const [room, setRoom]     = useState<import("livekit-client").Room | null>(null);
   const videoRef  = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const arContainerRef = useRef<HTMLDivElement | null>(null);
@@ -121,6 +123,7 @@ export function StreamWizard({
         } catch { /* mic optional */ }
 
         await room.connect(livekit_url, lkToken);
+        setRoom(room);
 
         if (videoSource) {
           const { LocalVideoTrack } = await import("livekit-client");
@@ -133,7 +136,7 @@ export function StreamWizard({
           await room.localParticipant.publishTrack(lat);
         }
 
-        room.on(RoomEvent.Disconnected, () => { livekitRoomRef.current = null; });
+        room.on(RoomEvent.Disconnected, () => { livekitRoomRef.current = null; setRoom(null); });
       } catch (err) {
         console.error("[stream-wizard] LiveKit publish error:", err instanceof Error ? err.message : err);
         // Non-fatal: token is still shown so OBS fallback works
@@ -147,6 +150,7 @@ export function StreamWizard({
     setBusy("end");
     livekitRoomRef.current?.disconnect();
     livekitRoomRef.current = null;
+    setRoom(null);
     destroyVoiceEffect();
     await endStream(gameId, {});
     setSession({ ...(session as Session), status: "ended" });
@@ -227,6 +231,13 @@ export function StreamWizard({
           </Card>
         ) : null}
       </div>
+
+      {/* Presenter-mode host controls — only for command-driven games once live */}
+      {runMode === "presenter" && isLive ? (
+        <div className="mt-3">
+          <GameControlPanel gameId={gameId} room={room} />
+        </div>
+      ) : null}
     </>
   );
 }

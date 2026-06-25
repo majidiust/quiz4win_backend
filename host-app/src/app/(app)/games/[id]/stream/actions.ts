@@ -25,6 +25,20 @@ export async function endStream(gameId: string, opts: { failed?: boolean; reason
   return r;
 }
 
+export type GameCommand =
+  | "PrepareQuestion" | "StartQuestion" | "CloseQuestion" | "AdvanceQuestion" | "FinalizeGame";
+
+export async function sendGameCommand(
+  gameId: string,
+  type: GameCommand,
+  opts: { questionIndex?: number; timeLimitSeconds?: number } = {},
+) {
+  return await api<{ ok: boolean; type: string }>(
+    `/host/games/${gameId}/command`,
+    { method: "POST", body: { type, ...opts } },
+  );
+}
+
 export async function getARBackgrounds(): Promise<ARBackground[]> {
   const r = await api<{ backgrounds: ARBackground[] }>("/host/ar-backgrounds");
   if (r.ok && r.data) return r.data.backgrounds;

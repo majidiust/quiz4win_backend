@@ -31,7 +31,3 @@ CREATE POLICY "anon_read_active" ON public.ar_backgrounds
   FOR SELECT
   TO anon
   USING (is_active = true);
-
--- Record this migration in the schema_migrations tracker.
-INSERT INTO public.schema_migrations (version) VALUES ('20260625120000')
-  ON CONFLICT DO NOTHING;

@@ -28,6 +28,8 @@
  *   POST   /host/games/:id/stream-session         — create/update (testing/ready)
  *   POST   /host/games/:id/stream-session/live    — mint LiveKit token, go live
  *   POST   /host/games/:id/stream-session/end     — end stream
+ *   POST   /host/games/:id/command                — presenter-mode game-flow command
+
  *   GET    /host/earnings                         — own earnings
  *   GET    /host/payment-methods                  — own payout methods
  *   POST   /host/payment-methods                  — create method
@@ -53,6 +55,7 @@ import {
   adminHostEventTemplate,
 } from "../_shared/email.ts";
 import { notifyHost } from "../_shared/host_notifications.ts";
+import { publish } from "../_shared/rabbitmq.ts";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
 const ALLOWED_FILE_MIME = new Set([
@@ -681,7 +684,7 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
   // ── /host/games/:id/stream-session ─────────────────────────────────────────
   if (parts[0] === "games" && parts[2] === "stream-session" && (parts.length === 3 || parts.length === 4)) {
     const gameId = parts[1];
-    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title, host_assignment_status").eq("id", gameId).maybeSingle();
+    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title, host_assignment_status, run_mode").eq("id", gameId).maybeSingle();
     if (!g) return errorResponse("game_not_found", 404);
     if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
     // Host must have accepted the assignment before going live.
@@ -759,6 +762,58 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
       }).eq("host_id", host.id).eq("game_id", gameId);
       return successResponse({ ok: true });
     }
+  }
+
+  // ── /host/games/:id/command ────────────────────────────────────────────────
+  // Presenter-mode host control: forwards a game-flow command to the orchestrator
+  // over RabbitMQ (same command path the AI presenter uses). Only valid for a
+  // live game running in run_mode='presenter' (a human host, no AI presenter).
+  // The host's LiveKit identity (`host-<id>`) is attached as presenterId so the
+  // private QUESTION_PREPARED (carrying the correct answer — the §13.4 presenter
+  // exception to INV-04) is routed to this host's screen.
+  if (parts[0] === "games" && parts[2] === "command" && parts.length === 3 && method === "POST") {
+    if (!requireApproved(host)) return errorResponse("host_not_approved", 403);
+    const gameId = parts[1];
+    const { data: g } = await db.from("games")
+      .select("id, host_id, status, run_mode, livekit_room_name")
+      .eq("id", gameId).maybeSingle();
+    if (!g) return errorResponse("game_not_found", 404);
+    if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
+    if (g.run_mode !== "presenter") return errorResponse("game_not_presenter_mode", 409);
+    if (g.status !== "live") return errorResponse("game_not_running", 409);
+
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const type = String(body.type ?? "");
+    const ALLOWED = new Set([
+      "PrepareQuestion", "StartQuestion", "CloseQuestion", "AdvanceQuestion", "FinalizeGame",
+    ]);
+    if (!ALLOWED.has(type)) return errorResponse("invalid_command", 400);
+
+    const payload: Record<string, unknown> = {
+      type,
+      gameId,
+      presenterId: `host-${host.id}`,
+      correlationId: crypto.randomUUID(),
+      publishedAt: nowIso(),
+    };
+    // Whitelisted, server-validated optional fields (never trust the client).
+    if (typeof body.questionIndex === "number" && Number.isInteger(body.questionIndex) && body.questionIndex >= 0) {
+      payload.questionIndex = body.questionIndex;
+    }
+    if (typeof body.timeLimitSeconds === "number" && body.timeLimitSeconds > 0 && body.timeLimitSeconds <= 600) {
+      payload.timeLimitSeconds = body.timeLimitSeconds;
+    }
+    if (type === "FinalizeGame") {
+      payload.livekitRoomName = g.livekit_room_name ?? `quiz-${gameId}`;
+    }
+
+    const result = await publish({
+      exchange: Deno.env.get("MQ_COMMAND_EXCHANGE") ?? "",
+      routingKey: Deno.env.get("MQ_ORCHESTRATOR_QUEUE") ?? "quiz.game.commands",
+      payload,
+    });
+    if (!result.ok) return errorResponse("command_publish_failed", 502);
+    return successResponse({ ok: true, type });
   }
 
   // ── /host/earnings ─────────────────────────────────────────────────────────

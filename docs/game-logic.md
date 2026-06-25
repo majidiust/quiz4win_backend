@@ -31,6 +31,13 @@ upcoming ──► open (join window) ──► live (running) ──► complet
 | `auto` | Orchestrator timer (fully automatic) | No |
 | `presenter` | Explicit RabbitMQ commands (`PrepareQuestion`, `StartQuestion`, `CloseQuestion`) | Yes — private unicast to presenter identity |
 
+`presenter` covers both the AI Presenter and a **human host**. A live game with a
+host assigned and AI disabled is set to `run_mode='presenter'` by the DB trigger
+`set_presenter_run_mode`; the game is still *started* by the system (as in `auto`),
+but per-question advancement is command-driven. A human host emits those commands
+through `POST /host/games/:id/command` (presenterId `host-<host.id>`) rather than
+publishing to RabbitMQ directly — see `docs/game-commands-protocol.md` §3.1.
+
 ---
 
 ## 3. Auto Mode — Full Event Timeline

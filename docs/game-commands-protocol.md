@@ -88,12 +88,40 @@ sequenceDiagram
 
 The `games.run_mode` column controls who drives the game:
 
-| Mode        | Driver                              | Use case                       |
-|-------------|-------------------------------------|--------------------------------|
-| `auto`      | `game-orchestrator` internal timer  | No presenter, fully automated  |
-| `presenter` | External AI Presenter via commands  | This document                  |
-| `manual`    | Human admin via Admin Panel         | Studio shows                   |
+| Mode        | Driver                                       | Use case                       |
+|-------------|----------------------------------------------|--------------------------------|
+| `auto`      | `game-orchestrator` internal timer           | No presenter, fully automated  |
+| `presenter` | AI Presenter **or** human host via commands  | This document                  |
+| `manual`    | Human admin via Admin Panel                  | Studio shows                   |
 
+A game is set to `presenter` automatically when a human host is assigned and the
+template has AI disabled (DB trigger `set_presenter_run_mode`, migration
+`20260625130000_presenter_run_mode.sql`). Removing the host reverts it to `auto`.
+Both the AI Presenter and a human host drive a `presenter` game through the **same
+command path** described below; they differ only in who emits the commands and in
+the `presenterId` they attach (see §3.1).
+
+### 3.1 Human-host control — `POST /host/games/:id/command`
+
+A human host does not publish to RabbitMQ directly. The host-app calls the
+authenticated Edge Function `POST /host/games/:id/command`, which validates the
+host's JWT and ownership, requires `run_mode='presenter'` and `status='live'`,
+then publishes the command to the orchestrator queue on the host's behalf. It
+attaches `presenterId="host-<host.id>"` so the private `QUESTION_PREPARED`
+(carrying the correct answer) is unicast to the host's own LiveKit identity.
+
+| Field              | Type   | Notes                                                            |
+|--------------------|--------|------------------------------------------------------------------|
+| `type`             | string | One of `PrepareQuestion`, `StartQuestion`, `CloseQuestion`, `AdvanceQuestion`, `FinalizeGame`. |
+| `questionIndex`    | int    | Optional; server-validated (≥ 0).                                |
+| `timeLimitSeconds` | int    | Optional; server-validated (1–600).                              |
+
+`StartGame` is **not** exposed to the host — the game is still started by the
+system (template generator / scheduler) exactly as in `auto` mode. The host only
+drives the per-question flow. The host-app uses a two-click flow: **Preview**
+(`PrepareQuestion`, host privately sees question + answer) → **Reveal**
+(`StartQuestion`, players see the question); `CloseQuestion`/`AdvanceQuestion`/
+`FinalizeGame` map to the remaining buttons.
 
 ---
 
