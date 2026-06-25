@@ -160,6 +160,7 @@ export function StreamWizard({
 
   const allOk = camOk && micOk && netOk;
   const isLive = session?.status === "live";
+  const isPresenter = runMode === "presenter";
 
   return (
     <>
@@ -169,59 +170,83 @@ export function StreamWizard({
         </div>
       ) : null}
 
+      {/*
+        Self-view card. The video/AR block is kept mounted across the
+        setup→live transition (only restyled) so the published LiveKit/AR
+        track is never torn down. When live it collapses to a small
+        thumbnail so the game controls sit at the top, no scrolling needed.
+      */}
       <Card className="mb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle>Session</CardTitle>
-          <StatusChip status={session?.status ?? "created"} />
+        <div className={cn(isLive ? "flex items-center gap-3" : "flex flex-col")}>
+          {/* Persistent self-view — keyed so React preserves MediaPipeAR */}
+          <div
+            key="self-view"
+            ref={arContainerRef}
+            className={cn(
+              "relative shrink-0 overflow-hidden bg-black/40 order-2",
+              isLive ? "h-14 w-24 rounded-xl" : "mt-3 aspect-video w-full rounded-2xl",
+            )}
+          >
+            {/* Raw camera preview — hidden when AR is active (AR canvas overlays it) */}
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", arEnabled && "invisible")} />
+            {/* AR component renders its canvas inside arContainerRef */}
+            <MediaPipeAR
+              enabled={arEnabled}
+              selectedEffect={selectedEffect}
+              containerRef={arContainerRef}
+              onStreamReady={setArStream}
+            />
+          </div>
+
+          {isLive ? (
+            <div key="live-status" className="order-3 flex min-w-0 flex-1 items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-pink-400 opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-pink-500" />
+                  </span>
+                  <span className="text-sm font-semibold">You&rsquo;re live</span>
+                </div>
+                <p className="truncate text-xs text-[var(--color-q4w-muted)]">
+                  {arEnabled ? "AR video publishing from your browser" : "Publishing camera & mic"}
+                </p>
+              </div>
+              <Button variant="danger" className="h-9 w-auto px-4" onClick={stopLive} loading={busy === "end"}>End</Button>
+            </div>
+          ) : (
+            <div key="setup-header" className="order-1 flex items-center justify-between">
+              <CardTitle>Session</CardTitle>
+              <StatusChip status={session?.status ?? "created"} />
+            </div>
+          )}
         </div>
 
-        {/* Camera / AR preview */}
-        <div ref={arContainerRef} className="relative mt-3 aspect-video w-full overflow-hidden rounded-2xl bg-black/40">
-          {/* Raw camera preview — hidden when AR is active (AR canvas overlays it) */}
-          {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-          <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", arEnabled && "invisible")} />
-          {/* AR component renders its canvas inside arContainerRef */}
-          <MediaPipeAR
-            enabled={arEnabled}
-            selectedEffect={selectedEffect}
-            containerRef={arContainerRef}
-            onStreamReady={setArStream}
-          />
-        </div>
-
-        {/* AR toggle */}
-        <div className="mt-3 flex justify-end">
-          <ARToggleButton arEnabled={arEnabled} onToggle={toggleAR} disabled={!camOk} />
-        </div>
-
-        {/* AR + voice effects panel — shown only when AR is on */}
-        {arEnabled && (
-          <ARPanel
-            presets={arBackgrounds}
-            selectedEffect={selectedEffect}
-            onEffectChange={setSelectedEffect}
-            selectedVoiceEffect={selectedVoiceEffect}
-            onVoiceEffectChange={setSelectedVoiceEffect}
-          />
-        )}
+        {/* AR toggle + effects panel — setup only */}
+        {!isLive ? (
+          <>
+            <div className="mt-3 flex justify-end">
+              <ARToggleButton arEnabled={arEnabled} onToggle={toggleAR} disabled={!camOk} />
+            </div>
+            {arEnabled && (
+              <ARPanel
+                presets={arBackgrounds}
+                selectedEffect={selectedEffect}
+                onEffectChange={setSelectedEffect}
+                selectedVoiceEffect={selectedVoiceEffect}
+                onVoiceEffectChange={setSelectedVoiceEffect}
+              />
+            )}
+          </>
+        ) : null}
       </Card>
 
-      <Check icon={Camera} label="Camera"          ok={camOk} busy={busy === "cam"} onClick={testCamera} />
-      <Check icon={Mic}    label="Microphone"      ok={micOk} busy={busy === "mic"} onClick={testMic} />
-      <Check icon={Wifi}   label="Internet"        ok={netOk} busy={busy === "net"} onClick={testNet} />
-
-      <div className="mt-4 flex flex-col gap-3">
-        <Button variant="secondary" onClick={markReady} disabled={!allOk || busy !== null}>
-          Mark ready
-        </Button>
-        {isLive ? (
-          <Button variant="danger" onClick={stopLive} loading={busy === "end"}>End stream</Button>
-        ) : (
-          <Button onClick={startLive} disabled={!allOk || busy !== null} loading={busy === "live"}>
-            <Radio className="mr-2 h-4 w-4" /> Go live
-          </Button>
-        )}
-        {token ? (
+      {isLive ? (
+        /* === LIVE GAME ROOM — controls front and center === */
+        isPresenter ? (
+          <GameControlPanel gameId={gameId} room={room} />
+        ) : token ? (
           <Card>
             <CardSubtitle>
               {arEnabled
@@ -229,15 +254,24 @@ export function StreamWizard({
                 : "You are live. Use the LiveKit token to join from an external streaming client (e.g. OBS) if needed."}
             </CardSubtitle>
           </Card>
-        ) : null}
-      </div>
+        ) : null
+      ) : (
+        /* === SETUP — readiness checks + go live === */
+        <>
+          <Check icon={Camera} label="Camera"     ok={camOk} busy={busy === "cam"} onClick={testCamera} />
+          <Check icon={Mic}    label="Microphone" ok={micOk} busy={busy === "mic"} onClick={testMic} />
+          <Check icon={Wifi}   label="Internet"   ok={netOk} busy={busy === "net"} onClick={testNet} />
 
-      {/* Presenter-mode host controls — only for command-driven games once live */}
-      {runMode === "presenter" && isLive ? (
-        <div className="mt-3">
-          <GameControlPanel gameId={gameId} room={room} />
-        </div>
-      ) : null}
+          <div className="mt-4 flex flex-col gap-3">
+            <Button variant="secondary" onClick={markReady} disabled={!allOk || busy !== null}>
+              Mark ready
+            </Button>
+            <Button onClick={startLive} disabled={!allOk || busy !== null} loading={busy === "live"}>
+              <Radio className="mr-2 h-4 w-4" /> Go live
+            </Button>
+          </div>
+        </>
+      )}
     </>
   );
 }
