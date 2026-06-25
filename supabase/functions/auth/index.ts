@@ -39,7 +39,12 @@ Deno.serve(async (req: Request) => {
   try {
     // ── POST /auth/signup ──────────────────────────────────────────────────
     if (path === "signup" && req.method === "POST") {
-      const { name, email, password, referral_code, flow } = await req.json();
+      const { name, email: rawEmail, password, referral_code, flow } = await req.json();
+      // Normalize the email defensively — native clients may send it with
+      // trailing/leading whitespace or mixed case, which GoTrue's RFC
+      // validator rejects as "invalid format". The web app trims client-side,
+      // but mobile does not, so we always normalize here.
+      const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : rawEmail;
       if (!email || !password || !name) {
         return errorResponse("Missing required fields: name, email, password", 400);
       }
@@ -164,7 +169,8 @@ Deno.serve(async (req: Request) => {
 
     // ── POST /auth/signin ──────────────────────────────────────────────────
     if (path === "signin" && req.method === "POST") {
-      const { email, password } = await req.json();
+      const { email: rawEmail, password } = await req.json();
+      const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : rawEmail;
       if (!email || !password) return errorResponse("Missing email or password", 400);
 
       const supabase = getPublicClient();
@@ -231,7 +237,8 @@ Deno.serve(async (req: Request) => {
     // message (R-01: no secrets exposed; always returns 200 to prevent
     // account-enumeration regardless of whether the email exists).
     if (path === "forgot-password" && req.method === "POST") {
-      const { email } = await req.json();
+      const { email: rawEmail } = await req.json();
+      const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : rawEmail;
       if (!email) return errorResponse("email is required", 400);
       const redirectTo = (Deno.env.get("APP_URL") ?? "https://app.quiz4win.com")
         .replace(/\/$/, "") + "/auth/reset-password";
@@ -282,7 +289,8 @@ Deno.serve(async (req: Request) => {
     //   type='signup' (or 'email') — email-confirmation OTP from /auth/signup
     //                                  (host-app sign-up flow uses this)
     if (path === "verify-otp" && req.method === "POST") {
-      const { email, token, type } = await req.json();
+      const { email: rawEmail, token, type } = await req.json();
+      const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : rawEmail;
       const normType: "recovery" | "signup" | null =
         type === "recovery" ? "recovery"
         : (type === "signup" || type === "email") ? "signup"
@@ -360,7 +368,8 @@ Deno.serve(async (req: Request) => {
     // the branded email through Brevo. Always returns 200 to avoid leaking
     // account existence (R-01).
     if (path === "resend-confirmation" && req.method === "POST") {
-      const { email, flow } = await req.json();
+      const { email: rawEmail, flow } = await req.json();
+      const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : rawEmail;
       if (!email) return errorResponse("email is required", 400);
       const otpOnlyFlow = flow === "otp";
       const redirectTo = (Deno.env.get("EMAIL_CONFIRM_REDIRECT_URL") ??
