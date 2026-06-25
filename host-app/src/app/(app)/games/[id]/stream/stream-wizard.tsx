@@ -34,6 +34,7 @@ export function StreamWizard({
     arEnabled, backgroundEffect, setBackgroundEffect, faceEffect, setFaceEffect,
     arStream, setArStream, toggleAR,
     selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
+    voiceMonitorOn, toggleVoiceMonitor, stopVoiceMonitor,
   } = useARState();
   const [arModalOpen, setArModalOpen] = useState(false);
 
@@ -100,6 +101,8 @@ export function StreamWizard({
 
   async function startLive() {
     setBusy("live"); setError(null);
+    // Release the monitor mic before LiveKit claims its own mic track
+    stopVoiceMonitor();
     const r = await goLive(gameId);
     if (!r.ok) { setError((r as { error: string }).error || "Failed to go live"); setBusy(null); return; }
 
@@ -255,6 +258,8 @@ export function StreamWizard({
                 onFaceChange={setFaceEffect}
                 selectedVoiceEffect={selectedVoiceEffect}
                 onVoiceEffectChange={setSelectedVoiceEffect}
+                voiceMonitorOn={voiceMonitorOn}
+                onToggleVoiceMonitor={toggleVoiceMonitor}
               />
             )}
           </>
@@ -305,6 +310,8 @@ export function StreamWizard({
         onFaceChange={setFaceEffect}
         selectedVoiceEffect={selectedVoiceEffect}
         onVoiceEffectChange={setSelectedVoiceEffect}
+        voiceMonitorOn={voiceMonitorOn}
+        onToggleVoiceMonitor={toggleVoiceMonitor}
       />
     </>
   );

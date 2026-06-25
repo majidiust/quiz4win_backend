@@ -222,6 +222,7 @@ export function GameControlPanel({
   const [survivors, setSurvivors]           = useState<number | null>(null);
   const [livePrize, setLivePrize]           = useState<number | null>(null);         // prizePool from events
   const [prizePerSurvivor, setPrizePerSurv] = useState<number | null>(null);
+  const [liveQuestionsCount, setLiveQCount] = useState<number | null>(null);         // from GAME_STARTED
 
   const correctRef = useRef<string | undefined>(undefined);
 
@@ -260,6 +261,9 @@ export function GameControlPanel({
         case "GAME_STARTED": {
           const fqAt = (msg.firstQuestionStartsAt as number | null) ?? null;
           setFirstQAt(fqAt);
+          // Capture total questions count from the live event as a fallback
+          const qc = msg.questionsCount != null ? Number(msg.questionsCount) : null;
+          if (qc && !isNaN(qc)) setLiveQCount(qc);
           // presenter mode: fqAt is null → jump straight to idle
           setPhase(fqAt && fqAt > Date.now() ? "countdown" : "idle");
           break;
@@ -328,10 +332,11 @@ export function GameControlPanel({
   }, [gameId]);
 
   // Derived state
-  const effectivePrize = livePrize ?? initialPrize;
-  const currentQNum    = current ? current.index + 1 : null;
-  const showStats      = !["waiting", "countdown"].includes(phase);
-  const canAct         = !["waiting", "countdown"].includes(phase);
+  const effectivePrize         = livePrize ?? initialPrize;
+  const effectiveQuestionsCount = liveQuestionsCount ?? questionsCount;
+  const currentQNum            = current ? current.index + 1 : null;
+  const showStats              = !["waiting", "countdown"].includes(phase);
+  const canAct                 = !["waiting", "countdown"].includes(phase);
   const ended          = phase === "ended";
 
   const primary: { label: string; Icon: typeof Eye; cmd: GameCommand } | null =
@@ -365,7 +370,7 @@ export function GameControlPanel({
           survivors={survivors}
           prizePerSurvivor={prizePerSurvivor}
           questionNum={currentQNum}
-          questionsCount={questionsCount}
+          questionsCount={effectiveQuestionsCount}
         />
       )}
 

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Sparkles, X, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AREffect } from "@/components/ar-preview";
@@ -131,6 +131,8 @@ interface ARPanelProps {
   onFaceChange: (effect: AREffect | null) => void;
   selectedVoiceEffect: VoiceEffect;
   onVoiceEffectChange: (v: VoiceEffect) => void;
+  voiceMonitorOn: boolean;
+  onToggleVoiceMonitor: () => void;
 }
 
 /** A wrap of selectable effect tiles for one slot (background or face). */
@@ -172,6 +174,8 @@ export function ARPanel({
   onFaceChange,
   selectedVoiceEffect,
   onVoiceEffectChange,
+  voiceMonitorOn,
+  onToggleVoiceMonitor,
 }: ARPanelProps) {
   const presetEffects: AREffect[] = presets.map((p) => ({
     id: `preset-${p.id}`,
@@ -227,6 +231,30 @@ export function ARPanel({
               <span className="max-w-[4rem] truncate">{v.name}</span>
             </button>
           ))}
+        </div>
+        {/* Monitor toggle — lets host hear their own processed voice before going live */}
+        <div className="mt-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onToggleVoiceMonitor}
+            className={cn(
+              "flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs transition-colors",
+              voiceMonitorOn
+                ? "border-amber-500 bg-amber-500/20 text-amber-300"
+                : "border-white/10 bg-white/5 text-[var(--color-q4w-muted)] hover:border-white/20 hover:text-white",
+            )}
+            aria-pressed={voiceMonitorOn}
+          >
+            {voiceMonitorOn
+              ? <VolumeX className="h-3.5 w-3.5" />
+              : <Volume2 className="h-3.5 w-3.5" />}
+            {voiceMonitorOn ? "Stop monitor" : "Test my voice"}
+          </button>
+          {voiceMonitorOn && (
+            <span className="text-[10px] text-amber-400 flex items-center gap-1">
+              ⚠️ Use headphones to avoid echo
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -363,6 +391,72 @@ export function useARState() {
     audioCtxRef.current = null;
   }, []);
 
+  // ── Voice monitor — lets the host hear their processed voice in real time ──
+  const [voiceMonitorOn, setVoiceMonitorOn] = useState(false);
+  const voiceMonitorOnRef = useRef(false);
+  const monitorAudioRef = useRef<HTMLAudioElement | null>(null);
+  const monitorCtxRef   = useRef<AudioContext | null>(null);
+  const monitorOscRef   = useRef<OscillatorNode | null>(null);
+  const monitorMicRef   = useRef<MediaStream | null>(null);
+
+  // Keep the ref in sync with state (avoids stale closures in effects)
+  useEffect(() => { voiceMonitorOnRef.current = voiceMonitorOn; }, [voiceMonitorOn]);
+
+  const stopVoiceMonitor = useCallback(() => {
+    if (monitorAudioRef.current) {
+      monitorAudioRef.current.pause();
+      monitorAudioRef.current.srcObject = null;
+      monitorAudioRef.current = null;
+    }
+    monitorOscRef.current?.stop();
+    monitorOscRef.current = null;
+    monitorCtxRef.current?.close().catch(() => {});
+    monitorCtxRef.current = null;
+    monitorMicRef.current?.getTracks().forEach((t) => t.stop());
+    monitorMicRef.current = null;
+    setVoiceMonitorOn(false);
+  }, []);
+
+  const startVoiceMonitor = useCallback(async () => {
+    // Tear down any existing monitor chain first
+    if (monitorAudioRef.current) {
+      monitorAudioRef.current.pause();
+      monitorAudioRef.current.srcObject = null;
+      monitorAudioRef.current = null;
+    }
+    monitorOscRef.current?.stop(); monitorOscRef.current = null;
+    monitorCtxRef.current?.close().catch(() => {}); monitorCtxRef.current = null;
+    monitorMicRef.current?.getTracks().forEach((t) => t.stop()); monitorMicRef.current = null;
+
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      monitorMicRef.current = mic;
+      const result = await buildVoiceChain(mic, selectedVoiceEffect.id, null, null);
+      monitorCtxRef.current = result.ctx;
+      monitorOscRef.current = result.osc;
+      const audio = new Audio();
+      audio.srcObject = result.stream;
+      audio.play().catch(() => {});
+      monitorAudioRef.current = audio;
+      setVoiceMonitorOn(true);
+    } catch {
+      setVoiceMonitorOn(false);
+    }
+  }, [selectedVoiceEffect.id]);
+
+  // Rebuild the monitor when the voice effect changes (if already monitoring)
+  useEffect(() => {
+    if (voiceMonitorOnRef.current) { startVoiceMonitor(); }
+  }, [startVoiceMonitor]);
+
+  // Cleanup monitor on unmount
+  useEffect(() => () => { stopVoiceMonitor(); }, [stopVoiceMonitor]);
+
+  const toggleVoiceMonitor = useCallback(() => {
+    if (voiceMonitorOnRef.current) stopVoiceMonitor();
+    else startVoiceMonitor();
+  }, [startVoiceMonitor, stopVoiceMonitor]);
+
   function toggleAR() {
     setArEnabled((v) => {
       if (v) { setBackgroundEffect(null); setFaceEffect(null); setArStream(null); }
@@ -374,5 +468,6 @@ export function useARState() {
     arEnabled, backgroundEffect, setBackgroundEffect, faceEffect, setFaceEffect,
     arStream, setArStream, toggleAR,
     selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
+    voiceMonitorOn, toggleVoiceMonitor, stopVoiceMonitor,
   };
 }
