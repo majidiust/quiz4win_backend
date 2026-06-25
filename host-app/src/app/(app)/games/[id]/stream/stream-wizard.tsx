@@ -27,12 +27,17 @@ export function StreamWizard({
   const arContainerRef = useRef<HTMLDivElement | null>(null);
   const livekitRoomRef = useRef<import("livekit-client").Room | null>(null);
 
-  // AR state
-  const { arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR } = useARState();
+  // AR + voice state
+  const {
+    arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR,
+    selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
+  } = useARState();
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     livekitRoomRef.current?.disconnect();
+    destroyVoiceEffect();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const persist = useCallback(async (patch: Parameters<typeof patchSession>[1]) => {
@@ -107,11 +112,12 @@ export function StreamWizard({
 
         // Determine video source: AR canvas stream or raw camera
         const videoSource = arEnabled && arStream ? arStream.getVideoTracks()[0] : streamRef.current?.getVideoTracks()[0];
-        // Always get a fresh mic audio track
+        // Get mic and apply selected voice effect (passthrough when effect is "none")
         let audioTrack: MediaStreamTrack | undefined;
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          audioTrack = micStream.getAudioTracks()[0];
+          const processedStream = await applyVoiceEffect(micStream);
+          audioTrack = processedStream.getAudioTracks()[0];
         } catch { /* mic optional */ }
 
         await room.connect(livekit_url, lkToken);
@@ -141,6 +147,7 @@ export function StreamWizard({
     setBusy("end");
     livekitRoomRef.current?.disconnect();
     livekitRoomRef.current = null;
+    destroyVoiceEffect();
     await endStream(gameId, {});
     setSession({ ...(session as Session), status: "ended" });
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -183,12 +190,14 @@ export function StreamWizard({
           <ARToggleButton arEnabled={arEnabled} onToggle={toggleAR} disabled={!camOk} />
         </div>
 
-        {/* AR effects panel — shown only when AR is on */}
+        {/* AR + voice effects panel — shown only when AR is on */}
         {arEnabled && (
           <ARPanel
             presets={arBackgrounds}
             selectedEffect={selectedEffect}
             onEffectChange={setSelectedEffect}
+            selectedVoiceEffect={selectedVoiceEffect}
+            onVoiceEffectChange={setSelectedVoiceEffect}
           />
         )}
       </Card>

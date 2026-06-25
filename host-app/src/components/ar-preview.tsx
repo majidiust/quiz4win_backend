@@ -12,10 +12,18 @@ declare global {
 export interface AREffect {
   id: string;
   name: string;
-  type: 'background' | 'filter' | 'blur' | 'beauty' | 'preset-bg' | 'silhouette' | 'silhouette-bg' | 'none';
+  type:
+    | 'background' | 'filter' | 'blur' | 'preset-bg'
+    | 'silhouette' | 'silhouette-bg'
+    | 'none'
+    // Face effects (use FaceLandmarker)
+    | 'face-blur'      // blur just the face region
+    | 'beauty'         // subtle skin-smoothing over the face
+    | 'face-mask-cat'  // cat ears + nose + whiskers
+    | 'face-mask-star' // star eyes + sparkles;
   icon: string;
   presetImage?: string;
-  category?: 'backgrounds' | 'filters' | 'beauty' | 'none';
+  category?: 'backgrounds' | 'filters' | 'beauty' | 'face' | 'none';
 }
 
 export interface SegmentationSettings {
@@ -220,6 +228,137 @@ export default function MediaPipeAR({
             const black = new Uint8ClampedArray(imgData.data.length); // all zeros = black
             blendBg(imgData.data, black, smooth, mW, mH, canvas.width, canvas.height, true);
             ctx.putImageData(imgData, 0, 0);
+          }
+        } else if (
+          effect.type === 'face-blur' ||
+          effect.type === 'beauty' ||
+          effect.type === 'face-mask-cat' ||
+          effect.type === 'face-mask-star'
+        ) {
+          const fl = faceLandmarkerRef.current;
+          if (fl) {
+            const faceRes = fl.detectForVideo(video, performance.now());
+            if (faceRes.faceLandmarks.length > 0) {
+              const lms = faceRes.faceLandmarks[0];
+              const cW = canvas.width; const cH = canvas.height;
+
+              // Compute face bounding box (normalized → pixel)
+              let minX = 1, minY = 1, maxX = 0, maxY = 0;
+              for (const lm of lms) {
+                if (lm.x < minX) minX = lm.x; if (lm.x > maxX) maxX = lm.x;
+                if (lm.y < minY) minY = lm.y; if (lm.y > maxY) maxY = lm.y;
+              }
+              const cx = ((minX + maxX) / 2) * cW;
+              const cy = ((minY + maxY) / 2) * cH;
+              const rx = ((maxX - minX) / 2) * cW * 1.15;
+              const ry = ((maxY - minY) / 2) * cH * 1.15;
+              const faceW = (maxX - minX) * cW;
+
+              if (effect.type === 'face-blur') {
+                // Clip to face ellipse, draw blurred
+                ctx.save();
+                ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.clip();
+                ctx.filter = 'blur(18px)';
+                ctx.drawImage(video, 0, 0, cW, cH);
+                ctx.filter = 'none';
+                ctx.restore();
+
+              } else if (effect.type === 'beauty') {
+                // Clip to face ellipse, light-blur blend for skin smoothing
+                ctx.save();
+                ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.clip();
+                ctx.globalAlpha = 0.55;
+                ctx.filter = 'blur(4px)';
+                ctx.drawImage(video, 0, 0, cW, cH);
+                ctx.filter = 'none'; ctx.globalAlpha = 1;
+                ctx.restore();
+
+              } else if (effect.type === 'face-mask-cat') {
+                // Key landmarks
+                const earL = lms[127] ?? lms[234];  // left side of head
+                const earR = lms[356] ?? lms[454];  // right side of head
+                const nose = lms[4];                 // nose tip
+                const leftEye = lms[468] ?? lms[33];
+                const rightEye = lms[473] ?? lms[263];
+                const earSize = faceW * 0.22;
+
+                // Left ear (pink triangle)
+                ctx.save();
+                ctx.fillStyle = '#ff69b4';
+                ctx.beginPath();
+                ctx.moveTo(earL.x * cW - earSize * 0.6, earL.y * cH - earSize * 1.6);
+                ctx.lineTo(earL.x * cW + earSize * 0.2, earL.y * cH - earSize * 0.1);
+                ctx.lineTo(earL.x * cW - earSize * 0.8, earL.y * cH + earSize * 0.1);
+                ctx.closePath(); ctx.fill();
+                // inner highlight
+                ctx.fillStyle = '#ffb6c1';
+                ctx.beginPath();
+                ctx.moveTo(earL.x * cW - earSize * 0.5, earL.y * cH - earSize * 1.2);
+                ctx.lineTo(earL.x * cW + earSize * 0.05, earL.y * cH - earSize * 0.2);
+                ctx.lineTo(earL.x * cW - earSize * 0.55, earL.y * cH);
+                ctx.closePath(); ctx.fill();
+
+                // Right ear (pink triangle)
+                ctx.fillStyle = '#ff69b4';
+                ctx.beginPath();
+                ctx.moveTo(earR.x * cW + earSize * 0.6, earR.y * cH - earSize * 1.6);
+                ctx.lineTo(earR.x * cW - earSize * 0.2, earR.y * cH - earSize * 0.1);
+                ctx.lineTo(earR.x * cW + earSize * 0.8, earR.y * cH + earSize * 0.1);
+                ctx.closePath(); ctx.fill();
+                ctx.fillStyle = '#ffb6c1';
+                ctx.beginPath();
+                ctx.moveTo(earR.x * cW + earSize * 0.5, earR.y * cH - earSize * 1.2);
+                ctx.lineTo(earR.x * cW - earSize * 0.05, earR.y * cH - earSize * 0.2);
+                ctx.lineTo(earR.x * cW + earSize * 0.55, earR.y * cH);
+                ctx.closePath(); ctx.fill();
+                ctx.restore();
+
+                // Cat nose (small pink triangle at nose tip)
+                const nX = nose.x * cW; const nY = nose.y * cH;
+                const ns = faceW * 0.04;
+                ctx.fillStyle = '#ff69b4';
+                ctx.beginPath();
+                ctx.moveTo(nX, nY - ns); ctx.lineTo(nX - ns, nY + ns * 0.6); ctx.lineTo(nX + ns, nY + ns * 0.6);
+                ctx.closePath(); ctx.fill();
+
+                // Whiskers
+                const wLen = faceW * 0.28;
+                ctx.save();
+                ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+                for (let i = -1; i <= 1; i++) {
+                  const oy = i * (faceW * 0.035);
+                  ctx.beginPath(); ctx.moveTo(nX - 6, nY + oy); ctx.lineTo(nX - 6 - wLen, nY + oy - i * 4); ctx.stroke();
+                  ctx.beginPath(); ctx.moveTo(nX + 6, nY + oy); ctx.lineTo(nX + 6 + wLen, nY + oy - i * 4); ctx.stroke();
+                }
+                ctx.restore();
+
+                // Eye shine dots
+                const eyeSize = faceW * 0.03;
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.beginPath(); ctx.arc(leftEye.x * cW, leftEye.y * cH, eyeSize, 0, Math.PI * 2); ctx.fill();
+                ctx.beginPath(); ctx.arc(rightEye.x * cW, rightEye.y * cH, eyeSize, 0, Math.PI * 2); ctx.fill();
+
+              } else if (effect.type === 'face-mask-star') {
+                const leftEye  = lms[468] ?? lms[33];
+                const rightEye = lms[473] ?? lms[263];
+                const emoji = Math.floor(faceW * 0.22) + 'px serif';
+                const small  = Math.floor(faceW * 0.12) + 'px serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+                // Star over each eye
+                ctx.font = emoji;
+                ctx.fillText('⭐', leftEye.x * cW, leftEye.y * cH);
+                ctx.fillText('⭐', rightEye.x * cW, rightEye.y * cH);
+
+                // Sparkles around face perimeter
+                ctx.font = small;
+                ctx.fillText('✨', minX * cW - faceW * 0.15, cy);
+                ctx.fillText('✨', maxX * cW + faceW * 0.15, cy);
+                ctx.fillText('✨', cx, minY * cH - faceW * 0.15);
+                ctx.fillText('✨', cx - faceW * 0.25, (minY + 0.1) * cH);
+                ctx.fillText('✨', cx + faceW * 0.25, (minY + 0.1) * cH);
+              }
+            }
           }
         }
       } catch { ctx.drawImage(video, 0, 0, canvas.width, canvas.height); }
