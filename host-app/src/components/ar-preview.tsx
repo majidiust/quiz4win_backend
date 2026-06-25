@@ -138,8 +138,12 @@ export default function MediaPipeAR({
     if (backgroundEffect.type === 'background' && customBackgroundUrl) imageUrl = customBackgroundUrl;
     else if (backgroundEffect.type === 'preset-bg' && backgroundEffect.presetImage) imageUrl = backgroundEffect.presetImage;
     if (imageUrl) {
-      const img = new Image(); img.crossOrigin = 'anonymous';
+      const img = new Image();
+      // No crossOrigin flag — we never call getImageData on this image's canvas,
+      // so there is no canvas-taint issue. Setting crossOrigin='anonymous' would
+      // cause the load to fail entirely when the S3 bucket lacks CORS headers.
       img.onload = () => { backgroundImageRef.current = img; };
+      img.onerror = () => { backgroundImageRef.current = null; };
       img.src = imageUrl;
     } else { backgroundImageRef.current = null; }
   }, [backgroundEffect, customBackgroundUrl, isInitialized]);
@@ -155,6 +159,7 @@ export default function MediaPipeAR({
     const ctx = canvas.getContext('2d'); if (!ctx) return;
     let lastVideoTime = -1;
 
+    /** Box-blur a mask Uint8Array for edge smoothing. */
     const smoothMask = (maskData: Uint8Array, maskWidth: number, maskHeight: number, kernelSize: number) => {
       if (kernelSize <= 1) return maskData;
       const half = Math.floor(kernelSize / 2);
@@ -171,24 +176,59 @@ export default function MediaPipeAR({
       return out;
     };
 
-    const blendBg = (pixels: Uint8ClampedArray, bgPixels: Uint8ClampedArray, mask: Uint8Array, mW: number, mH: number, cW: number, cH: number, invert: boolean) => {
+    /**
+     * Build a person-alpha mask canvas from the raw segmenter Uint8Array.
+     * Values close to 0 = person (opaque), values close to 255 = background (transparent).
+     * Uses feathered edges around the threshold.
+     * NOTE: This uses only JS data (no cross-origin pixel reading), so the
+     * resulting canvas is NEVER tainted.
+     */
+    const buildMaskCanvas = (mData: Uint8Array, mW: number, mH: number): HTMLCanvasElement => {
       const s = segmentationSettingsRef.current;
-      for (let y = 0; y < cH; y++) for (let x = 0; x < cW; x++) {
-        const mX = Math.floor((x / cW) * mW); const mY = Math.floor((y / cH) * mH);
-        const mi = mY * mW + mX; const ci = (y * cW + x) * 4;
-        if (mi < 0 || mi >= mask.length || ci < 0 || ci >= pixels.length - 3) continue;
-        const v = mask[mi];
-        const isBg = v > s.threshold;
-        if (invert ? !isBg : isBg) {
-          const raw = invert ? (1.0 - v / s.threshold) : (v - s.threshold) / (255 - s.threshold);
-          const alpha = Math.max(0, Math.min(1, raw));
-          if (alpha > s.alphaThreshold) {
-            pixels[ci]   = Math.round(pixels[ci]   * (1 - alpha) + bgPixels[ci]   * alpha);
-            pixels[ci+1] = Math.round(pixels[ci+1] * (1 - alpha) + bgPixels[ci+1] * alpha);
-            pixels[ci+2] = Math.round(pixels[ci+2] * (1 - alpha) + bgPixels[ci+2] * alpha);
-          }
-        }
+      const mkCv = document.createElement('canvas');
+      mkCv.width = mW; mkCv.height = mH;
+      const mkCtx = mkCv.getContext('2d')!;
+      const mkId = mkCtx.createImageData(mW, mH);
+      const feather = 30; // feather ±30 units around threshold for smooth edges
+      for (let i = 0; i < mData.length; i++) {
+        const v = mData[i];
+        // person alpha: 1.0 when clearly person, 0.0 when clearly background
+        const dist = s.threshold - v; // positive = person side, negative = background side
+        const personAlpha = Math.max(0, Math.min(1, 0.5 + dist / feather));
+        mkId.data[i * 4]     = 255;
+        mkId.data[i * 4 + 1] = 255;
+        mkId.data[i * 4 + 2] = 255;
+        mkId.data[i * 4 + 3] = Math.round(personAlpha * 255);
       }
+      mkCtx.putImageData(mkId, 0, 0);
+      return mkCv;
+    };
+
+    /**
+     * Composite: draws background first, then person on top using the mask.
+     * Works entirely with drawImage — never calls getImageData on cross-origin data.
+     * This means it works even with S3 images that lack CORS headers.
+     */
+    const compositeBg = (
+      bgDrawFn: (c: CanvasRenderingContext2D, cW: number, cH: number) => void,
+      mData: Uint8Array, mW: number, mH: number,
+    ) => {
+      const cW = canvas.width; const cH = canvas.height;
+      const maskCv = buildMaskCanvas(mData, mW, mH);
+
+      // Camera canvas: camera frame with background cut away (compositing, no getImageData)
+      const camCv = document.createElement('canvas');
+      camCv.width = cW; camCv.height = cH;
+      const camCtx = camCv.getContext('2d')!;
+      camCtx.drawImage(video, 0, 0, cW, cH);                              // full camera frame
+      camCtx.globalCompositeOperation = 'destination-in';
+      camCtx.drawImage(maskCv, 0, 0, cW, cH);                            // cut to person shape
+      camCtx.globalCompositeOperation = 'source-over';
+
+      // Main canvas: background, then person on top
+      ctx.clearRect(0, 0, cW, cH);
+      bgDrawFn(ctx, cW, cH);                                              // background (may taint ctx)
+      ctx.drawImage(camCv, 0, 0, cW, cH);                                 // person overlay
     };
 
     const renderFrame = async () => {
@@ -212,16 +252,17 @@ export default function MediaPipeAR({
             const mData = cm.getAsUint8Array(); const mW = cm.width; const mH = cm.height;
             const s = segmentationSettingsRef.current;
             const smooth = smoothMask(mData, mW, mH, s.edgeSmoothing);
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const bgCanvas = document.createElement('canvas');
-            bgCanvas.width = canvas.width; bgCanvas.height = canvas.height;
-            const bgCtx = bgCanvas.getContext('2d')!;
-            if (effect.type === 'blur') { bgCtx.filter = 'blur(20px)'; bgCtx.drawImage(video, 0, 0, canvas.width, canvas.height); }
-            else if (backgroundImageRef.current) { bgCtx.drawImage(backgroundImageRef.current, 0, 0, canvas.width, canvas.height); }
-            else { bgCtx.filter = 'blur(20px)'; bgCtx.drawImage(video, 0, 0, canvas.width, canvas.height); }
-            const bgData = bgCtx.getImageData(0, 0, canvas.width, canvas.height);
-            blendBg(imgData.data, bgData.data, smooth, mW, mH, canvas.width, canvas.height, false);
-            ctx.putImageData(imgData, 0, 0);
+            if (effect.type === 'blur') {
+              compositeBg((c, cW, cH) => { c.filter = 'blur(20px)'; c.drawImage(video, 0, 0, cW, cH); c.filter = 'none'; }, smooth, mW, mH);
+            } else if (backgroundImageRef.current) {
+              // Cross-origin image is OK here — compositeBg never calls getImageData.
+              // The main canvas may become tainted but captureStream() is unaffected.
+              const bgImg = backgroundImageRef.current;
+              compositeBg((c, cW, cH) => { c.drawImage(bgImg, 0, 0, cW, cH); }, smooth, mW, mH);
+            } else {
+              // Image not yet loaded — show blurred video as placeholder
+              compositeBg((c, cW, cH) => { c.filter = 'blur(20px)'; c.drawImage(video, 0, 0, cW, cH); c.filter = 'none'; }, smooth, mW, mH);
+            }
           }
         } else if (effect.type === 'silhouette') {
           const res = segmenter.segmentForVideo(video, performance.now());
@@ -230,10 +271,25 @@ export default function MediaPipeAR({
             const mData = cm.getAsUint8Array(); const mW = cm.width; const mH = cm.height;
             const s = segmentationSettingsRef.current;
             const smooth = smoothMask(mData, mW, mH, s.edgeSmoothing);
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const black = new Uint8ClampedArray(imgData.data.length); // all zeros = black
-            blendBg(imgData.data, black, smooth, mW, mH, canvas.width, canvas.height, true);
-            ctx.putImageData(imgData, 0, 0);
+            // Silhouette: keep person but make them black — invert the mask logic
+            // Build an inverted mask (background=opaque, person=transparent)
+            const mkCv = buildMaskCanvas(smooth, mW, mH);
+            // bgCanvas = black fill
+            const bgCv = document.createElement('canvas');
+            bgCv.width = canvas.width; bgCv.height = canvas.height;
+            // bgCv is already black (default canvas fill)
+            // Person canvas: camera frame with background kept (inverted: keep bg, cut person)
+            const camCv = document.createElement('canvas');
+            camCv.width = canvas.width; camCv.height = canvas.height;
+            const camCtx = camCv.getContext('2d')!;
+            camCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            camCtx.globalCompositeOperation = 'destination-out'; // erase person area
+            camCtx.drawImage(mkCv, 0, 0, canvas.width, canvas.height);
+            camCtx.globalCompositeOperation = 'source-over';
+            // Composite: black bg, then camera with person erased (so silhouette = black person)
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(bgCv, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(camCv, 0, 0, canvas.width, canvas.height);
           }
         } else if (
           effect.type === 'face-blur' ||
