@@ -8,7 +8,7 @@ import { formatDateTime } from "@/lib/utils";
 export const metadata = { title: "Start stream — Quiz4Win Host" };
 
 interface Session { id: string; status: string; camera_ok: boolean; mic_ok: boolean; connection_ok: boolean; }
-interface Game { id: string; title: string; scheduled_at: string | null; status: string; host_id?: string | null; livekit_room_name?: string | null; run_mode?: string | null; }
+interface Game { id: string; title: string; scheduled_at: string | null; status: string; host_id?: string | null; livekit_room_name?: string | null; run_mode?: string | null; prize_pool?: number | null; questions_count?: number | null; }
 
 export default async function StreamPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -37,6 +37,8 @@ export default async function StreamPage({ params }: { params: Promise<{ id: str
         livekitRoom={game.livekit_room_name ?? `game-${id}`}
         arBackgrounds={arBackgrounds}
         runMode={game.run_mode}
+        prizePool={game.prize_pool ?? null}
+        questionsCount={game.questions_count ?? null}
       />
     </>
   );

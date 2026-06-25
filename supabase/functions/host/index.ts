@@ -684,7 +684,7 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
   // ── /host/games/:id/stream-session ─────────────────────────────────────────
   if (parts[0] === "games" && parts[2] === "stream-session" && (parts.length === 3 || parts.length === 4)) {
     const gameId = parts[1];
-    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title, host_assignment_status, run_mode").eq("id", gameId).maybeSingle();
+    const { data: g } = await db.from("games").select("id, host_id, mode, status, scheduled_at, livekit_room_name, title, host_assignment_status, run_mode, prize_pool, questions_count").eq("id", gameId).maybeSingle();
     if (!g) return errorResponse("game_not_found", 404);
     if (g.host_id !== host.id) return errorResponse("not_assigned_to_this_game", 403);
     // Host must have accepted the assignment before going live.

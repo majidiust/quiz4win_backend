@@ -14,8 +14,8 @@ import MediaPipeAR from "@/components/ar-preview";
 interface Session { id: string; status: string; camera_ok: boolean; mic_ok: boolean; connection_ok: boolean }
 
 export function StreamWizard({
-  gameId, initialSession, arBackgrounds, runMode,
-}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[]; runMode?: string | null }) {
+  gameId, initialSession, arBackgrounds, runMode, prizePool, questionsCount,
+}: { gameId: string; initialSession: Session | null; livekitRoom: string; arBackgrounds: ARBackground[]; runMode?: string | null; prizePool?: number | null; questionsCount?: number | null }) {
   const [session, setSession] = useState<Session | null>(initialSession);
   const [camOk, setCamOk]   = useState(initialSession?.camera_ok ?? false);
   const [micOk, setMicOk]   = useState(initialSession?.mic_ok ?? false);
@@ -260,7 +260,7 @@ export function StreamWizard({
       {isLive ? (
         /* === LIVE GAME ROOM — controls front and center === */
         isPresenter ? (
-          <GameControlPanel gameId={gameId} room={room} />
+          <GameControlPanel gameId={gameId} room={room} prizePool={prizePool ?? null} questionsCount={questionsCount ?? null} />
         ) : token ? (
           <Card>
             <CardSubtitle>
