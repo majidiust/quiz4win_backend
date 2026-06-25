@@ -197,7 +197,7 @@ export function StreamWizard({
           >
             {/* Raw camera preview — hidden when AR is active (AR canvas overlays it) */}
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-            <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", arEnabled && "invisible")} />
+            <video ref={videoRef} playsInline muted className={cn("h-full w-full object-cover", arEnabled && "hidden")} />
             {/* AR component renders its canvas inside arContainerRef */}
             <MediaPipeAR
               enabled={arEnabled}

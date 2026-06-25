@@ -1,3 +1,6 @@
+[2026-06-25] [A-01] [FIX] **Raw video visibility when AR enabled.** Changed the visibility class from `invisible` to `hidden` (display: none) for the raw setup video in `host-app/src/app/(app)/games/[id]/stream/stream-wizard.tsx` when AR is enabled; this prevents the raw camera feed from bleeding through behind the MediaPipeAR canvas (which uses `object-fit: contain`) when the aspect ratios differ. **Deploy:** `docker compose up -d --build --force-recreate host`.
+
+
 [2026-06-25] [A-01] [BUILD] **Self-view resize toggle and live waiting-phase countdown.** (1) `host-app/src/app/(app)/games/[id]/stream/stream-wizard.tsx` — added `selfViewBig` state and a ⛶ expand/collapse button in the live status bar; toggling switches the self-view between a compact thumbnail and a full-width aspect-video preview without remounting the video stream; threaded `scheduledAt` prop. (2) `host-app/src/app/(app)/games/[id]/stream/game-control-panel.tsx` — updated `WaitingCard` to display a live `MM:SS` countdown ("Game starts in...") when the game's `scheduled_at` time is in the future; ticks every second; falls back to the static message when time has passed; accepted `scheduledAt` prop. (3) `host-app/src/app/(app)/games/[id]/stream/page.tsx` — passed `game.scheduled_at` to the wizard. TypeCheck: 0 errors. **Deploy:** `docker compose up -d --build --force-recreate host`.
 
 
