@@ -206,6 +206,77 @@ export function ARPanel({
   );
 }
 
+/* ── ARModal — accessible bottom-sheet for live AR access ──────────── */
+
+interface ARModalProps extends ARPanelProps {
+  open: boolean;
+  onClose: () => void;
+  arEnabled: boolean;
+  onToggle: () => void;
+}
+
+export function ARModal({
+  open,
+  onClose,
+  arEnabled,
+  onToggle,
+  ...panelProps
+}: ARModalProps) {
+  if (!open) return null;
+  return (
+    <>
+      {/* Backdrop — tap to dismiss */}
+      <div
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      {/* Bottom sheet */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="AR Effects"
+        className="fixed bottom-0 left-0 right-0 z-50 flex max-h-[78vh] flex-col rounded-t-3xl border-t border-white/10 bg-[#0e0e1a]"
+      >
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-1 shrink-0">
+          <span className="h-1 w-10 rounded-full bg-white/20" />
+        </div>
+
+        {/* Header row */}
+        <div className="flex shrink-0 items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-purple-400" />
+            <span className="text-sm font-semibold">AR Effects</span>
+            {arEnabled && (
+              <span className="rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-medium text-purple-300">
+                ON
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <ARToggleButton arEnabled={arEnabled} onToggle={onToggle} />
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-[var(--color-q4w-muted)] hover:bg-white/20 transition-colors"
+              aria-label="Close AR panel"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable effects content */}
+        <div className="flex-1 overflow-y-auto px-4 pb-8">
+          <ARPanel {...panelProps} />
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ── AR Toggle Button ──────────────────────────────────────────────── */
 
 interface ARToggleButtonProps {

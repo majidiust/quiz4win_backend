@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Mic, Wifi, CheckCircle2, AlertTriangle, Radio } from "lucide-react";
+import { Camera, Mic, Wifi, CheckCircle2, AlertTriangle, Radio, Sparkles } from "lucide-react";
 import { Card, CardSubtitle, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusChip } from "@/components/ui/status-chip";
 import { cn } from "@/lib/utils";
 import { patchSession, goLive, endStream } from "./actions";
-import { ARToggleButton, ARPanel, useARState, type ARBackground } from "./ar-panel";
+import { ARToggleButton, ARPanel, ARModal, useARState, type ARBackground } from "./ar-panel";
 import { GameControlPanel } from "./game-control-panel";
 import MediaPipeAR from "@/components/ar-preview";
 
@@ -34,6 +34,7 @@ export function StreamWizard({
     arEnabled, selectedEffect, setSelectedEffect, arStream, setArStream, toggleAR,
     selectedVoiceEffect, setSelectedVoiceEffect, applyVoiceEffect, destroyVoiceEffect,
   } = useARState();
+  const [arModalOpen, setArModalOpen] = useState(false);
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -213,6 +214,20 @@ export function StreamWizard({
                   {arEnabled ? "AR video publishing from your browser" : "Publishing camera & mic"}
                 </p>
               </div>
+              {/* AR access — always one tap away while live */}
+              <button
+                type="button"
+                onClick={() => setArModalOpen(true)}
+                aria-label="AR effects"
+                className={cn(
+                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors",
+                  arEnabled
+                    ? "bg-purple-500/20 text-purple-300 ring-1 ring-purple-500"
+                    : "bg-white/10 text-[var(--color-q4w-muted)] hover:bg-white/20 hover:text-white",
+                )}
+              >
+                <Sparkles className="h-4 w-4" />
+              </button>
               <Button variant="danger" className="h-9 w-auto px-4" onClick={stopLive} loading={busy === "end"}>End</Button>
             </div>
           ) : (
@@ -272,6 +287,19 @@ export function StreamWizard({
           </div>
         </>
       )}
+
+      {/* AR bottom-sheet — accessible while live via the ✨ button */}
+      <ARModal
+        open={arModalOpen}
+        onClose={() => setArModalOpen(false)}
+        arEnabled={arEnabled}
+        onToggle={toggleAR}
+        presets={arBackgrounds}
+        selectedEffect={selectedEffect}
+        onEffectChange={setSelectedEffect}
+        selectedVoiceEffect={selectedVoiceEffect}
+        onVoiceEffectChange={setSelectedVoiceEffect}
+      />
     </>
   );
 }
