@@ -724,7 +724,8 @@ async function dispatchHostExtra(req: Request, parts: string[], host: Host, db: 
       if (!["upcoming", "open", "live"].includes(g.status)) {
         return errorResponse("game_not_live_able", 409);
       }
-      const room = g.livekit_room_name || `game-${gameId}`;
+      // Must match game-session join fallback (`quiz-${gameId}`) when livekit_room_name is unset.
+      const room = g.livekit_room_name || `quiz-${gameId}`;
       if (!Deno.env.get("LIVEKIT_API_KEY") || !Deno.env.get("LIVEKIT_API_SECRET")) {
         return errorResponse("livekit_not_configured", 503);
       }

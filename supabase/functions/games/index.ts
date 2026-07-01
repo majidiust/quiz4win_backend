@@ -50,7 +50,7 @@ Deno.serve(async (req: Request) => {
       "start_time:scheduled_at, end_time:ended_at, start_buffer_seconds, " +
       "is_featured, ai_cost_microdollars, " +
       "icon, thumbnail_url, poster_url, accent_color, glow_color, gradient_colors, " +
-      "sponsor, tags, host_name, host_avatar_url, host_title, rules";
+      "sponsor, tags, host_id, host_name, host_avatar_url, host_title, rules";
 
     // GET /games — list available games
     if (!gameId && req.method === "GET") {
